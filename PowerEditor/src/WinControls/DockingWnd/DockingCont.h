@@ -42,6 +42,8 @@ enum eMousePos {
 #define CLOSEBTN_POS_LEFT	3
 #define CLOSEBTN_POS_TOP	3
 
+constexpr int g_dockingContTabIconSize = 16;
+constexpr int g_dockingContTabIconPadding = 3;
 
 class DockingCont : public StaticDialog
 {
@@ -59,8 +61,8 @@ public:
 			return _hSelf;
 	};
 
-	tTbData* createToolbar(tTbData data);
-	void	 removeToolbar(tTbData data);
+	tTbData* createToolbar(const tTbData& data);
+	void	 removeToolbar(const tTbData& data);
 	tTbData* findToolbarByWnd(HWND hClient);
 	tTbData* findToolbarByName(TCHAR* pszName);
 
@@ -117,15 +119,15 @@ public:
 		updateCaption();
 	};
 
-	void setTabStyle(const BOOL & bDrawOgLine) {
-		_bDrawOgLine = bDrawOgLine;
-		::RedrawWindow(_hContTab, nullptr, nullptr, RDW_INVALIDATE);
-	};
-
-	void destroy() override{
-		for (int iTb = static_cast<int>(_vTbData.size()); iTb > 0; iTb--)
+	void destroy() override {
+		for (auto& tTbData : _vTbData)
 		{
-			delete _vTbData[iTb-1];
+			if (tTbData->hIconTab != nullptr)
+			{
+				::DestroyIcon(tTbData->hIconTab);
+				tTbData->hIconTab = nullptr;
+			}
+			delete tTbData;
 		}
 		::DestroyWindow(_hSelf);
 	};
@@ -173,7 +175,7 @@ protected :
 private:
 	// handles
 	BOOL _isActive = FALSE;
-	bool _isFloating = FALSE;
+	bool _isFloating = false;
 	HWND _hCaption = nullptr;
 	HWND _hContTab = nullptr;
 	HWND _hTabUpdown = nullptr;
@@ -183,16 +185,13 @@ private:
 	HFONT _hFontCaption = nullptr;
 
 	// caption params
-	BOOL _isTopCaption = FALSE;
+	BOOL _isTopCaption = CAPTION_TOP;
 	generic_string _pszCaption;
 
 	BOOL _isMouseDown = FALSE;
 	BOOL _isMouseClose = FALSE;
 	BOOL _isMouseOver = FALSE;
 	RECT _rcCaption{};
-	
-	// tab style
-	BOOL _bDrawOgLine = FALSE;
 
 	// Important value for DlgMoving class
 	BOOL _dragFromTab = FALSE;
@@ -213,7 +212,7 @@ private:
 
 	BOOL _bCaptionTT = FALSE;
 	BOOL _bCapTTHover = FALSE;
-	eMousePos _hoverMPos = posOutside;
+	eMousePos _hoverMPos = posClose;
 
 	int _captionHeightDynamic = HIGH_CAPTION;
 	int _captionGapDynamic = CAPTION_GAP;

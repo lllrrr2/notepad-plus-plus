@@ -155,13 +155,13 @@ struct BufferEquivalent
 			BufferID bid2 = _pTab->getBufferByIndex(i2);
 			Buffer * b1 = MainFileManager.getBufferByID(bid1);
 			Buffer * b2 = MainFileManager.getBufferByID(bid2);
-			
+
 			if (_iColumn == 0)
 			{
 				const TCHAR *s1 = b1->getFileName();
 				const TCHAR *s2 = b2->getFileName();
 				int result = _strequiv(s1, s2);
-				
+
 				if (result != 0) // default to filepath sorting when equivalent
 					return result < 0;
 			}
@@ -179,7 +179,7 @@ struct BufferEquivalent
 				}
 				else
 					s1 = TEXT("");
-				
+
 				Lang *lang2 = nppParameters.getLangFromID(b2->getLangType());
 				if (lang2)
 				{
@@ -187,7 +187,7 @@ struct BufferEquivalent
 				}
 				else
 					s2 = TEXT("");
-				
+
 				int result = _strequiv(s1, s2);
 
 				if (result != 0) // default to filepath sorting when equivalent
@@ -198,11 +198,11 @@ struct BufferEquivalent
 			{
 				auto t1 = b1->docLength();
 				auto t2 = b2->docLength();
-				
+
 				if (t1 != t2) // default to filepath sorting when equivalent
 					return (t1 < t2);
 			}
-			
+
 			// _iColumn == 1
 			const TCHAR *s1 = b1->getFullPathName();
 			const TCHAR *s2 = b2->getFullPathName();
@@ -242,8 +242,6 @@ RECT WindowsDlg::_lastKnownLocation;
 
 WindowsDlg::WindowsDlg() : MyBaseClass(WindowsDlgMap)
 {
-	_szMinButton = SIZEZERO;
-	_szMinListCtrl = SIZEZERO;
 }
 
 void WindowsDlg::init(HINSTANCE hInst, HWND parent, DocTabView *pTab)
@@ -328,13 +326,13 @@ intptr_t CALLBACK WindowsDlg::run_dlgProc(UINT message, WPARAM wParam, LPARAM lP
 						_currentColumn = 0;
 						_reverseSort = false;
 						_lastSort = _currentColumn;
-						
+
 						updateColumnNames();
 						doColumnSort();
 					}
-					
+
 					doSortToTabs();
-					
+
 					// must re-sort because tab indexes changed
 					doColumnSort();
 					break;
@@ -429,11 +427,11 @@ intptr_t CALLBACK WindowsDlg::run_dlgProc(UINT message, WPARAM wParam, LPARAM lP
 				}
 				else if (pNMHDR->code == LVN_COLUMNCLICK) // sort columns with stable sort
 				{
-					NMLISTVIEW *pNMLV = (NMLISTVIEW *)pNMHDR;
+					const NMLISTVIEW *pNMLV = (NMLISTVIEW *)pNMHDR;
 					if (pNMLV->iItem == -1)
 					{
 						_currentColumn = pNMLV->iSubItem;
-						
+
 						if (_lastSort == _currentColumn)
 						{
 							_reverseSort = true;
@@ -444,7 +442,7 @@ intptr_t CALLBACK WindowsDlg::run_dlgProc(UINT message, WPARAM wParam, LPARAM lP
 							_reverseSort = false;
 							_lastSort = _currentColumn;
 						}
-						
+
 						updateColumnNames();
 						doColumnSort();
 					}
@@ -462,7 +460,7 @@ intptr_t CALLBACK WindowsDlg::run_dlgProc(UINT message, WPARAM wParam, LPARAM lP
 				}
 				else if (pNMHDR->code == LVN_KEYDOWN)
 				{
-					NMLVKEYDOWN *lvkd = (NMLVKEYDOWN *)pNMHDR;
+					const NMLVKEYDOWN *lvkd = (NMLVKEYDOWN *)pNMHDR;
 					short ctrl = GetKeyState(VK_CONTROL);
 					short alt = GetKeyState(VK_MENU);
 					short shift = GetKeyState(VK_SHIFT);
@@ -514,7 +512,7 @@ void WindowsDlg::doColumnSort()
 {
 	if (_currentColumn == -1)
 		return;
-	
+
 	size_t i = 0;
 	size_t n = _idxMap.size();
 	vector<int> sortMap;
@@ -554,7 +552,15 @@ void WindowsDlg::updateButtonState()
 
 int WindowsDlg::doDialog()
 {
-	return static_cast<int>(DialogBoxParam(_hInst, MAKEINTRESOURCE(IDD_WINDOWS), _hParent, dlgProc, reinterpret_cast<LPARAM>(this)));
+	const auto dpiContext = DPIManagerV2::setThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED);
+
+	int result = static_cast<int>(DialogBoxParam(_hInst, MAKEINTRESOURCE(IDD_WINDOWS), _hParent, dlgProc, reinterpret_cast<LPARAM>(this)));
+
+	if (dpiContext != NULL)
+	{
+		DPIManagerV2::setThreadDpiAwarenessContext(dpiContext);
+	}
+	return result;
 }
 
 BOOL WindowsDlg::onInitDialog()
@@ -591,7 +597,7 @@ BOOL WindowsDlg::onInitDialog()
 	LVCOLUMN lvColumn{};
 	lvColumn.mask = LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM | LVCF_FMT;
 	lvColumn.fmt = LVCFMT_LEFT;
-	
+
 	generic_string columnText;
 	NativeLangSpeaker *pNativeSpeaker = (NppParameters::getInstance()).getNativeLangSpeaker();
 
@@ -640,7 +646,7 @@ void WindowsDlg::updateColumnNames()
 
 	generic_string columnText;
 	NativeLangSpeaker *pNativeSpeaker = (NppParameters::getInstance()).getNativeLangSpeaker();
-	
+
 	columnText = pNativeSpeaker->getAttrNameStr(TEXT("Name"), WD_ROOTNODE, WD_CLMNNAME);
 	if (_currentColumn != 0)
 	{
@@ -795,7 +801,8 @@ void WindowsDlg::fitColumnsToSize()
 
 void WindowsDlg::resetSelection()
 {
-	assert(_pTab != nullptr);
+	if (!_pTab)
+		return;
 
 	auto curSel = _pTab->getCurrentTabIndex();
 	int pos = 0;
@@ -889,9 +896,9 @@ void WindowsDlg::doClose()
 	{
 		// Trying to retain sort order. fairly sure there is a much better algorithm for this
 		vector<int>::iterator kitr = key.begin();
-		for (UINT i = 0; i < n; ++i, ++kitr)
+		for (UINT k = 0; k < n; ++k, ++kitr)
 		{
-			if (nmdlg.Items[i] == ((UINT)-1))
+			if (nmdlg.Items[k] == ((UINT)-1))
 			{
 				int oldVal = _idxMap[*kitr];
 				_idxMap[*kitr] = -1;
@@ -940,7 +947,7 @@ void WindowsDlg::doCount()
 
 void WindowsDlg::doSort()
 {
-	if (_pTab == NULL)
+	if (!_pTab)
 		return;
 
 	size_t count =  _pTab->nbItem();
@@ -963,7 +970,7 @@ void WindowsDlg::doSort()
 		_idxMap.clear();
 		refreshMap();
 	}
-	
+
 	//After sorting, need to open the active tab before sorting
 	//This will be helpful when large number of documents are opened
 	__int64 newPosition = -1;
@@ -975,7 +982,7 @@ void WindowsDlg::doSort()
 	nmdlg.type = WDT_ACTIVATE;
 	nmdlg.curSel = static_cast<UINT>(newPosition);
 	nmdlg.hwndFrom = _hSelf;
-	nmdlg.code = WDN_NOTIFY;	
+	nmdlg.code = WDN_NOTIFY;
 	SendMessage(_hParent, WDN_NOTIFY, 0, LPARAM(&nmdlg));
 }
 
@@ -1034,15 +1041,13 @@ void WindowsDlg::refreshMap()
 	if (count == oldSize)
 		return;
 
-	if (count != oldSize)
-	{
-		size_t lo = 0;
-		_idxMap.resize(count);
-		if (oldSize < count)
-			lo = oldSize;
-		for (size_t i = lo; i < count; ++i)
-			_idxMap[i] = int(i);
-	}
+	size_t lo = 0;
+	_idxMap.resize(count);
+	if (oldSize < count)
+		lo = oldSize;
+
+	for (size_t i = lo; i < count; ++i)
+		_idxMap[i] = int(i);
 }
 
 void WindowsDlg::doSortToTabs()

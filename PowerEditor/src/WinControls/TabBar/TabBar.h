@@ -27,6 +27,8 @@
 #include <windows.h>
 #include <commctrl.h>
 #include "Window.h"
+#include "dpiManagerV2.h"
+#include "DoubleBuffer.h"
 
 //Notification message
 #define TCN_TABDROPPED (TCN_FIRST - 10)
@@ -52,6 +54,7 @@ constexpr int g_TabHeightLarge = 25;
 constexpr int g_TabWidth = 45;
 constexpr int g_TabWidthCloseBtn = 60;
 constexpr int g_TabCloseBtnSize = 11;
+constexpr int g_TabCloseBtnSize_DM = 16;
 
 struct TBHDR
 {
@@ -94,7 +97,7 @@ public:
         return _nbItem;
     }
 
-	void setFont(const TCHAR *fontName, int fontSize);
+	void setFont();
 
 	void setVertical(bool b) {
 		_isVertical = b;
@@ -108,9 +111,14 @@ public:
 		return isReduced ? _hFont : _hLargeFont;
 	}
 
+	int getNextOrPrevTabIdx(bool isNext) const;
+
+	DPIManagerV2& dpiManager() { return _dpiManager; };
+
 protected:
 	size_t _nbItem = 0;
 	bool _hasImgLst = false;
+
 	HFONT _hFont = nullptr;
 	HFONT _hLargeFont = nullptr;
 	HFONT _hVerticalFont = nullptr;
@@ -121,6 +129,8 @@ protected:
 	bool _isVertical = false;
 	bool _isMultiLine = false;
 
+	DPIManagerV2 _dpiManager;
+
 	long getRowCount() const {
 		return long(::SendMessage(_hSelf, TCM_GETROWCOUNT, 0, 0));
 	}
@@ -129,10 +139,11 @@ protected:
 
 struct CloseButtonZone
 {
-	CloseButtonZone();
 	bool isHit(int x, int y, const RECT & tabRect, bool isVertical) const;
 	RECT getButtonRectFrom(const RECT & tabRect, bool isVertical) const;
+	void setParent(HWND parent) { _parent = parent; }
 
+	HWND _parent = nullptr;
 	int _width = 0;
 	int _height = 0;
 };
@@ -168,30 +179,30 @@ public :
 		_draggingPoint.y = 0;
 	};
 
-	static void doOwnerDrawTab();
+	static void doOwnerDrawTab(TabBarPlus* tbpObj);
 	static void doVertical();
 	static void doMultiLine();
-	static bool isOwnerDrawTab() {return true;};
 	static bool drawTopBar() {return _drawTopBar;};
 	static bool drawInactiveTab() {return _drawInactiveTab;};
 	static bool drawTabCloseButton() {return _drawTabCloseButton;};
 	static bool isDbClk2Close() {return _isDbClk2Close;};
 	static bool isVertical() { return _isCtrlVertical;};
 	static bool isMultiLine() { return _isCtrlMultiLine;};
+	static bool isReduced() { return _isReduced;};
 
-	static void setDrawTopBar(bool b) {
+	static void setDrawTopBar(bool b, TabBarPlus* tbpObj) {
 		_drawTopBar = b;
-		doOwnerDrawTab();
+		doOwnerDrawTab(tbpObj);
 	}
 
-	static void setDrawInactiveTab(bool b) {
+	static void setDrawInactiveTab(bool b, TabBarPlus* tbpObj) {
 		_drawInactiveTab = b;
-		doOwnerDrawTab();
+		doOwnerDrawTab(tbpObj);
 	}
 
-	static void setDrawTabCloseButton(bool b) {
+	static void setDrawTabCloseButton(bool b, TabBarPlus* tbpObj) {
 		_drawTabCloseButton = b;
-		doOwnerDrawTab();
+		doOwnerDrawTab(tbpObj);
 	}
 
 	static void setDbClk2Close(bool b) {
@@ -208,11 +219,17 @@ public :
 		doMultiLine();
 	}
 
-	static void setColour(COLORREF colour2Set, tabColourIndex i);
+	static void setReduced(bool b) {
+		_isReduced = b;
+	}
+
+	static void setColour(COLORREF colour2Set, tabColourIndex i, TabBarPlus* tbpObj);
 	virtual int getIndividualTabColour(int tabIndex) = 0;
 
 	void currentTabToStart();
 	void currentTabToEnd();
+
+	void setCloseBtnImageList();
 
 protected:
     // it's the boss to decide if we do the drag N drop
@@ -227,11 +244,13 @@ protected:
 	int _previousTabSwapped = -1;
 	POINT _draggingPoint{}; // coordinate of Screen
 	WNDPROC _tabBarDefaultProc = nullptr;
+	DoubleBuffer _dblBuf;
 
 	RECT _currentHoverTabRect{};
 	int _currentHoverTabItem = -1; // -1 : no mouse on any tab
 
 	CloseButtonZone _closeButtonZone;
+	HIMAGELIST _hCloseBtnImgLst = nullptr;
 	bool _isCloseHover = false;
 	int _whichCloseClickDown = -1;
 	bool _lmbdHit = false; // Left Mouse Button Down Hit
@@ -254,6 +273,7 @@ protected:
 	static bool _isDbClk2Close;
 	static bool _isCtrlVertical;
 	static bool _isCtrlMultiLine;
+	static bool _isReduced;
 
 	static COLORREF _activeTextColour;
 	static COLORREF _activeTopBarFocusedColour;

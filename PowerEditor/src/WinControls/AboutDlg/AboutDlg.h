@@ -46,6 +46,11 @@ public :
 	void destroy() override {
 		//_emailLink.destroy();
 		_pageLink.destroy();
+		if (_hIcon != nullptr)
+		{
+			::DestroyIcon(_hIcon);
+			_hIcon = nullptr;
+		}
 	};
 
 protected :
@@ -54,6 +59,7 @@ protected :
 private :
 	//URLCtrl _emailLink;
 	URLCtrl _pageLink;
+	HICON _hIcon = nullptr;
 };
 
 
@@ -62,7 +68,7 @@ class DebugInfoDlg : public StaticDialog
 public:
 	DebugInfoDlg() = default;
 
-	void init(HINSTANCE hInst, HWND parent, bool isAdmin, const generic_string& loadedPlugins) {
+	void init(HINSTANCE hInst, HWND parent, bool isAdmin, const std::wstring& loadedPlugins) {
 		_isAdmin = isAdmin;
 		_loadedPlugins = loadedPlugins;
 		Window::init(hInst, parent);
@@ -79,11 +85,11 @@ protected:
 
 private:
 	typedef const CHAR * (__cdecl * PWINEGETVERSION)();
-	generic_string _debugInfoStr;
-	generic_string _debugInfoDisplay;
-	const generic_string _cmdLinePlaceHolder { L"$COMMAND_LINE_PLACEHOLDER$" };
+	std::wstring _debugInfoStr;
+	std::wstring _debugInfoDisplay;
+	const std::wstring _cmdLinePlaceHolder { L"$COMMAND_LINE_PLACEHOLDER$" };
 	bool _isAdmin = false;
-	generic_string _loadedPlugins;
+	std::wstring _loadedPlugins;
 };
 
 class DoSaveOrNotBox : public StaticDialog
@@ -91,7 +97,7 @@ class DoSaveOrNotBox : public StaticDialog
 public:
 	DoSaveOrNotBox() = default;
 
-	void init(HINSTANCE hInst, HWND parent, const TCHAR* fn, bool isMulti) {
+	void init(HINSTANCE hInst, HWND parent, const wchar_t* fn, bool isMulti) {
 		Window::init(hInst, parent);
 		if (fn)
 			_fn = fn;
@@ -114,7 +120,7 @@ protected:
 
 private:
 	int clickedButtonId = -1;
-	generic_string _fn;
+	std::wstring _fn;
 	bool _isMulti = false;
 };
 
