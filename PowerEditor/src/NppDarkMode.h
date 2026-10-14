@@ -16,18 +16,21 @@
 
 #pragma once
 
+#include <string>
 #include <windows.h>
 
-#include "Common.h" // for generic_string
+enum class FluentColor;
+struct TbIconInfo;
+struct AdvancedOptions;
 
 namespace NppDarkMode
 {
 	struct Colors
 	{
 		COLORREF background = 0;
-		COLORREF softerBackground = 0;
+		COLORREF softerBackground = 0; // ctrl background color
 		COLORREF hotBackground = 0;
-		COLORREF pureBackground = 0;
+		COLORREF pureBackground = 0;   // dlg background color
 		COLORREF errorBackground = 0;
 		COLORREF text = 0;
 		COLORREF darkerText = 0;
@@ -41,7 +44,6 @@ namespace NppDarkMode
 	struct Options
 	{
 		bool enable = false;
-		bool enableMenubar = false;
 		bool enablePlugin = false;
 	};
 
@@ -79,21 +81,7 @@ namespace NppDarkMode
 		dark = 2
 	};
 
-	struct AdvOptDefaults
-	{
-		generic_string _xmlFileName;
-		int _toolBarIconSet = -1;
-		int _tabIconSet = -1;
-		bool _tabUseTheme = false;
-	};
-
-	struct AdvancedOptions
-	{
-		bool _enableWindowsMode = false;
-
-		NppDarkMode::AdvOptDefaults _darkDefaults{ L"DarkModeDefault.xml", 0, 2, false };
-		NppDarkMode::AdvOptDefaults _lightDefaults{ L"", 4, 0, true };
-	};
+	constexpr UINT WM_SETBUTTONIDEALSIZE = (WM_USER + 4200);
 
 	void initDarkMode();				// pulls options from NppParameters
 	void refreshDarkMode(HWND hwnd, bool forceRefresh = false);	// attempts to apply new options from NppParameters, sends NPPM_INTERNAL_REFRESHDARKMODE to hwnd's top level parent
@@ -101,17 +89,24 @@ namespace NppDarkMode
 	void initAdvancedOptions();
 
 	bool isEnabled();
-	bool isDarkMenuEnabled();
 	bool isEnabledForPlugins();
 	bool isExperimentalActive();
 	bool isExperimentalSupported();
 
 	bool isWindowsModeEnabled();
 	void setWindowsMode(bool enable);
-	generic_string getThemeName();
-	void setThemeName(const generic_string& newThemeName);
-	int getToolBarIconSet(bool useDark);
-	void setToolBarIconSet(int state2Set, bool useDark);
+	std::wstring getThemeName();
+	void setThemeName(const std::wstring& newThemeName);
+	TbIconInfo getToolbarIconInfo(bool useDark);
+	TbIconInfo getToolbarIconInfo();
+	void setToolbarIconSet(int state2Set, bool useDark);
+	void setToolbarIconSet(int state2Set);
+	void setToolbarFluentColor(FluentColor color2Set, bool useDark);
+	void setToolbarFluentColor(FluentColor color2Set);
+	void setToolbarFluentMonochrome(bool setMonochrome, bool useDark);
+	void setToolbarFluentMonochrome(bool setMonochrome);
+	void setToolbarFluentCustomColor(COLORREF color, bool useDark);
+	void setToolbarFluentCustomColor(COLORREF color);
 	int getTabIconSet(bool useDark);
 	void setTabIconSet(bool useAltIcons, bool useDark);
 	bool useTabTheme();
@@ -122,15 +117,17 @@ namespace NppDarkMode
 	DWORD getWindowsBuildNumber();
 
 	COLORREF invertLightness(COLORREF c);
-	COLORREF invertLightnessSofter(COLORREF c);
-	double calculatePerceivedLighness(COLORREF c);
+	double calculatePerceivedLightness(COLORREF c);
 
 	void setDarkTone(ColorTone colorToneChoice);
 
+	COLORREF getAccentColor(bool useDark);
+	COLORREF getAccentColor();
+
 	COLORREF getBackgroundColor();
-	COLORREF getSofterBackgroundColor();
+	COLORREF getCtrlBackgroundColor();
 	COLORREF getHotBackgroundColor();
-	COLORREF getDarkerBackgroundColor();
+	COLORREF getDlgBackgroundColor();
 	COLORREF getErrorBackgroundColor();
 
 	COLORREF getTextColor();
@@ -143,8 +140,8 @@ namespace NppDarkMode
 	COLORREF getDisabledEdgeColor();
 
 	HBRUSH getBackgroundBrush();
-	HBRUSH getDarkerBackgroundBrush();
-	HBRUSH getSofterBackgroundBrush();
+	HBRUSH getDlgBackgroundBrush();
+	HBRUSH getCtrlBackgroundBrush();
 	HBRUSH getHotBackgroundBrush();
 	HBRUSH getErrorBackgroundBrush();
 
@@ -152,17 +149,17 @@ namespace NppDarkMode
 	HBRUSH getHotEdgeBrush();
 	HBRUSH getDisabledEdgeBrush();
 
+	HBRUSH getDarkerTextBrush();
+
 	HPEN getDarkerTextPen();
 	HPEN getEdgePen();
 	HPEN getHotEdgePen();
 	HPEN getDisabledEdgePen();
 
-	COLORREF getIndividualTabColour(int colourIndex, bool themeDependant, bool saturated);
-
 	void setBackgroundColor(COLORREF c);
-	void setSofterBackgroundColor(COLORREF c);
+	void setCtrlBackgroundColor(COLORREF c);
 	void setHotBackgroundColor(COLORREF c);
-	void setDarkerBackgroundColor(COLORREF c);
+	void setDlgBackgroundColor(COLORREF c);
 	void setErrorBackgroundColor(COLORREF c);
 	void setTextColor(COLORREF c);
 	void setDarkerTextColor(COLORREF c);
@@ -172,17 +169,12 @@ namespace NppDarkMode
 	void setHotEdgeColor(COLORREF c);
 	void setDisabledEdgeColor(COLORREF c);
 
-	Colors getDarkModeDefaultColors();
+	Colors getDarkModeDefaultColors(ColorTone colorTone = ColorTone::blackTone);
 	void changeCustomTheme(const Colors& colors);
 
 	// handle events
 	void handleSettingChange(HWND hwnd, LPARAM lParam, bool isFromBtn = false);
 	bool isDarkModeReg();
-
-	// processes messages related to UAH / custom menubar drawing.
-	// return true if handled, false to continue with normal processing in your wndproc
-	bool runUAHWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam, LRESULT* lr);
-	void drawUAHMenuNCBottomLine(HWND hWnd);
 
 	// from DarkMode.h
 	void initExperimentalDarkMode();
@@ -194,6 +186,7 @@ namespace NppDarkMode
 	// enhancements to DarkMode.h
 	void enableDarkScrollBarForWindowAndChildren(HWND hwnd);
 
+	void paintRoundRect(HDC hdc, const RECT rect, const HPEN hpen, const HBRUSH hBrush, int width = 0, int height = 0);
 	inline void paintRoundFrameRect(HDC hdc, const RECT rect, const HPEN hpen, int width = 0, int height = 0);
 
 	void subclassButtonControl(HWND hwnd);
@@ -214,15 +207,11 @@ namespace NppDarkMode
 	void autoSubclassAndThemeChildControls(HWND hwndParent, bool subclass = true, bool theme = true);
 	void autoThemeChildControls(HWND hwndParent);
 
-	LRESULT darkToolBarNotifyCustomDraw(LPARAM lParam);
-	LRESULT darkListViewNotifyCustomDraw(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isPlugin);
-	LRESULT darkTreeViewNotifyCustomDraw(LPARAM lParam);
-
 	void autoSubclassAndThemePluginDockWindow(HWND hwnd);
 	ULONG autoSubclassAndThemePlugin(HWND hwnd, ULONG dmFlags);
+	void autoSubclassCtlColor(HWND hWnd);
 	void autoSubclassAndThemeWindowNotify(HWND hwnd);
-
-	void sendMessageToChildControls(HWND hwndParent, UINT msg, WPARAM wParam, LPARAM lParam);
+	void autoSubclassWindowMenuBar(HWND hWnd);
 
 	void setDarkTitleBar(HWND hwnd);
 	void setDarkExplorerTheme(HWND hwnd);
@@ -233,17 +222,22 @@ namespace NppDarkMode
 
 	void disableVisualStyle(HWND hwnd, bool doDisable);
 	void calculateTreeViewStyle();
-	void setTreeViewStyle(HWND hwnd);
+	void updateTreeViewStylePrev();
+	TreeViewStyle getTreeViewStyle();
+	void setTreeViewStyle(HWND hWnd, bool force = false);
 	bool isThemeDark();
 	void setBorder(HWND hwnd, bool border = true);
 
-	BOOL CALLBACK enumAutocompleteProc(HWND hwnd, LPARAM lParam);
 	void setDarkAutoCompletion();
 
 	LRESULT onCtlColor(HDC hdc);
-	LRESULT onCtlColorSofter(HDC hdc);
-	LRESULT onCtlColorDarker(HDC hdc);
+	LRESULT onCtlColorCtrl(HDC hdc);
+	LRESULT onCtlColorDlg(HDC hdc);
 	LRESULT onCtlColorError(HDC hdc);
-	LRESULT onCtlColorDarkerBGStaticText(HDC hdc, bool isTextEnabled);
-	INT_PTR onCtlColorListbox(WPARAM wParam, LPARAM lParam);
+	LRESULT onCtlColorDlgStaticText(HDC hdc, bool isTextEnabled);
+	LRESULT onCtlColorDlgLinkText(HDC hdc, bool isTextEnabled = true);
+	LRESULT onCtlColorListbox(WPARAM wParam, LPARAM lParam);
+
+	int darkMessageBoxW(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType);
+	BOOL darkChooseColorW(LPCHOOSECOLORW cc);
 }

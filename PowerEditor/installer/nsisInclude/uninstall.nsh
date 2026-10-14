@@ -17,12 +17,21 @@
 Var installPath
 Var doLocalConf
 Var keepUserData
+
 Function un.onInit
+
+!ifdef ARCH64 || ARCHARM64 ; x64 or ARM64 : installation of 64 bits Notepad++ & its 64 bits components
+	StrCpy $winSysDir "$WINDIR\System32"
+!else ; installation of 32 bits Notepad++ & its 32 bits components
+	StrCpy $winSysDir "$WINDIR\SysWOW64"
+!endif
+
 	StrCpy $keepUserData "false"	; default value(It is must, otherwise few files such as shortcuts.xml, contextMenu.xml etc, will not be removed when $INSTDIR\doLocalConf.xml is not available.)
 	; determinate theme path for uninstall themes
 	StrCpy $installPath "$APPDATA\${APPNAME}"
 	StrCpy $doLocalConf "false"
 	IfFileExists $INSTDIR\doLocalConf.xml doesExist noneExist
+
 doesExist:
 	StrCpy $installPath $INSTDIR
 	StrCpy $doLocalConf "true"
@@ -55,20 +64,22 @@ FunctionEnd
 
 
 Section un.explorerContextMenu
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_01.dll"'
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_02.dll"'
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_03.dll"'
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_04.dll"'
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_05.dll"'
-	ExecWait 'regsvr32 /u /s "$INSTDIR\NppShell_06.dll"'
-	Delete "$INSTDIR\NppShell_01.dll"
-	Delete "$INSTDIR\NppShell_02.dll"
-	Delete "$INSTDIR\NppShell_03.dll"
-	Delete "$INSTDIR\NppShell_04.dll"
-	Delete "$INSTDIR\NppShell_05.dll"
-	Delete "$INSTDIR\NppShell_06.dll"
 	
-	ExecWait 'regsvr32 /u /s "$INSTDIR\contextmenu\NppShell.dll"'
+!ifdef ARCH64 || ARCHARM64
+	IfFileExists "$INSTDIR\contextmenu\NppShell.dll" 0 +2
+		ExecWait '"$winSysDir\rundll32.exe" "$INSTDIR\contextmenu\NppShell.dll",CleanupDll'
+	SetRegView 64
+!else
+	ExecWait '"$winSysDir\regsvr32.exe" /u /s "$INSTDIR\contextmenu\NppShell.dll"'
+	SetRegView 32
+!endif
+
+    DeleteRegKey HKCR "*\shell\ANotepad++64"
+    DeleteRegKey HKCR "CLSID\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}"
+
+    Delete "$INSTDIR\contextmenu\NppShell.dll"
+    Delete "$INSTDIR\contextmenu\NppShell.msix"
+    RMDir  "$INSTDIR\contextmenu"
 SectionEnd
 
 Section un.UnregisterFileExt
@@ -150,9 +161,10 @@ FunctionEnd
 !else
 	SetRegView 64
 !endif
+
 	DeleteRegKey HKLM "${UNINSTALL_REG_KEY}"
 	DeleteRegKey HKLM "SOFTWARE\${APPNAME}"
-	;DeleteRegKey HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad++.exe"
+
 !ifdef ARCH64
 	SetRegView 64
 !else ifdef ARCHARM64
@@ -182,9 +194,7 @@ FunctionEnd
 
 
 Section Uninstall
-!ifdef ARCH64
-	SetRegView 64
-!else ifdef ARCHARM64
+!ifdef ARCH64 || ARCHARM64
 	SetRegView 64
 !else
 	SetRegView 32
@@ -243,6 +253,7 @@ Section Uninstall
 	Delete "$INSTDIR\langs.model.xml"
 	Delete "$INSTDIR\stylers.model.xml"
 	Delete "$INSTDIR\tabContextMenu_example.xml"
+	Delete "$INSTDIR\toolbarButtonsConf_example.xml"
 	Delete "$INSTDIR\stylers_remove.xml"
 	Delete "$INSTDIR\localization\english.xml"
 	Delete "$INSTDIR\LINEDRAW.TTF"
@@ -277,6 +288,7 @@ Section Uninstall
 		Delete "$APPDATA\${APPNAME}\insertExt.ini"
 		Delete "$APPDATA\${APPNAME}\nppLogNulContentCorruptionIssue.log"
 		Delete "$APPDATA\${APPNAME}\tabContextMenu_example.xml"
+		Delete "$APPDATA\${APPNAME}\toolbarButtonsConf_example.xml"
 		Delete "$APPDATA\${APPNAME}\toolbarIcons.xml"
 		Delete "$APPDATA\${APPNAME}\userDefineLangs\userDefinedLang-markdown.default.modern.xml"
 		Delete "$APPDATA\${APPNAME}\userDefineLangs\markdown._preinstalled.udl.xml"
@@ -289,13 +301,6 @@ Section Uninstall
 		StrCmp $1 "Admin" 0 +2
 			SetShellVarContext all ; make context for all user
 	${endIf}
-	
-	; In order to not delete context menu binary before we unregistered it,
-	; we delete them at the end, using the CleanupDll function, since it can be locked by explorer.
-	IfFileExists "$INSTDIR\contextmenu\NppShell.dll" 0 +2
-		ExecWait 'rundll32.exe "$INSTDIR\contextmenu\NppShell.dll",CleanupDll'
-	Delete "$INSTDIR\contextmenu\NppShell.msix"
-	
 	
 	; Remove remaining directories
 	RMDir /r "$INSTDIR\plugins\disabled\"

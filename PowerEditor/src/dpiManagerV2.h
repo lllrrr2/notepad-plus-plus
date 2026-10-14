@@ -16,7 +16,23 @@
 
 
 #pragma once
-#include "NppDarkMode.h"
+#include <windows.h>
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
+#ifndef WM_DPICHANGED_BEFOREPARENT
+#define WM_DPICHANGED_BEFOREPARENT 0x02E2
+#endif
+
+#ifndef WM_DPICHANGED_AFTERPARENT
+#define WM_DPICHANGED_AFTERPARENT 0x02E3
+#endif
+
+#ifndef WM_GETDPISCALEDSIZE
+#define WM_GETDPISCALEDSIZE 0x02E4
+#endif
 
 class DPIManagerV2
 {
@@ -31,7 +47,16 @@ public:
 	static void initDpiAPI();
 
 	static int getSystemMetricsForDpi(int nIndex, UINT dpi);
+	int getSystemMetricsForDpi(int nIndex) const {
+		return getSystemMetricsForDpi(nIndex, _dpi);
+	}
+
+	[[nodiscard]] static bool isValidDpiAwarenessContext(DPI_AWARENESS_CONTEXT value);
+	// includes check for `DPI_AWARENESS_CONTEXT dpiContext` via `isValidDpiAwarenessContext`
 	static DPI_AWARENESS_CONTEXT setThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT dpiContext);
+	static DPI_AWARENESS_CONTEXT getWindowDpiAwarenessContext(HWND hWnd);
+
+	static bool adjustWindowRectExForDpi(LPRECT lpRect, DWORD dwStyle, BOOL bMenu, DWORD dwExStyle, UINT dpi);
 
 	static UINT getDpiForSystem();
 	static UINT getDpiForWindow(HWND hWnd);
@@ -64,10 +89,10 @@ public:
 		return _dpi;
 	}
 
-	static void setPositionDpi(LPARAM lParam, HWND hWnd);
+	static void setPositionDpi(LPARAM lParam, HWND hWnd, UINT flags = SWP_NOZORDER | SWP_NOACTIVATE);
 
-	static int scale(int x, UINT dpi, UINT dpi2) {
-		return MulDiv(x, dpi, dpi2);
+	static int scale(int x, UINT toDpi, UINT fromDpi) {
+		return MulDiv(x, toDpi, fromDpi);
 	}
 
 	static int scale(int x, UINT dpi) {
@@ -78,35 +103,31 @@ public:
 		return scale(x, USER_DEFAULT_SCREEN_DPI, dpi);
 	}
 
-	int scale(int x) {
+	static int scale(int x, HWND hWnd) {
+		return scale(x, getDpiForWindow(hWnd), USER_DEFAULT_SCREEN_DPI);
+	}
+
+	static int unscale(int x, HWND hWnd) {
+		return scale(x, USER_DEFAULT_SCREEN_DPI, getDpiForWindow(hWnd));
+	}
+
+	int scale(int x) const {
 		return scale(x, _dpi);
 	}
 
-	int unscale(int x) {
+	int unscale(int x) const {
 		return unscale(x, _dpi);
-	}
-
-	int scaleX(int x) {
-		return scale(x);
-	}
-
-	int unscaleX(int x) {
-		return unscale(x);
-	}
-
-	int scaleY(int y) {
-		return scale(y);
-	}
-
-	int unscaleY(int y) {
-		return unscale(y);
 	}
 
 	static int scaleFont(int pt, UINT dpi) {
 		return -(scale(pt, dpi, 72));
 	}
 
-	int scaleFont(int pt) {
+	static int scaleFont(int pt, HWND hWnd) {
+		return -(scale(pt, getDpiForWindow(hWnd), 72));
+	}
+
+	int scaleFont(int pt) const {
 		return scaleFont(pt, _dpi);
 	}
 
@@ -114,6 +135,32 @@ public:
 	static LOGFONT getDefaultGUIFontForDpi(HWND hWnd, FontType type = FontType::message) {
 		return getDefaultGUIFontForDpi(getDpiForWindow(hWnd), type);
 	}
+	static LOGFONT getDefaultGUIFontForDpi(UINT dpi, WORD fontSize, FontType type = FontType::message);
+	static LOGFONT getDefaultGUIFontForDpi(HWND hWnd, WORD fontSize, FontType type = FontType::message) {
+		return getDefaultGUIFontForDpi(getDpiForWindow(hWnd), fontSize, type);
+	}
+
+	LOGFONT getDefaultGUIFontForDpi(FontType type = FontType::message) const {
+		return getDefaultGUIFontForDpi(_dpi, type);
+	}
+
+	static void loadIcon(HINSTANCE hinst, const wchar_t* pszName, int cx, int cy, HICON* phico, UINT fuLoad = LR_DEFAULTCOLOR);
+
+	[[nodiscard]] static DWORD getTextScaleFactor();
+
+	[[nodiscard]] static int scaleFontForFactor(int pt, UINT textScaleFactor) {
+		static constexpr UINT defaultFontScaleFactor = 100;
+		return scale(pt, textScaleFactor, defaultFontScaleFactor);
+	}
+
+	[[nodiscard]] static int scaleFontForFactor(int pt) {
+		static const int scaleFactor = DPIManagerV2::getTextScaleFactor();
+		return scaleFontForFactor(pt, scaleFactor);
+	}
+
+	[[nodiscard]] static int getFontAdjustedHeight(HWND hWnd, HFONT hFont) noexcept;
+	[[nodiscard]] static int getFontAvgAlphaWidth(HWND hWnd, HFONT hFont) noexcept;
+	[[nodiscard]] static int getFontDigitWidth(HWND hWnd, HFONT hFont) noexcept;
 
 private:
 	UINT _dpi = USER_DEFAULT_SCREEN_DPI;

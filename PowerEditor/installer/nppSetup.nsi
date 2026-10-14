@@ -21,6 +21,7 @@
 !include "nsDialogs.nsh" ; allows creation of custom pages in the installer
 !include "Memento.nsh"   ; remember user selections in the installer across runs
 !include "FileFunc.nsh"
+!include "WinVer.nsh"
 
 Unicode true			; Generate a Unicode installer. It can only be used outside of sections and functions and before any data is compressed.
 SetCompressor /SOLID lzma	; This reduces installer size by approx 30~35%
@@ -29,6 +30,8 @@ SetCompressor /SOLID lzma	; This reduces installer size by approx 30~35%
 
 ; Installer is DPI-aware: not scaled by the DWM, no blurry text
 ManifestDPIAware true
+
+Var winSysDir
 
 !include "nsisInclude\winVer.nsh"
 !include "nsisInclude\globalDef.nsh"
@@ -43,8 +46,7 @@ OutFile ".\build\npp.${APPVERSION}.Installer.arm64.exe"
 OutFile ".\build\npp.${APPVERSION}.Installer.exe"
 !endif
 
-; Sign both installer and uninstaller
-!finalize        'sign-installers.bat "%1"' = 0     ; %1 is replaced by the installer exe to be signed.
+; Sign uninstaller
 !uninstfinalize  'sign-installers.bat "%1"' = 0     ; %1 is replaced by the uninstaller exe to be signed.
 
 ; ------------------------------------------------------------------------
@@ -57,8 +59,9 @@ OutFile ".\build\npp.${APPVERSION}.Installer.exe"
    VIAddVersionKey	"FileVersion"		"${Version}"
    VIAddVersionKey	"ProductVersion"	"${ProdVer}"
 ; ------------------------------------------------------------------------
- 
+
 ; Insert CheckIfRunning function as an installer and uninstaller function.
+Var runningNppDetected
 !insertmacro CheckIfRunning ""
 !insertmacro CheckIfRunning "un."
 
@@ -90,9 +93,16 @@ page Custom ExtraOptions
 !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchNpp"
 !insertmacro MUI_PAGE_FINISH
 
+
 !insertmacro MUI_UNPAGE_CONFIRM
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW "un.CheckIfRunning"
 !insertmacro MUI_UNPAGE_INSTFILES
+
+Var diffArchDir2Remove
+Var noUpdater
+Var closeRunningNpp
+Var runNppAfterSilentInstall
+Var relaunchNppAfterSilentInstall
 
 
 !include "nsisInclude\langs4Installer.nsh"
@@ -112,9 +122,6 @@ SectionEnd
 InstType "Minimalist"
 
 
-Var diffArchDir2Remove
-Var noUpdater
-
 
 !ifdef ARCH64 || ARCHARM64
 ; this is needed for the 64-bit InstallDirRegKey patch
@@ -131,8 +138,8 @@ Function .onInit
 	;   so the InstallDirRegKey checks for the irrelevant HKLM\SOFTWARE\WOW6432Node\Notepad++, explanation:
 	;   https://nsis.sourceforge.io/Reference/SetRegView
 	;
-!ifdef ARCH64 || ARCHARM64	
-	${If} ${RunningX64}
+!ifdef ARCH64 || ARCHARM64	; installation of 64 bits Notepad++ & its 64 bits components
+	${If} ${RunningX64} ; Windows 64 bits
 		System::Call kernel32::GetCommandLine()t.r0 ; get the original cmdline (where a possible "/D=..." is not hidden from us by NSIS)
 		${StrStr} $1 $0 "/D="
 		${If} "$1" == ""
@@ -150,16 +157,36 @@ Function .onInit
 	;
 	; --- PATCH END ---
 
+	StrCpy $runningNppDetected "false" ; reset
+
+	; Begin of "/closeRunningNpp"
+	${GetParameters} $R0 
+	${GetOptions} $R0 "/closeRunningNpp" $R1 ; case insensitive 
+	IfErrors 0 closeRunningNppYes
+	StrCpy $closeRunningNpp "false"
+	Goto closeRunningNppCheckDone
+closeRunningNppYes:
+	StrCpy $closeRunningNpp "true"
+closeRunningNppCheckDone:
+	${If} $closeRunningNpp == "true"
+		; First try to use the usual app-closing by sending the WM_CLOSE.
+		; If that closing fails, use the forceful TerminateProcess way.
+		!insertmacro FindAndCloseOrTerminateRunningNpp ; this has to precede the following silent mode Notepad++ instance mutex check
+	${EndIf}
+
 	; handle the possible Silent Mode (/S) & already running Notepad++ (without this an incorrect partial installation is possible)
 	IfSilent 0 notInSilentMode
 	System::Call 'kernel32::OpenMutex(i 0x100000, b 0, t "nppInstance") i .R0'
 	IntCmp $R0 0 nppNotRunning
+	StrCpy $runningNppDetected "true"
 	System::Call 'kernel32::CloseHandle(i $R0)' ; a Notepad++ instance is running, tidy-up the opened mutex handle only
 	SetErrorLevel 5 ; set an exit code > 0 otherwise the installer returns 0 aka SUCCESS ('5' means here the future ERROR_ACCESS_DENIED when trying to overwrite the notepad++.exe file...)
-	Quit ; silent installation is silent, currently we cannot continue without a user interaction (TODO: a new "/closeRunningNppAutomatically" installer optional param...)
+	Quit ; silent installation is silent, we cannot continue here without a user interaction (or the installation should have been launched with the "/closeRunningNpp" param)
 nppNotRunning:
 notInSilentMode:
+	; End of "/closeRunningNpp"
 
+	; Begin of "/noUpdater"
 	${GetParameters} $R0 
 	${GetOptions} $R0 "/noUpdater" $R1 ;case insensitive 
 	IfErrors withUpdater withoutUpdater
@@ -176,7 +203,31 @@ updaterDone:
 		!insertmacro UnSelectSection ${PluginsAdmin}
 		SectionSetText ${PluginsAdmin} ""
 	${EndIf}
+	; End of "/noUpdater"
 
+	; Begin of "/runNppAfterSilentInstall"
+	${GetParameters} $R0 
+	${GetOptions} $R0 "/runNppAfterSilentInstall" $R1 ;case insensitive 
+	IfErrors noRunNpp runNpp
+noRunNpp:
+	StrCpy $runNppAfterSilentInstall "false"
+	Goto runNppDone
+runNpp:
+	StrCpy $runNppAfterSilentInstall "true"
+runNppDone:
+	; End of "/runNppAfterSilentInstall"
+
+	; Begin of "/relaunchNppAfterSilentInstall"
+	${GetParameters} $R0 
+	${GetOptions} $R0 "/relaunchNppAfterSilentInstall" $R1 ;case insensitive 
+	IfErrors noRelaunchNpp relaunchNpp
+noRelaunchNpp:
+	StrCpy $relaunchNppAfterSilentInstall "false"
+	Goto relaunchNppDone
+relaunchNpp:
+	StrCpy $relaunchNppAfterSilentInstall "true"
+relaunchNppDone:
+	; End of "/relaunchNppAfterSilentInstall"
 
 	${If} ${SectionIsSelected} ${PluginsAdmin}
 		!insertmacro SetSectionFlag ${AutoUpdater} ${SF_RO}
@@ -202,9 +253,13 @@ updaterDone:
 	; save selected language to registry
 	WriteRegStr HKLM "SOFTWARE\${APPNAME}" 'InstallerLanguage' '$Language'
 
-!ifdef ARCH64 || ARCHARM64 ; x64 or ARM64
-	${If} ${RunningX64}
-		; disable registry redirection (enable access to 64-bit portion of registry)
+!ifdef ARCH64 || ARCHARM64 ; x64 or ARM64 : installation of 64 bits Notepad++ & its 64 bits components
+	StrCpy $winSysDir $WINDIR\System32
+	${If} ${RunningX64} ; Windows 64 bits
+		; By default, regView value is 32.
+		; But while installing Notepad++ x64 on 64-bits OS,
+		; we disable registry redirection (enable access to 64-bit portion of registry)
+		; regView value is set to 64 once for all.
 		SetRegView 64
 		
 		; change to x64 install dir if needed
@@ -224,13 +279,14 @@ doDelete32:
 		StrCpy $diffArchDir2Remove $PROGRAMFILES\${APPNAME}
 noDelete32:
 		
-	${Else}
+	${Else} ; Windows 32 bits
 		MessageBox MB_OK "You cannot install Notepad++ 64-bit version on your 32-bit system.$\nPlease download and install Notepad++ 32-bit version instead."
 		Abort
 	${EndIf}
 
-!else ; 32-bit installer
-	${If} ${RunningX64}
+!else ; installation of 32 bits Notepad++ & its 32 bits components
+	StrCpy $winSysDir $WINDIR\SysWOW64
+	${If} ${RunningX64}  ; Windows 64 bits
 		; check if 64-bit version has been installed if yes, ask user to remove it
 		IfFileExists $PROGRAMFILES64\${APPNAME}\notepad++.exe 0 noDelete64
 		MessageBox MB_YESNO "You are trying to install 32-bit version while 64-bit version is already installed. Would you like to remove Notepad++ 64 bit version before proceeding further?$\n(Your custom config files will be kept)"  /SD IDYES IDYES doDelete64 IDNO noDelete64
@@ -247,6 +303,11 @@ FunctionEnd
 
 
 Section -"Notepad++" mainSection
+	${If} $showDetailsChecked == ${BST_CHECKED}
+		SetDetailsView show
+		SetAutoClose false
+	${endIf}
+
 	${If} $diffArchDir2Remove != ""
 		!insertmacro uninstallRegKey
 		!insertmacro uninstallDir $diffArchDir2Remove 
@@ -278,39 +339,77 @@ FunctionEnd
 
 
 ${MementoSection} "Context Menu Entry" explorerContextMenu
-
 	SetOverwrite try
 	SetOutPath "$INSTDIR\contextMenu\"
 	
-
 	IfFileExists $INSTDIR\contextmenu\NppShell.dll 0 +2
-		ExecWait 'rundll32.exe "$INSTDIR\contextmenu\NppShell.dll",CleanupDll'
+		ExecWait '"$winSysDir\rundll32.exe" "$INSTDIR\contextmenu\NppShell.dll",CleanupDll'
 
-
-	!ifdef ARCH64
+!ifdef ARCH64
+	File /oname=$INSTDIR\contextMenu\NppShell.msix "..\bin64\NppShell.msix"
+	File /oname=$INSTDIR\contextMenu\NppShell.dll "..\bin64\NppShell.x64.dll"
+!else ifdef ARCHARM64
+	File /oname=$INSTDIR\contextMenu\NppShell.msix "..\binarm64\NppShell.msix"
+	File /oname=$INSTDIR\contextMenu\NppShell.dll "..\binarm64\NppShell.arm64.dll"
+!else
+	; We need to test which arch we are running on, since 32bit exe can be run on both 32bit and 64bit Windows.
+	${If} ${RunningX64}
+		; We are running on 64bit Windows, so we need the msix as well, since it might be Windows 11.
 		File /oname=$INSTDIR\contextMenu\NppShell.msix "..\bin64\NppShell.msix"
 		File /oname=$INSTDIR\contextMenu\NppShell.dll "..\bin64\NppShell.x64.dll"
-	!else ifdef ARCHARM64
-		File /oname=$INSTDIR\contextMenu\NppShell.msix "..\binarm64\NppShell.msix"
-		File /oname=$INSTDIR\contextMenu\NppShell.dll "..\binarm64\NppShell.arm64.dll"
-	!else
-		; We need to test which arch we are running on, since 32bit exe can be run on both 32bit and 64bit Windows.
-		${If} ${RunningX64}
-			; We are running on 64bit Windows, so we need the msix as well, since it might be Windows 11.
-			File /oname=$INSTDIR\contextMenu\NppShell.msix "..\bin64\NppShell.msix"
-			File /oname=$INSTDIR\contextMenu\NppShell.dll "..\bin64\NppShell.x64.dll"
-		${Else}
-			; We are running on 32bit Windows, so no need for the msix file, since there is no way this could even be upgraded to Windows 11.
-			File /oname=$INSTDIR\contextMenu\NppShell.dll "..\bin\NppShell.x86.dll"
-		${EndIf}    
+	${Else}
+		; We are running on 32bit Windows, so no need for the msix file, since there is no way this could even be upgraded to Windows 11.
+		File /oname=$INSTDIR\contextMenu\NppShell.dll "..\bin\NppShell.x86.dll"
+	${EndIf}
+!endif
 
-	!endif
-	
-	ExecWait 'regsvr32 /s "$INSTDIR\contextMenu\NppShell.dll"'
+	; Shell context menu entry
+	WriteRegStr HKCR "*\shell\ANotepad++64" "" "Notepad++ Context menu"
+	WriteRegStr HKCR "*\shell\ANotepad++64" "ExplorerCommandHandler" "{B298D29A-A6ED-11DE-BA8C-A68E55D89593}"
+	WriteRegStr HKCR "*\shell\ANotepad++64" "NeverDefault" ""
+
+	; CLSID registration
+	WriteRegStr HKCR "CLSID\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}" "" "notepad++"
+	WriteRegStr HKCR "CLSID\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}\InProcServer32" "" "$INSTDIR\contextMenu\NppShell.dll"
+	WriteRegStr HKCR "CLSID\{B298D29A-A6ED-11DE-BA8C-A68E55D89593}\InProcServer32" "ThreadingModel" "Apartment"
+
+	; Register MSIX for Windows 11 modern context menu
+	; Skip only for x86 Notepad++ installation on Windows 32 system
+!ifdef ARCH64 || ARCHARM64 ; x64 installer
+	Call RegisterMSIX
+!else ; 32 bits installer
+	ExecWait '"$winSysDir\regsvr32.exe" /s "$INSTDIR\contextMenu\NppShell.dll"'
+!endif
 
 ${MementoSectionEnd}
 
 ${MementoSectionDone}
+
+; Helper function for registering MSIX (Include the ExternalLocation flag for Sparse Packages)
+Function RegisterMSIX
+	; Windows 11 (build 22000+) is required for modern context menu via MSIX
+	${If} ${AtLeastWin11}
+		; Get PowerShell path from the Registry
+		ReadRegStr $0 HKLM "SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" "Path"
+
+        ; Pass INSTDIR as an environment variable
+        System::Call 'kernel32::SetEnvironmentVariableW(w "NPP_INSTDIR", w "$INSTDIR")'
+
+		; Use PowerShell to register a modern Windows 11 right-click context menu silently
+        nsExec::ExecToLog '"$0" -Command "Add-AppxPackage -Path \"$$env:NPP_INSTDIR\contextMenu\NppShell.msix\" -ExternalLocation \"$$env:NPP_INSTDIR\contextMenu\""'
+
+		; Wait 2 seconds for the AppX service to finish indexing the new identity
+		Sleep 2000
+
+		; Notify the Shell (Association Change + Interrupt)
+		System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+		System::Call 'shell32::SHChangeNotify(i 0x00008000, i 0, p 0, p 0)'
+
+		; Broadcast the change
+		SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:ShellState" /TIMEOUT=2000
+	${EndIf}
+FunctionEnd
+
 
 ;--------------------------------
   !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -341,7 +440,16 @@ FunctionEnd
 ; which is visible in control panel in column named "size"
 
 Section -FinishSection
-  Call writeInstallInfoInRegistry
+	Call writeInstallInfoInRegistry
+	IfSilent 0 theEnd
+	${If} $runNppAfterSilentInstall == "true"
+		Call LaunchNpp ; always launch
+	${ElseIf} $relaunchNppAfterSilentInstall == "true"
+		${If} $runningNppDetected == "true"
+			Call LaunchNpp ; relaunch
+		${EndIf}
+	${EndIf}
+theEnd:
 SectionEnd
 
 BrandingText "The best things in life are free. Notepad++ is free so Notepad++ is the best"

@@ -16,52 +16,36 @@
 
 
 #pragma once
-#include "ColourPopupResource.h"
+
+#include <windows.h>
+
+#include "StaticDialog.h"
 #include "resource.h"
-#include "Window.h"
 
-#define WM_PICKUP_COLOR  (COLOURPOPUP_USER + 1)
-#define WM_PICKUP_CANCEL (COLOURPOPUP_USER + 2)
+#define WM_PICKUP_COLOR (COLOURPOPUP_USER + 1)
 
-
-class ColourPopup : public Window
+class ColourPopup : public StaticDialog
 {
-public :
+public:
 	ColourPopup() = default;
 	explicit ColourPopup(COLORREF defaultColor) : _colour(defaultColor) {}
-	virtual ~ColourPopup() {}
+	~ColourPopup() override {}
 
-	bool isCreated() const
-	{
-		return (_hSelf != NULL);
+	void createColorPopup();
+	void doDialog(POINT p);
+
+	void destroy() override {
+		if (_hSelf != nullptr)
+		{
+			::DestroyWindow(_hSelf);
+			_hSelf = nullptr;
+		}
 	}
 
-	void create(int dialogID);
-
-	void doDialog(POINT p)
-	{
-		if (!isCreated())
-			create(IDD_COLOUR_POPUP);
-		::SetWindowPos(_hSelf, HWND_TOP, p.x, p.y, _rc.right - _rc.left, _rc.bottom - _rc.top, SWP_SHOWWINDOW);
-	}
-
-	virtual void destroy()
-	{
-		::DestroyWindow(_hSelf);
-	}
-
-	void setColour(COLORREF c)
-	{
-		_colour = c;
-	}
-
-	COLORREF getSelColour(){return _colour;};
-
-private :
-	RECT _rc = {};
+private:
 	COLORREF _colour = RGB(0xFF, 0xFF, 0xFF);
 
-	static intptr_t CALLBACK dlgProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam);
-	static uintptr_t CALLBACK chooseColorDlgProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+	static intptr_t CALLBACK dlgClrPopupProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
+	static UINT_PTR CALLBACK chooseColorDlgProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 };

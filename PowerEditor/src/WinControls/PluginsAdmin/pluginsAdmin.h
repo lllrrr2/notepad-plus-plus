@@ -14,25 +14,31 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+
 #pragma once
 
-#include <cwctype>
-#include <algorithm>
-#include "StaticDialog.h"
-#include "pluginsAdminRes.h"
-#include "TabBar.h"
+#include <windows.h>
+
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "Common.h"
 #include "ListView.h"
-#include "tinyxml.h"
+#include "StaticDialog.h"
+#include "TabBar.h"
 #include "URLCtrl.h"
+#include "dpiManagerV2.h"
+#include "pluginsAdminRes.h"
 
 class PluginsManager;
 
 struct PluginUpdateInfo
 {
-	generic_string _fullFilePath; // only for the installed Plugin
+	std::wstring _fullFilePath; // only for the installed Plugin
 
-	generic_string _folderName;   // plugin folder name - should be the same name with plugin and should be uniq among the plugins
-	generic_string _displayName;  // plugin description name
+	std::wstring _folderName;   // plugin folder name - should be the same name with plugin and should be uniq among the plugins
+	std::wstring _displayName;  // plugin description name
 	Version _version;
 	// Optional
 	std::pair<Version, Version> _nppCompatibleVersions; // compatible to Notepad++ interval versions: <from, to> example: 
@@ -48,17 +54,17 @@ struct PluginUpdateInfo
 	                                                                                              // The 2nd interval versions are for Notepad++ versions
 	                                                                                              // which are compatible with the old plugins' versions given in the 1st interval
 	
-	generic_string _homepage;
-	generic_string _sourceUrl;
-	generic_string _description;
-	generic_string _author;
-	generic_string _id;           // Plugin package ID: SHA-256 hash
-	generic_string _repository;
+	std::wstring _homepage;
+	std::wstring _sourceUrl;
+	std::wstring _description;
+	std::wstring _author;
+	std::wstring _id;           // Plugin package ID: SHA-256 hash
+	std::wstring _repository;
 	bool _isVisible = true;       // if false then it should not be displayed 
 
-	generic_string describe();
+	std::wstring describe() const;
 	PluginUpdateInfo() = default;
-	PluginUpdateInfo(const generic_string& fullFilePath, const generic_string& fileName);
+	PluginUpdateInfo(const std::wstring& fullFilePath, const std::wstring& fileName);
 };
 
 struct NppCurrentStatus
@@ -70,26 +76,18 @@ struct NppCurrentStatus
 									
 	bool _isAppDataPluginsAllowed = false;  // true: install on %APPDATA%, update / remove on %APPDATA% & "Program files" or NPP_INST
 
-	generic_string _nppInstallPath;
-	generic_string _appdataPath;
+	std::wstring _nppInstallPath;
+	std::wstring _appdataPath;
 
-	// it should determinate :
+	// it should determine :
 	// 1. deployment location : %ProgramFile%   %appdata%   %other%
 	// 2. gitup launch mode:    ADM             ADM         NOMAL
-	bool shouldLaunchInAdmMode() { return _isInProgramFiles; };
+	bool shouldLaunchInAdmMode() const { return _isInProgramFiles; }
 };
 
 enum COLUMN_TYPE { COLUMN_PLUGIN, COLUMN_VERSION };
 enum SORT_TYPE { DISPLAY_NAME_ALPHABET_ENCREASE, DISPLAY_NAME_ALPHABET_DECREASE };
 
-
-struct SortDisplayNameDecrease final
-{
-	bool operator() (PluginUpdateInfo* l, PluginUpdateInfo* r)
-	{
-		return (l->_displayName.compare(r->_displayName) <= 0);
-	}
-};
 
 class PluginViewList
 {
@@ -103,30 +101,30 @@ public:
 		{
 			delete i;
 		}
-	};
+	}
 
 	void pushBack(PluginUpdateInfo* pi);
-	HWND getViewHwnd() { return _ui.getHSelf(); };
-	void displayView(bool doShow) const { _ui.display(doShow); };
-	std::vector<size_t> getCheckedIndexes() const { return _ui.getCheckedIndexes(); };
+	HWND getViewHwnd() { return _ui.getHSelf(); }
+	void displayView(bool doShow) const { _ui.display(doShow); }
+	std::vector<size_t> getCheckedIndexes() const { return _ui.getCheckedIndexes(); }
 	std::vector<PluginUpdateInfo*> fromUiIndexesToPluginInfos(const std::vector<size_t>& ) const;
-	long getSelectedIndex() const { return _ui.getSelectedIndex(); };
-	void setSelection(int index) const { _ui.setSelection(index); };
-	void initView(HINSTANCE hInst, HWND parent) { _ui.init(hInst, parent); };
-	void addColumn(const columnInfo & column2Add) { _ui.addColumn(column2Add); };
+	long getSelectedIndex() const { return _ui.getSelectedIndex(); }
+	void setSelection(int index) const { _ui.setSelection(index); }
+	void initView(HINSTANCE hInst, HWND parent) { _ui.init(hInst, parent); }
+	void addColumn(const columnInfo& column2Add) { _ui.addColumn(column2Add); }
 	void reSizeView(RECT & rc) { _ui.reSizeToWH(rc); }
-	void setViewStyleOption(int32_t extraStyle) { _ui.setStyleOption(extraStyle); };
-	size_t nbItem() const { return _ui.nbItem(); };
-	PluginUpdateInfo* getPluginInfoFromUiIndex(size_t index) const { return reinterpret_cast<PluginUpdateInfo*>(_ui.getLParamFromIndex(static_cast<int>(index))); };
-	PluginUpdateInfo* findPluginInfoFromFolderName(const generic_string& folderName, int& index) const;
+	void setViewStyleOption(int extraStyle) { _ui.setStyleOption(extraStyle); }
+	size_t nbItem() const { return _ui.nbItem(); }
+	PluginUpdateInfo* getPluginInfoFromUiIndex(size_t index) const { return reinterpret_cast<PluginUpdateInfo*>(_ui.getLParamFromIndex(static_cast<int>(index))); }
+	PluginUpdateInfo* findPluginInfoFromFolderName(const std::wstring& folderName, int& index) const;
 	bool removeFromListIndex(size_t index2remove);
-	bool hideFromListIndex(size_t index2Hide);
-	bool removeFromFolderName(const generic_string& folderName);
+	bool hideFromListIndex(size_t index2hide);
+	bool removeFromFolderName(const std::wstring& folderName);
 	bool removeFromUiIndex(size_t index2remove);
 	bool hideFromPluginInfoPtr(PluginUpdateInfo* pluginInfo2hide);
-	bool restore(const generic_string& folderName);
+	bool restore(const std::wstring& folderName);
 	bool removeFromPluginInfoPtr(PluginUpdateInfo* pluginInfo2hide);
-	void changeColumnName(COLUMN_TYPE index, const TCHAR *name2change);
+	void changeColumnName(COLUMN_TYPE index, const wchar_t *name2change);
 
 private:
 	// _list & _ui should keep being synchronized
@@ -136,55 +134,69 @@ private:
 	SORT_TYPE _sortType = DISPLAY_NAME_ALPHABET_ENCREASE;
 };
 
-enum LIST_TYPE { AVAILABLE_LIST, UPDATES_LIST, INSTALLED_LIST, INCOMPATIBLE_LIST };
+enum LIST_TYPE { AVAILABLE_LIST, UPDATES_LIST, INSTALLED_LIST, INCOMPATIBLE_LIST, DISABLED_LIST };
 
 
 class PluginsAdminDlg final : public StaticDialog
 {
 public :
 	PluginsAdminDlg();
-	~PluginsAdminDlg() = default;
 
-	void create(int dialogID, bool isRTL = false, bool msgDestParent = true) override;
+	void create(int dialogID, bool isRTL = false, bool msgDestParent = true, WORD fontSize = 0) override;
 
 	void doDialog(bool isRTL = false) {
 		if (!isCreated())
 		{
-			create(IDD_PLUGINSADMIN_DLG, isRTL);
+			const auto dpiContext = DPIManagerV2::setThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+			PluginsAdminDlg::create(IDD_PLUGINSADMIN_DLG, isRTL);
+			DPIManagerV2::setThreadDpiAwarenessContext(dpiContext);
 		}
 		display();
-	};
+	}
 
 	bool initFromJson();
 
 	void switchDialog(int indexToSwitch);
-	void setPluginsManager(PluginsManager *pluginsManager) { _pPluginsManager = pluginsManager; };
+	void setPluginsManager(PluginsManager* pluginsManager) { _pPluginsManager = pluginsManager; }
 
 	bool updateList();
-	void setAdminMode(bool isAdm) { _nppCurrentStatus._isAdminMode = isAdm; };
+	void setAdminMode(bool isAdm) { _nppCurrentStatus._isAdminMode = isAdm; }
+
+	enum Operation {
+		pa_install = 0,
+		pa_update = 1,
+		pa_remove = 2,
+		pa_deactivate = 3,
+		pa_activate = 4
+	};
 
 	bool installPlugins();
 	bool updatePlugins();
-	bool removePlugins();
+	bool removePlugins(int iTab);
+	bool enableOrDisablePlugins(Operation op);
 
-	void changeTabName(LIST_TYPE index, const TCHAR *name2change);
-	void changeColumnName(COLUMN_TYPE index, const TCHAR *name2change);
-	generic_string getPluginListVerStr() const;
-	const PluginViewList & getAvailablePluginUpdateInfoList() const {
+	void changeTabName(LIST_TYPE index, wchar_t* name2change);
+	void changeColumnName(COLUMN_TYPE index, const wchar_t *name2change);
+	std::wstring getPluginListVerStr() const;
+	const PluginViewList& getAvailablePluginUpdateInfoList() const {
 		return _availableList;
-	};
+	}
 	
-	PluginViewList & getIncompatibleList() {
+	PluginViewList& getIncompatibleList() {
 		return _incompatibleList;
-	};
+	}
+
+	PluginViewList& getDisabledList() {
+		return _disabledList;
+	}
 
 protected:
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
 private :
-	generic_string _updaterDir;
-	generic_string _updaterFullPath;
-	generic_string _pluginListFullPath;
+	std::wstring _updaterDir;
+	std::wstring _updaterFullPath;
+	std::wstring _pluginListFullPath;
 
 	TabBar _tab;
 
@@ -195,6 +207,8 @@ private :
 	PluginViewList _updateList;       // A dynamical list, items are removable
 	PluginViewList _installedList;    // A dynamical list, items are removable
 	PluginViewList _incompatibleList; // A permanent list, once it's loaded (no removal - only hide or show) 
+	PluginViewList _disabledList;     // A dynamical list, items are removable - deactivated plugins,
+	                                   // scanned from the "disabled" subfolder of the plugins root dir
 
 	PluginsManager *_pPluginsManager = nullptr;
 	NppCurrentStatus _nppCurrentStatus;
@@ -203,26 +217,25 @@ private :
 	bool searchInPlugins(bool isNextMode) const;
 	const bool _inNames = true;
 	const bool _inDescs = false;
-	bool isFoundInListFromIndex(const PluginViewList& inWhichList,int index, const generic_string& str2search, bool inWhichPart) const;
-	long searchFromCurrentSel(const PluginViewList& inWhichList, const generic_string& str2search, bool inWhichPart, bool isNextMode) const;
-	long searchInNamesFromCurrentSel(const PluginViewList& inWhichList, const generic_string& str2search, bool isNextMode) const {
+	bool isFoundInListFromIndex(const PluginViewList& inWhichList,int index, const std::wstring& str2search, bool inWhichPart) const;
+	long searchFromCurrentSel(const PluginViewList& inWhichList, const std::wstring& str2search, bool inWhichPart, bool isNextMode) const;
+	long searchInNamesFromCurrentSel(const PluginViewList& inWhichList, const std::wstring& str2search, bool isNextMode) const {
 		return searchFromCurrentSel(inWhichList, str2search, _inNames, isNextMode);
-	};
+	}
 
-	long searchInDescsFromCurrentSel(const PluginViewList& inWhichList, const generic_string& str2search, bool isNextMode) const {
+	long searchInDescsFromCurrentSel(const PluginViewList& inWhichList, const std::wstring& str2search, bool isNextMode) const {
 		return searchFromCurrentSel(inWhichList, str2search, _inDescs, isNextMode);
-	};
+	}
 	
 	bool initAvailablePluginsViewFromList();
 	bool initIncompatiblePluginList();
+	bool initDisabledPluginList();
 	bool loadFromPluginInfos();
-	bool checkUpdates();
 
-	enum Operation {
-		pa_install = 0,
-		pa_update = 1,
-		pa_remove = 2
-	};
-	bool exitToInstallRemovePlugins(Operation op, const std::vector<PluginUpdateInfo*>& puis);
+	bool exitToInstallRemovePlugins(Operation op, const std::vector<PluginUpdateInfo*>& puis, const std::wstring& customRoot = L"");
+
+	// Handles pa_deactivate / pa_activate: moves plugin folders between "plugins"
+	// and "plugins\disabled" (direction depends on op), then restarts Npp the same
+	// way exitToInstallRemovePlugins() does for install/update/remove.
+	bool exitToDeactivateActivatePlugins(Operation op, const std::vector<PluginUpdateInfo*>& puis);
 };
-

@@ -17,88 +17,95 @@
 
 #pragma once
 
+#include <windows.h>
+
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "DockingDlgInterface.h"
-#include "TreeView.h"
+#include "NppXml.h"
 #include "ProjectPanel_rc.h"
+#include "StaticDialog.h"
+#include "TreeView.h"
 
-#define PM_PROJECTPANELTITLE     TEXT("Project Panel")
-#define PM_WORKSPACEROOTNAME     TEXT("Workspace")
-#define PM_NEWFOLDERNAME         TEXT("Folder Name")
-#define PM_NEWPROJECTNAME        TEXT("Project Name")
+#define PM_PROJECTPANELTITLE       L"Project Panel"
+#define PM_WORKSPACEROOTNAME       L"Workspace"
+#define PM_NEWFOLDERNAME           L"Folder Name"
+#define PM_NEWPROJECTNAME          L"Project Name"
 
-#define PM_NEWWORKSPACE            TEXT("New Workspace")
-#define PM_OPENWORKSPACE           TEXT("Open Workspace")
-#define PM_RELOADWORKSPACE         TEXT("Reload Workspace")
-#define PM_SAVEWORKSPACE           TEXT("Save")
-#define PM_SAVEASWORKSPACE         TEXT("Save As...")
-#define PM_SAVEACOPYASWORKSPACE    TEXT("Save a Copy As...")
-#define PM_NEWPROJECTWORKSPACE     TEXT("Add New Project")
-#define PM_FINDINFILESWORKSPACE    TEXT("Find in Projects...")
+#define PM_NEWWORKSPACE            L"New Workspace"
+#define PM_OPENWORKSPACE           L"Open Workspace"
+#define PM_RELOADWORKSPACE         L"Reload Workspace"
+#define PM_SAVEWORKSPACE           L"Save"
+#define PM_SAVEASWORKSPACE         L"Save As..."
+#define PM_SAVEACOPYASWORKSPACE    L"Save a Copy As..."
+#define PM_NEWPROJECTWORKSPACE     L"Add New Project"
+#define PM_FINDINFILESWORKSPACE    L"Find in Projects..."
 
-#define PM_EDITRENAME              TEXT("Rename")
-#define PM_EDITNEWFOLDER           TEXT("Add Folder")
-#define PM_EDITADDFILES            TEXT("Add Files...")
-#define PM_EDITADDFILESRECUSIVELY  TEXT("Add Files from Directory...")
-#define PM_EDITREMOVE              TEXT("Remove\tDEL")
-#define PM_EDITMODIFYFILE          TEXT("Modify File Path")
+#define PM_EDITRENAME              L"Rename"
+#define PM_EDITNEWFOLDER           L"Add Folder"
+#define PM_EDITADDFILES            L"Add Files..."
+#define PM_EDITADDFILESRECUSIVELY  L"Add Files from Directory..."
+#define PM_EDITREMOVE              L"Remove\tDEL"
+#define PM_EDITMODIFYFILE          L"Modify File Path"
 
-#define PM_WORKSPACEMENUENTRY      TEXT("Workspace")
-#define PM_EDITMENUENTRY           TEXT("Edit")
+#define PM_WORKSPACEMENUENTRY      L"Workspace"
+#define PM_EDITMENUENTRY           L"Edit"
 
-#define PM_MOVEUPENTRY             TEXT("Move Up\tCtrl+Up")
-#define PM_MOVEDOWNENTRY           TEXT("Move Down\tCtrl+Down")
+#define PM_MOVEUPENTRY             L"Move Up\tCtrl+Up"
+#define PM_MOVEDOWNENTRY           L"Move Down\tCtrl+Down"
 
 enum NodeType {
 	nodeType_root = 0, nodeType_project = 1, nodeType_folder = 2, nodeType_file = 3
 };
 
-class TiXmlNode;
 class CustomFileDialog;
 
 class ProjectPanel : public DockingDlgInterface {
 public:
-	ProjectPanel(): DockingDlgInterface(IDD_PROJECTPANEL) {};
-	~ProjectPanel();
+	ProjectPanel() : DockingDlgInterface(IDD_PROJECTPANEL) {}
+	~ProjectPanel() override = default;
 
 	void init(HINSTANCE hInst, HWND hPere, int panelID) {
 		DockingDlgInterface::init(hInst, hPere);
 		_panelID = panelID;
 	}
 
-	void setParent(HWND parent2set){
+	void setParent(HWND parent2set) {
 		_hParent = parent2set;
-	};
+	}
 
-	void setPanelTitle(generic_string title) {
+	void setPanelTitle(const std::wstring& title) {
 		_panelTitle = title;
-	};
-	const TCHAR * getPanelTitle() const {
+	}
+	const wchar_t* getPanelTitle() const {
 		return _panelTitle.c_str();
-	};
+	}
 
 	void newWorkSpace();
 	bool saveWorkspaceRequest();
-	bool openWorkSpace(const TCHAR *projectFileName, bool force = false);
+	bool openWorkSpace(const wchar_t* projectFileName, bool force = false);
 	bool saveWorkSpace();
 	bool saveWorkSpaceAs(bool saveCopyAs);
-	void setWorkSpaceFilePath(const TCHAR *projectFileName){
+	void setWorkSpaceFilePath(const wchar_t* projectFileName) {
 		_workSpaceFilePath = projectFileName;
-	};
-	const TCHAR * getWorkSpaceFilePath() const {
+	}
+	const wchar_t* getWorkSpaceFilePath() const {
 		return _workSpaceFilePath.c_str();
-	};
+	}
 	bool isDirty() const {
 		return _isDirty;
-	};
+	}
 	bool checkIfNeedSave();
 
 	void setBackgroundColor(COLORREF bgColour) override {
 		TreeView_SetBkColor(_treeView.getHSelf(), bgColour);
-	};
+	}
 	void setForegroundColor(COLORREF fgColour) override {
 		TreeView_SetTextColor(_treeView.getHSelf(), fgColour);
-	};
-	bool enumWorkSpaceFiles(HTREEITEM tvFrom, const std::vector<generic_string> & patterns, std::vector<generic_string> & fileNames);
+	}
+	bool enumWorkSpaceFiles(HTREEITEM tvFrom, const std::vector<std::wstring>& patterns, std::vector<std::wstring>& fileNames);
 
 protected:
 	TreeView _treeView;
@@ -108,55 +115,57 @@ protected:
 	HMENU _hProjectMenu = nullptr;
 	HMENU _hFolderMenu = nullptr;
 	HMENU _hFileMenu = nullptr;
-	generic_string _panelTitle;
-	generic_string _workSpaceFilePath;
-	generic_string _selDirOfFilesFromDirDlg;
+	std::wstring _panelTitle;
+	std::wstring _workSpaceFilePath;
+	std::wstring _selDirOfFilesFromDirDlg;
 	bool _isDirty = false;
 	int _panelID = 0;
 
 	void initMenus();
-	void destroyMenus();
+	void destroyMenus() const;
 	void addFiles(HTREEITEM hTreeItem);
 	void addFilesFromDirectory(HTREEITEM hTreeItem);
-	void recursiveAddFilesFrom(const TCHAR *folderPath, HTREEITEM hTreeItem);
-	HTREEITEM addFolder(HTREEITEM hTreeItem, const TCHAR *folderName);
+	void recursiveAddFilesFrom(const wchar_t* folderPath, HTREEITEM hTreeItem);
+	HTREEITEM addFolder(HTREEITEM hTreeItem, const wchar_t* folderName);
 
-	bool writeWorkSpace(const TCHAR *projectFileName = NULL, bool doUpdateGUI = true);
-	generic_string getRelativePath(const generic_string & fn, const TCHAR *workSpaceFileName);
-	void buildProjectXml(TiXmlNode *root, HTREEITEM hItem, const TCHAR* fn2write);
+	bool writeWorkSpace(const wchar_t* projectFileName = nullptr, bool doUpdateGUI = true);
+	std::wstring getRelativePath(const std::wstring& filePath, const wchar_t* workSpaceFileName);
+	void buildProjectXml(NppXml::Element& root, HTREEITEM hItem, const wchar_t* fn2write);
 	NodeType getNodeType(HTREEITEM hItem);
 	void setWorkSpaceDirty(bool isDirty);
 	void popupMenuCmd(int cmdID);
-	POINT getMenuDisplayPoint(int iButton);
+	POINT getMenuDisplayPoint(int iButton) const;
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
-	bool buildTreeFrom(TiXmlNode *projectRoot, HTREEITEM hParentItem);
+	bool buildTreeFrom(const NppXml::Element& projectRoot, HTREEITEM hParentItem);
 	void notified(LPNMHDR notification);
 	void showContextMenu(int x, int y);
 	void showContextMenuFromMenuKey(HTREEITEM selectedItem, int x, int y);
 	HMENU getMenuHandler(HTREEITEM selectedItem);
-	generic_string getAbsoluteFilePath(const TCHAR * relativePath);
+	std::wstring getAbsoluteFilePath(const wchar_t* relativePath);
 	void openSelectFile();
-	void setFileExtFilter(CustomFileDialog & fDlg);
-	std::vector<generic_string*> fullPathStrs;
+	void setFileExtFilter(CustomFileDialog& fDlg);
+	std::vector<std::unique_ptr<std::wstring>> _fullPathStrs;
+
+private:
+	using DockingDlgInterface::init;
 };
 
 class FileRelocalizerDlg : public StaticDialog
 {
-public :
+public:
 	FileRelocalizerDlg() = default;
 
-	int doDialog(const TCHAR *fn, bool isRTL = false);
+	int doDialog(const wchar_t* fn, bool isRTL = false);
 
-	void destroy() override {};
+	void destroy() override {}
 
-	generic_string getFullFilePath() {
+	const std::wstring& getFullFilePath() const {
 		return _fullFilePath;
-	};
+	}
 
-protected :
+protected:
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
-private :
-	generic_string _fullFilePath;
-
+private:
+	std::wstring _fullFilePath;
 };

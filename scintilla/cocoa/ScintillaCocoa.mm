@@ -16,9 +16,13 @@
 
 #include <cmath>
 
+#include <new>
+#include <string>
 #include <string_view>
 #include <vector>
 #include <optional>
+#include <algorithm>
+#include <memory>
 
 #import <Cocoa/Cocoa.h>
 #if MAC_OS_X_VERSION_MAX_ALLOWED > MAC_OS_X_VERSION_10_5
@@ -963,6 +967,8 @@ sptr_t ScintillaCocoa::WndProc(Message iMessage, uptr_t wParam, sptr_t lParam) {
 		}
 	} catch (std::bad_alloc &) {
 		errorStatus = Status::BadAlloc;
+	} catch (Failure &failure) {
+		errorStatus = failure.status;
 	} catch (...) {
 		errorStatus = Status::Failure;
 	}
@@ -1102,11 +1108,12 @@ void ScintillaCocoa::Paste(bool forceRectangular) {
 		// No data or no flavor we support.
 		return;
 
-	pdoc->BeginUndoAction();
-	ClearSelection(false);
-	InsertPasteShape(selectedText.Data(), selectedText.Length(),
-			 selectedText.rectangular ? PasteShape::rectangular : PasteShape::stream);
-	pdoc->EndUndoAction();
+	{
+		UndoGroup ug(pdoc);
+		ClearSelection(false);
+		InsertPasteShape(selectedText.AsView(),
+				 selectedText.rectangular ? PasteShape::rectangular : PasteShape::stream);
+	}
 
 	Redraw();
 	EnsureCaretVisible();
@@ -1515,7 +1522,8 @@ void ScintillaCocoa::StartDrag() {
 	CGImageRelease(imagePixmap);
 
 	NSImage *image = [[NSImage alloc] initWithSize: selectionRectangle.size];
-	[image addRepresentation: bitmap];
+	if (bitmap)
+		[image addRepresentation: bitmap];
 
 	NSImage *dragImage = [[NSImage alloc] initWithSize: selectionRectangle.size];
 	dragImage.backgroundColor = [NSColor clearColor];
@@ -1644,7 +1652,7 @@ bool ScintillaCocoa::PerformDragOperation(id <NSDraggingInfo> info) {
 		NSDragOperation operation = [info draggingSourceOperationMask];
 		bool moving = (operation & NSDragOperationMove) != 0;
 
-		DropAt(posDrag, text.Data(), text.Length(), moving, text.rectangular);
+		DropAt(posDrag, text.AsView(), moving, text.rectangular);
 	};
 
 	return true;
@@ -1949,6 +1957,7 @@ void ScintillaCocoa::ScrollText(Sci::Line) {
  * Modifies the vertical scroll position to make the current top line show up as such.
  */
 void ScintillaCocoa::SetVerticalScrollPos() {
+	Editor::SetVerticalScrollPos();
 	NSScrollView *scrollView = ScrollContainer();
 	if (scrollView) {
 		NSClipView *clipView = scrollView.contentView;
@@ -2456,7 +2465,7 @@ void ScintillaCocoa::SetDocPointer(Document *document) {
 namespace {
 
 unsigned int TimeOfEvent(NSEvent *event) {
-	return static_cast<unsigned int>(event.timestamp * 1000);
+	return static_cast<unsigned int>(std::lround(event.timestamp * 1000.0) % 2000000000);
 }
 
 }

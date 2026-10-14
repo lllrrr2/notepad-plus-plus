@@ -49,4 +49,12 @@ movq
  comment ~ A multiple-line
  comment directive~
 
+; back quoted string=16
+`back-quoted-string`
+
+; test for folding from segment to ends
+data segment
+hw db "HW!"
+data ends
+
 ;end

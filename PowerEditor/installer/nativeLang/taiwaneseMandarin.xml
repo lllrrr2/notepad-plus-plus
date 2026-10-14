@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <NotepadPlus>
-	<Native-Langue name="台灣繁體" filename="taiwaneseMandarin.xml" version="8.6.3">
+	<Native-Langue name="台灣繁體" filename="taiwaneseMandarin.xml" version="8.9.8">
 		<Menu>
 			<Main>
 				<!-- Main Menu Entries -->
@@ -81,10 +81,12 @@
 					<Item id="41002" name="開啟舊檔(&amp;O)..."/>
 					<Item id="41019" name="在檔案總管"/>
 					<Item id="41020" name="在 CMD 內"/>
+					<Item id="41027" name="在 PowerShell 內"/>
 					<Item id="41025" name="資料夾工作區"/>
 					<Item id="41003" name="關閉(&amp;C)"/>
 					<Item id="41004" name="全部關閉(&amp;E)"/>
 					<Item id="41005" name="除此之外全部關閉"/>
+					<Item id="41026" name="除固定標籤頁之外 全部關閉"/>
 					<Item id="41009" name="關閉左側所有檔案"/>
 					<Item id="41018" name="關閉右側所有檔案"/>
 					<Item id="41024" name="關閉所有未更改的檔案"/>
@@ -94,8 +96,8 @@
 					<Item id="41010" name="列印(&amp;P)..."/>
 					<Item id="1001" name="立即列印(&amp;W)"/>
 					<Item id="41011" name="結束(&amp;X)"/>
-					<Item id="41012" name="載入工作階段(&amp;I)..."/>
-					<Item id="41013" name="儲存工作階段(&amp;I)..."/>
+					<Item id="41012" name="載入文件群組(&amp;I)..."/>
+					<Item id="41013" name="儲存文件群組(&amp;I)..."/>
 					<Item id="41014" name="重新載入(&amp;L)"/>
 					<Item id="41015" name="另存複本(&amp;Y)..."/>
 					<Item id="41016" name="移至回收筒(&amp;B)"/>
@@ -176,12 +178,12 @@
 					<Item id="42025" name="儲存巨集(&amp;S)"/>
 					<Item id="42026" name="文字由右至左"/>
 					<Item id="42027" name="文字由左至右"/>
-					<Item id="42028" name="設為唯讀(&amp;S)"/>
+					<Item id="42028" name="在 Notepad++ 中設為唯讀"/>
 					<Item id="42029" name="複製路徑及檔名"/>
 					<Item id="42030" name="複製檔名"/>
 					<Item id="42031" name="複製路徑"/>
 					<Item id="42032" name="重複執行巨集(&amp;R)..."/>
-					<Item id="42033" name="取消唯讀"/>
+					<Item id="42033" name="檔案系統權限唯讀"/>
 					<Item id="42035" name="單行註解"/>
 					<Item id="42036" name="解除單行註解"/>
 					<Item id="42055" name="移除空行"/>
@@ -264,6 +266,7 @@
 					<Item id="44024" name="縮小(&amp;O; Ctrl+滑鼠滾輪向下)"/>
 					<Item id="44025" name="顯示空白及 TAB"/>
 					<Item id="44026" name="顯示行尾"/>
+					<Item id="44027" name="雙檢視同步"/>
 					<Item id="44029" name="全部展開"/>
 					<Item id="44030" name="收摺此層"/>
 					<Item id="44031" name="展開此層"/>
@@ -363,6 +366,7 @@
 					<Item id="48511" name="從檔案產生..."/>
 					<Item id="48512" name="從選取區產生至剪貼簿"/>
 					<Item id="49000" name="執行(&amp;R)..."/>
+					<Item id="49001" name="驗證 shortcuts.xml 檔案"/>
 
 					<Item id="50000" name="函式自動完成"/>
 					<Item id="50001" name="字詞自動完成"/>
@@ -383,6 +387,8 @@
 					<Item id="11007" name="副檔名從 Z 到 A"/>
 					<Item id="11008" name="檔案長度從小到大"/>
 					<Item id="11009" name="檔案長度從大到小"/>
+					<Item id="11010" name="修改時間從遠至近"/>
+					<Item id="11011" name="修改時間從近至遠"/>
 				</Commands>
 			</Main>
 			<Splitter>
@@ -391,22 +397,25 @@
 				<Item CMDID="41003" name="關閉"/>
 				<Item CMDID="0" name="關閉多個檔案"/>
 				<Item CMDID="41005" name="除此之外全部關閉"/>
-				<Item CMDID="41009" name="關閉左側所有檔案"/>
-				<Item CMDID="41018" name="關閉右側所有檔案"/>
-				<Item CMDID="41024" name="關閉所有未更改的檔案"/>
+				<Item CMDID="41026" name="除固定標籤頁之外 全部關閉"/>
+				<Item CMDID="41009" name="關閉左側所有文件"/>
+				<Item CMDID="41018" name="關閉右側所有文件"/>
+				<Item CMDID="41024" name="關閉所有未更改的文件"/>
+				<Item CMDID="44048" name="固定標籤頁" alternativeName="取消固定標籤頁"/>
 				<Item CMDID="41006" name="儲存"/>
 				<Item CMDID="41008" name="另存新檔..."/>
 				<Item CMDID="1" name="開啟至"/>
 				<Item CMDID="41019" name="在檔案總管開啟資料夾路徑"/>
 				<Item CMDID="41020" name="在 CMD 開啟資料夾路徑"/>
+				<Item CMDID="41027" name="在 PowerShell 開啟資料夾路徑"/>
 				<Item CMDID="41025" name="在工作區開啟此檔資料夾"/>
 				<Item CMDID="41023" name="在預設檢視中開啟"/>
 				<Item CMDID="41017" name="重新命名..."/>
 				<Item CMDID="41016" name="移至回收筒"/>
 				<Item CMDID="41014" name="重新載入"/>
 				<Item CMDID="41010" name="列印"/>
-				<Item CMDID="42028" name="唯讀"/>
-				<Item CMDID="42033" name="取消唯讀"/>
+				<Item CMDID="42028" name="在 Notepad++ 中設為唯讀"/>
+				<Item CMDID="42033" name="檔案系統權限唯讀"/>
 				<Item CMDID="2" name="複製到剪貼簿"/>
 				<Item CMDID="42029" name="複製完整路徑檔名"/>
 				<Item CMDID="42030" name="複製檔名"/>
@@ -458,7 +467,6 @@
 				<Item id="1626" name="延伸（\n, \r, \t, \0, \x...）"/>
 				<Item id="1660" name="在多個檔案中取代"/>
 				<Item id="1665" name="在專案中多個檔案中取代"/>
-				<Item id="1661" name="使用目前文件資料夾位置"/>
 				<Item id="1662" name="專案管理員 1"/>
 				<Item id="1663" name="專案管理員 2"/>
 				<Item id="1664" name="專案管理員 3"/>
@@ -478,6 +486,7 @@
 				<Item id="1681" name="搜尋："/>
 				<Item id="1685" name="區分大小寫"/>
 				<Item id="1690" name="醒目提示所有"/>
+				<Item id="1691" name="計算總數"/>
 			</IncrementalFind>
 			<FindCharsInRange title="以字元編號搜尋字元">
 				<Item id="2" name="關閉"/>
@@ -555,7 +564,7 @@
 				<Item id="2" name="關閉"/>
 			</SHA512FromTextDlg>
             
-			<PluginsAdminDlg title="外掛模組管理" titleAvailable="可安裝" titleUpdates="更新" titleInstalled="已安裝" titleIncompatible="不相容">
+			<PluginsAdminDlg title="外掛模組管理" titleAvailable="可安裝" titleUpdates="更新" titleInstalled="已安裝" titleIncompatible="不相容" titleDisabled="停用">
 				<ColumnPlugin name="外掛模組"/>
 				<ColumnVersion name="版本"/>
 				<Item id="5501" name="搜尋："/>
@@ -565,6 +574,8 @@
 				<Item id="5508" name="找下一個"/>
 				<Item id="5509" name="外掛模組清單版本："/>
 				<Item id="5511" name="外掛模組清單存儲庫"/>
+				<Item id="5512" name="停用"/>
+				<Item id="5513" name="啟用"/>
 				<Item id="2" name="關閉"/>
 			</PluginsAdminDlg>
 
@@ -597,8 +608,14 @@
 					<Item id="2231" name="開啟共用斜體"/>
 					<Item id="2232" name="開啟共用底線"/>
 					<Item id="2234" name="至相關的偏好設定"/>
+					<Item id="2235" name="什麼是「Global override」？"/>
 				</SubDialog>
 			</StyleConfig>
+
+			<ColorPopup>
+				<Item id="1" name="更多顏色..."/>
+			</ColorPopup>
+
 			<ShortcutMapper title="管理快捷鍵">
 				<Item id="2602" name="修改"/>
 				<Item id="2603" name="刪除"/>
@@ -620,6 +637,8 @@
 				<MainCommandNames>
 					<Item id="41019" name="在檔案總管內開啟檔案位置"/>
 					<Item id="41020" name="在 CMD 內開啟檔案位置"/>
+					<Item id="41027" name="在 PowerShell 內開啟檔案位置"/>
+					<Item id="41025" name="在資料夾工作區內開啟檔案位置"/>
 					<Item id="41021" name="重新開啟最近關閉的檔案"/>
 					<Item id="45001" name="轉換成 Windows 換行格式(CR LF)"/>
 					<Item id="45002" name="轉換成 UNIX 換行格式 (LF)"/>
@@ -778,6 +797,7 @@
 				<Folder title="摺疊設定與預設樣式">
 					<Item id="21101" name="預設樣式設定"/>
 					<Item id="21102" name="樣式"/>
+					<Item id="21103" name="自訂程式語言線上說明文件"/>
 					<Item id="21105" name="資訊與教程："/>
 					<Item id="21106" name="最大化摺疊（包括空行）"/>
 					<Item id="21220" name="摺疊設定一："/>
@@ -901,32 +921,59 @@
 			<Preference title="偏好設定">
 				<Item id="6001" name="儲存並關閉"/>
 				<Global title="一般">
-					<Item id="6101" name="工具列"/>
+					<Item id="6131" name="選單"/>
+					<Item id="6122" name="隱藏（用 Alt 或 F10 切換）"/>
+					<Item id="6132" name="隱藏選單中右邊的 ＋ ▼ ✕ 捷徑"/>
+					<Item id="6123" name="語言"/>
+					<Item id="6133" name="狀態列"/>
+					<Item id="6134" name="隱藏"/>
+					<Item id="7165" name="對話框字體（需要重新啟動 Notepad++）"/>
+					<Item id="7166" name="字型名稱："/>
+					<Item id="7168" name="字型大小："/>
+				</Global>
+
+				<Toolbar title="工具列">
 					<Item id="6102" name="隱藏"/>
 					<Item id="6103" name="Fluent UI: 小圖示"/>
 					<Item id="6104" name="Fluent UI: 大圖示"/>
 					<Item id="6129" name="Filled Fluent UI: 小圖示"/>
 					<Item id="6130" name="Filled Fluent UI: 大圖示"/>
-					<Item id="6105" name="標準: : 小圖示"/>
-					<Item id="6106" name="頁籤列"/>
-					<Item id="6107" name="小型"/>
+					<Item id="6105" name="標準: 小圖示"/>
+					<Item id="6011" name="著色"/>
+					<Item id="6012" name="全部"/>
+					<Item id="6013" name="部份"/>
+					<Item id="6014" name="顏色選擇"/>
+					<Item id="6015" name="內定色"/>
+					<Item id="6016" name="紅色"/>
+					<Item id="6017" name="綠色"/>
+					<Item id="6018" name="藍色"/>
+					<Item id="6019" name="紫色"/>
+					<Item id="6020" name="青色"/>
+					<Item id="6021" name="橄欖色"/>
+					<Item id="6022" name="黃色"/>
+					<Item id="6023" name="系統強調色"/>
+					<Item id="6024" name="自訂色調"/>
+				</Toolbar>
+
+				<Tabbar title="頁籤列">
+					<Item id="6107" name="縮小"/>
+					<Item id="6128" name="替代圖示"/>
 					<Item id="6108" name="鎖定（禁止拖曳）"/>
 					<Item id="6109" name="非使用中的頁籤變暗"/>
 					<Item id="6110" name="使用中的頁籤加色條"/>
-					<Item id="6111" name="顯示狀態列"/>
-					<Item id="6112" name="在每個頁籤顯示關閉按鈕"/>
+					<Item id="6111" name="在非使用頁籤上顯示按鈕"/>
+					<Item id="6112" name="顯示關閉按鈕"/>
 					<Item id="6113" name="雙擊滑鼠關閉文件"/>
+					<Item id="6115" name="啟用固定標籤頁功能"/>
+					<Item id="6135" name="僅顯示已固定籤頁按鈕"/>
 					<Item id="6118" name="隱藏"/>
 					<Item id="6119" name="多行"/>
 					<Item id="6120" name="直式"/>
 					<Item id="6121" name="關閉最後一個文件時關閉程式"/>
-					<Item id="6131" name="選單"/>
-					<Item id="6122" name="隱藏（用 Alt 或 F10 切換）"/>
-					<Item id="6132" name="隱藏選單中右邊的 ＋ ▼ ✕ 捷徑（需要重新啟動 Notepad++）"/>
-					<Item id="6123" name="語言"/>
-					<Item id="6125" name="文件切換器"/>
-					<Item id="6127" name="停用副檔名欄"/>
-				</Global>
+					<Item id="6125" name="功能表現"/>
+					<Item id="6126" name="外觀與體驗"/>
+					<Item id="6136" name="標籤名最大長度："/>
+				</Tabbar>
 
 				<Scintillas title="編輯一">
 					<Item id="6216" name="游標設定"/>
@@ -945,6 +992,7 @@
 					<Item id="6239" name="在選擇範圍之外點擊滑鼠右鍵時仍保留選擇範圍"/>
 					<Item id="6245" name="啟用虛擬空間"/>
 					<Item id="6214" name="允許無文字選取時複製/剪下當前整行文字"/>
+					<Item id="6225" name="套用自訂顏色至選取文字"/>
 					<Item id="6651" name="游標行設定"/>
 					<Item id="6652" name="無"/>
 					<Item id="6653" name="加上背景顏色"/>
@@ -981,17 +1029,18 @@
 					<Item id="7108" name="青色"/>
 					<Item id="7109" name="橄欖色"/>
 					<Item id="7115" name="自訂色調"/>
-					<Item id="7116" name="上部"/>
-					<Item id="7117" name="選單追踪顯示"/>
-					<Item id="7118" name="現行的"/>
-					<Item id="7119" name="主要的"/>
+					<Item id="7116" name="內容背景"/>
+					<Item id="7117" name="追踪顯示"/>
+					<Item id="7118" name="控制件背景"/>
+					<Item id="7119" name="對話方塊背景"/>
 					<Item id="7120" name="錯誤 "/>
 					<Item id="7121" name="文字"/>
 					<Item id="7122" name="色調較暗文字"/>
 					<Item id="7123" name="暫停使用文字"/>
 					<Item id="7124" name="邊線"/>
-					<Item id="7126" name="熱焦邊線"/>
 					<Item id="7125" name="鏈接"/>
+					<Item id="7126" name="熱焦邊線"/>
+					<Item id="7127" name="停用邊線"/>
 					<Item id="7130" name="重設原始值"/>
 					<Item id="7135" name="色調"/>
 				</DarkMode>
@@ -1050,17 +1099,28 @@
 					<Item id="4009" name="支援的副檔名"/>
 					<Item id="4010" name="已連結的副檔名"/>
 				</FileAssoc>
+
 				<Language title="程式語言">
 					<Item id="6505" name="可用項目"/>
 					<Item id="6506" name="停用項目"/>
 					<Item id="6507" name="簡化程式語言選單"/>
 					<Item id="6508" name="程式語言選單"/>
-					<Item id="6301" name="縮排設定"/>
-					<Item id="6302" name="使用空格"/>
-					<Item id="6303" name="縮排大小："/>
-					<Item id="6510" name="使用預設值"/>
 					<Item id="6335" name="在 SQL 中視「\」為逸出字元"/>
 				</Language>
+
+				<Indentation title="縮排">
+					<Item id="7161" name="自動縮排"/>
+					<Item id="7162" name="關閉"/>
+					<Item id="7163" name="基本模式"/>
+					<Item id="7164" name="進階模式"/>
+					<Item id="6301" name="縮排設定"/>
+					<Item id="6302" name="空格"/>
+					<Item id="6303" name="縮排大小："/>
+					<Item id="6310" name="縮排使用："/>
+					<Item id="6311" name="Tab 字元"/>
+					<Item id="6510" name="使用預設值"/>
+					<Item id="6512" name="退格鍵取消縮排而不是刪除單一空格"/>
+				</Indentation>
 
 				<Highlighting title="醒目提示">
 					<Item id="6351" name="全部標記"/>
@@ -1127,6 +1187,9 @@
 					<Item id="6908" name="用選取詞填充尋找與取代對話方塊中的尋找內容"/>
 					<Item id="6909" name="在沒有任何選取時，選取游標下的字串"/>
 					<Item id="6910" name="啟動自動勾選核取方塊「僅尋找選取範圍」的最小值："/>
+					<Item id="6913" name="根據目前啟用文件的路徑自動填入「在多個檔案中尋找」的「資料夾」欄"/>
+					<Item id="6916" name="：從選定內容中自動填入查找欄位的最大字元數"/>
+					<Item id="6917" name="在多個檔案中尋找：以磁碟內容為準，不使用開啟中的版本"/>
 				</Searching>
 
 				<RecentFilesHistory title="最近使用的檔案">
@@ -1141,13 +1204,13 @@
 				</RecentFilesHistory>
 
 				<Backup title="備份">
-					<Item id="6817" name="工作階段快照及定期備份"/>
-					<Item id="6818" name="啟用工作階段快照及定期備份"/>
+					<Item id="6817" name="文件群組快照及定期備份"/>
+					<Item id="6818" name="啟用文件群組快照及定期備份"/>
 					<Item id="6819" name="每"/>
 					<Item id="6821" name="秒備份一次"/>
 					<Item id="6822" name="備份資料夾："/>
-					<Item id="6309" name="開啟程式時繼續上次的工作階段"/>
-					<Item id="6825" name="保存上次的工作階段中無法讀取的文件"/>
+					<Item id="6309" name="開啟程式時繼續上次的文件群組"/>
+					<Item id="6825" name="保存上次的文件群組中無法讀取的文件"/>
 					<Item id="6801" name="備份"/>
 					<Item id="6315" name="無"/>
 					<Item id="6316" name="簡易備份"/>
@@ -1157,7 +1220,6 @@
 				</Backup>
 
 				<AutoCompletion title="字詞自動完成功能">
-					<Item id="6115" name="自動縮排"/>
 					<Item id="6807" name="自動完成功能"/>
 					<Item id="6808" name="啟動自動完成功能"/>
 					<Item id="6809" name="函式"/>
@@ -1181,7 +1243,7 @@
 				</AutoCompletion>
 				<MultiInstance title="多重實體與日期時間">
 					<Item id="6151" name="多重 Notepad++ 實體設定"/>
-					<Item id="6152" name="在新的 Notepad++ 實體開啟工作階段（並在結束程式前自動儲存載入的工作階段）"/>
+					<Item id="6152" name="在新的 Notepad++ 實體開啟文件群組（並在結束程式前自動儲存載入的文件群組）"/>
 					<Item id="6153" name="允許多重實體"/>
 					<Item id="6154" name="禁止多重實體（預設）"/>
 					<Item id="6155" name="（重新啟動 Notepad++ 以使變更生效。）"/>
@@ -1204,7 +1266,7 @@
 					<Item id="7141" name="大型檔案限制"/>
 					<Item id="7143" name="啟動大型檔案限制（沒有語法醒目提示）"/>
 					<Item id="7144" name="定義大型檔案文件長度大小："/>
-					<Item id="7146" name="MB   (1 - 4096)"/>
+					<Item id="7146" name="MB   (1 - 2046)"/>
 					<Item id="7147" name="允許顏色顯示對應括號"/>
 					<Item id="7148" name="允許自動完成功能"/>
 					<Item id="7149" name="允許智慧醒目提示"/>
@@ -1239,17 +1301,34 @@
 						<Element name="啟用於所有開啟文件"/>
 						<Element name="停止啟用"/>
 					</ComboBox>
-					<Item id="6307" name="啟用"/>
-					<Item id="6308" name="最小化至系統匣"/>
+					<ComboBox id="6307">
+						<Element name="無任何行動至"/>
+						<Element name="最小化至"/>
+						<Element name="關閉至"/>
+						<Element name="最小化 / 關閉至"/>
+					</ComboBox>
+					<ComboBox id="6362">
+						<Element name="GDI（最相容模式）"/>
+						<Element name="DirectWrite（通用模式）"/>
+						<Element name="DirectWrite（保留模式）"/>
+						<Element name="DirectWrite（繪製到 GDI DC）"/>
+						<Element name="DirectWrite (DirectX 11)"/>
+					</ComboBox>
+					<ComboBox id="6364">
+						<Element name="關閉"/>
+						<Element name="啟用在 Notepad++ 起動時"/>
+						<Element name="啟用在 Notepad++ 關閉時"/>
+					</ComboBox>
+					<Item id="6308" name="系統匣"/>
+					<Item id="6363" name="繪製模式"/>
+					<Item id="6365" name="自動更新："/>
 					<Item id="6312" name="自動更新檔案狀態"/>
 					<Item id="6313" name="於背景自動更新"/>
 					<Item id="6325" name="更新後捲動至最後一行"/>
-					<Item id="6322" name="工作階段檔案副檔名："/>
-					<Item id="6323" name="自動更新 Notepad++"/>
+					<Item id="6322" name="文件群組檔案副檔名："/>
 					<Item id="6324" name="文件切換器（Ctrl + TAB）"/>
 					<Item id="6331" name="在標題列僅顯示檔案名稱（隱藏資料夾路徑）"/>
 					<Item id="6334" name="自動偵測檔案編碼"/>
-					<Item id="6349" name="使用「直接寫入」模式（可改善特殊字符的呈現，需要重新啟動 Notepad++）"/>
 					<Item id="6337" name="資料夾工作區檔案副檔名："/>
 					<Item id="6114" name="啟動"/>
 					<Item id="6117" name="開啟「最近使用的檔案」功能"/>
@@ -1258,6 +1337,7 @@
 					<Item id="6346" name="於文件導覽窺視檔案"/>
 					<Item id="6360" name="靜音"/>
 					<Item id="6361" name="啟動全部儲存確認"/>
+					<Item id="6366" name="允許在「資料夾工作區」中載入符號連結"/>
 				</MISC>
 			</Preference>
 
@@ -1321,6 +1401,22 @@
 				<Item id="7" name="不要(&amp;N)"/>
 				<Item id="4" name="始終確定"/>
 			</DoSaveAll>
+			<NetworkPathWarning title="Notepad++ 文件群組載入" title2="可點擊的 file:// 鏈接" title3="toolbarButtonsConf.xml 載入中" title4="專案管理員 XML 文件載入中">
+				<Item id="1771" name="網路路徑警告：
+
+$STR_REPLACE$
+
+載入該檔案會導致 Windows 自動向該伺服器進行身份驗證，這可能會洩露您的 Windows 登入資訊。
+仍然加載嗎？"/>
+				<Item id="2" name="略過"/>
+				<Item id="6" name="一律從此伺服器載入"/>
+				<Item id="7" name="一律略過網路路徑"/>
+				<Item id="4" name="一律載入網路路徑"/>
+			</NetworkPathWarning>
+			<DebugInfo title="偵錯資訊">
+				<Item id="1752" name="將偵錯資訊複製到剪貼簿"/>
+				<Item id="1" name="關閉"/>
+			</DebugInfo>
 		</Dialog>
 		<MessageBox>
 			<ContextMenuXmlEditWarning title="編輯快顯功能表" message="編輯 contextMenu.xml 可以變更 Notepad++ 之快顯功能表。
@@ -1340,7 +1436,7 @@
 			<SettingsOnCloudError title="雲端設定" message="設定的雲端路徑位於一個唯讀的磁碟或未擁有寫入權限的資料夾，因此你的「雲端」設定將被清除。
 請在「偏好設定」中重新設定。"/>
 			<FilePathNotFoundWarning title="開啟檔案" message="你試圖開啟的文件不存在。"/>
-			<SessionFileInvalidError title="無法開啟工作階段" message="工作階段檔案無效或已被損毀。"/>
+			<SessionFileInvalidError title="無法開啟文件群組" message="文件群組檔案無效或已被損毀。"/>
 			<DroppingFolderAsProjectModeWarning title="操作無效" message="由於你在「偏好設定」「預設資料夾」中關閉了「拖放資料夾時開啟資料夾中所有文件，而不啟動資料夾工作區」的選項，你只能拖放文件或資料夾的其中之一。
 請啟用此選項，然後再試一次。"/>
 			<SortingError title="排序錯誤" message="第 $INT_REPLACE$ 行無法執行數字排序。"/>
@@ -1359,7 +1455,6 @@
 			<PrehistoricSystemDetected title="系統過舊" message="很抱歉，此功能不適用於過舊的系統。"/>
 			<XpUpdaterProblem title="Notepad++ 更新程式" message="由於 XP 的安全機制過舊，更新程式與 XP 並不兼容。
 你要直接到 Notepad++ 網站下載最新版本嗎？"/>
-			<GUpProxyConfNeedAdminMode title="代理伺服器設定" message="請關閉 Notepad++，並在系統管理員模式下重新啟動 Notepad++ 以設定代理伺服器。"/>
 			<DocTooDirtyToMonitor title="監控錯誤" message="文件已被修改，請在監視前儲存文件。"/>
 			<DocNoExistToMonitor title="監控錯誤" message="文件不存在，因此無法進行監視。"/>
 			<FileTooBigToOpen title="文件太大" message="文件太大，無法使用 Notepad++ 開啟。"/>
@@ -1388,6 +1483,11 @@
 			<ProjectPanelReloadDirty title="重新載入工作區" message="目前的工作區已被修改。你要重新載入並捨棄所做的修改嗎？"/>
 			<UDLNewNameError title="自訂程式語言錯誤" message="此名稱已被另一個程式語言使用。請重新命名。"/>
 			<UDLRemoveCurrentLang title="刪除語言" message="你確定要刪除目前的自訂程式語言嗎？"/>
+			<UDL_importSuccessful title="自訂程式語言" message="匯入成功。"/>
+			<UDL_importFails title="自訂程式語言" message="匯入失敗。"/>
+			<UDL_saveBeforeImport title="自訂程式語言" message="在匯出之前，請點擊「另存...」按鈕以儲存你定義的程式語言。"/>
+			<UDL_exportSuccessful title="自訂程式語言" message="匯出成功。"/>
+			<UDL_exportFails title="自訂程式語言" message="匯出失敗。"/>
 			<SCMapperDoDeleteOrNot title="刪除快捷鍵" message="你確定要刪除這個快捷鍵嗎？"/>
 			<FindCharRangeValueError title="輸入值範圍錯誤" message="你輸入的值應在 0 到 255 之間。如要搜尋字元編號大於 255 的字元，請在「尋找」對話方塊中使用「規則運算式」。"/>
 			<ExitToUpdatePlugins title="關閉 Notepad++" message="Notepad++ 將自動關閉以進行後續作業。
@@ -1395,19 +1495,36 @@
 繼續嗎？"/>
 			<NeedToRestartToLoadPlugins title="重新啟動 Notepad++" message="你必須重新啟動 Notepad++ 才能載入已安裝的外掛模組。"/>
 			<ChangeHistoryEnabledWarning title="重新啟動 Notepad++" message="你必須重新啟動 Notepad++ 才能啟動文件修改紀錄。"/>
-			<FileInaccessibleUserSession title="檔案不存在" message="儲存的工作階段 &quot;$STR_REPLACE$&quot; 中有一些已不存在的檔案。它們可以以空白唯讀文件的形式作為佔位欄而創建。
+			<FileInaccessibleUserSession title="檔案不存在" message="儲存的文件群組 &quot;$STR_REPLACE$&quot; 中有一些已不存在的檔案。它們可以以空白唯讀文件的形式作為佔位欄而創建。
 
 你想為它們創建佔位欄嗎？
 
-請注意，如果你選擇不創建佔位欄或稍後關閉它們，工作階段檔案將不會在 Notepad++ 關閉時被修改。
+請注意，如果你選擇不創建佔位欄或稍後關閉它們，文件群組檔案將不會在 Notepad++ 關閉時被修改。
 "/>
-			<FileInaccessibleDefaultSessionXml title="檔案不存在" message="過去的工作階段中有一些已不存在的檔案。它們可以以空白唯讀文件的形式作為佔位欄而創建。
+			<FileInaccessibleDefaultSessionXml title="檔案不存在" message="過去的文件群組中有一些已不存在的檔案。它們可以以空白唯讀文件的形式作為佔位欄而創建。
 
 你想為它們創建佔位欄嗎？
 
-請注意，如果你選擇不創建佔位欄或稍後關閉它們，工作階段檔案將在 Notepad++ 關閉時被修改。我們建議你現在備份工作階段檔案 &quot;session.xml&quot; 。"/>
+請注意，如果你選擇不創建佔位欄或稍後關閉它們，文件群組檔案將在 Notepad++ 關閉時被修改。我們建議你現在備份文件群組檔案 &quot;session.xml&quot; 。"/>
 			<RTLvsDirectWrite title="無法執行「文字由右至左」指令" message="「文字由右至左」指令與「直接寫入」模式不相容。 請在偏好設定對話框的「其他」中停用「直接寫入」模式，然後重新​​啟動 Notepad++ 。"/>
 			<FileMemoryAllocationFailed title="例外狀況：檔案記憶體分配失敗" message="可能沒有足夠的連續可用記憶體供 Notepad++ 載入檔案。"/>
+			<Need2Restart2ShowMenuShortcuts title="重新啟動 Notepad++" message="Notepad++ 需要重新啟動才能顯示選單右邊捷徑。"/>
+			<NoAdminRight2ChangeReadOnlyFileAttribute title="更改檔案維讀屬性失敗" message="請在系統管理員模式下重新啟動 Notepad++ 以使用此功能。"/>
+			<ReadOnlyFileCannotBeSaved title="儲存檔案失敗 - 該文件為唯讀" message="&quot;$STR_REPLACE$&quot;
+該文件為唯讀，無法儲存。
+請取消唯讀設定後再儲存檔案。"/>
+			<ShortcutsXmlHMACMissing title="安全警告" message="在 config.xml 中找不到 shortcuts.xml 的安全資訊。
+
+基於安全考量，系統將檢查 shortcuts.xml 的完整性。
+若要執行您的自訂指令，請先檢視已開啟的 shortcuts.xml。
+如果內容正確，請從「執行」選單中使用「驗證 shortcuts.xml 檔案」來確認。"/>
+			<ShortcutsXmlTampered title="安全警告" message="檔案 shortcuts.xml 似乎曾被手動修改。
+
+基於安全考量，請檢視已開啟的 shortcuts.xml。
+如果內容正確，請從「執行」選單中使用「驗證 shortcuts.xml 檔案」來確認。"/>
+			<SymlinkLoadingWarning title="警告：載入符號連結可能導致程式凍結" message="啟用「資料夾工作區」中的符號連結載入功能可能會使 Notepad++ 進入無限循環並造成程式凍結。
+當目錄符號連結指向父層資料夾或形成循環引用時，就可能發生此問題。
+請在充分了解風險後再繼續操作。"/>
 		</MessageBox>
 		<ClipboardHistory>
 			<PanelTitle name="剪貼簿記錄"/>
@@ -1423,6 +1540,7 @@
 			<ColumnPath name="路徑"/>
 			<ColumnType name="類型"/>
 			<ColumnSize name="長度"/>
+			<ColumnDateTime name="修改時間"/>
 			<NbDocsTotal name="文件數："/>
 			<MenuCopyName name="複製檔名"/>
 			<MenuCopyPath name="複製檔案路徑"/>
@@ -1457,6 +1575,7 @@
 				<Item id="3517" name="在檔案中尋找..."/>
 				<Item id="3518" name="在此開啟檔案總管"/>
 				<Item id="3519" name="在此開啟 CMD"/>
+				<Item id="3521" name="在此開啟 Powershell"/>
 			</Menu>
 		</FolderAsWorkspace>
 		<ProjectManager>
@@ -1530,8 +1649,8 @@
 所有檔案但在所有的層級（遞歸地）不搜尋檔案夾 log 或 logs:
 *.* !+\log*"/>
 			<find-in-files-select-folder value="選擇一個你要從中搜尋的資料夾"/>
-			<find-status-top-reached value="搜尋：從下面找到相符的字串。搜尋已抵達文件開首。"/>
-			<find-status-end-reached value="搜尋：從上面找到相符的字串。搜尋已抵達文件結尾。"/>
+			<find-status-top-reached value="搜尋：搜尋已抵達文件開首，從下面找到第一個相符的字串。"/>
+			<find-status-end-reached value="搜尋：搜尋已抵達文件結尾，從上面找到第一個相符的字串。"/>
 			<find-status-replaceinfiles-1-replaced value="在檔案中取代：取代了 1 個字串。"/>
 			<find-status-replaceinfiles-nb-replaced value="在檔案中取代：取代了 $INT_REPLACE$ 個字串。"/>
 			<find-status-replaceinopenedfiles-1-replaced value="在所有開啟文件中取代：取代了 1 個字串。"/>
@@ -1544,28 +1663,33 @@
 			<find-status-replaceall-1-replaced value="全部取代：取代了 1 個字串。"/>
 			<find-status-replaceall-nb-replaced value="全部取代：取代了 $INT_REPLACE$ 個字串。"/>
 			<find-status-replaceall-readonly value="全部取代：檔案為唯讀，無法取代字串。"/>
-			<find-status-replace-end-reached value="取代：從上面取代了 1 個相符的字串。搜尋已抵達文件結尾。"/>
-			<find-status-replace-top-reached value="取代：從下面取代了 1 個相符的字串。搜尋已抵達文件開首。"/>
+			<find-status-replace-end-reached value="取代：搜尋已抵達文件結尾，從頂端繼續搜尋取代。"/>
+			<find-status-replace-top-reached value="取代：搜尋已抵達文件開頭，從尾端繼續搜尋取代。"/>
 			<find-status-replaced-next-found value="取代：取代了 1 個字串。找到下一個字串。"/>
 			<find-status-replaced-next-not-found value="取代：取代了 1 個字串。找不到下一個字串。"/>
 			<find-status-replace-not-found value="取代：找不到搜尋字串"/>
 			<find-status-replace-readonly value="取代：檔案唯讀，無法取代字串。"/>
 			<find-status-cannot-find value="搜尋：找不到搜尋字串「$STR_REPLACE$」"/>
 			<find-status-cannot-find-pebkac-maybe value="找不到指定的字串。你可能忘記設定「循環」（設為開啟）、「區分大小寫」（設為關閉）或「僅符合整個單字」（設為關閉）"/>
+			<find-status-regex-find-empty-string value="給定的規則運算式符合空字串。"/>
 			<find-status-scope-selection value="在所選取的字串中"/>
 			<find-status-scope-all value="在整個檔案中"/>
 			<find-status-scope-backward value="從文件開始到游標位置"/>
 			<find-status-scope-forward value="從游標位置到文件結尾"/>
+			<find-status-invisible-chars-findWhat value="貼上的「尋找內容」或「取代為」內容中包含隱藏字元"/>
+			<find-status-invisible-chars-findWhat-tip value="警告：搜尋（或取代）欄位中包含隱藏字元。
+貼上至此欄位的文字包含不可見字元（可能是換行字元）。若您繼續而不刪除它們，這些字元將會被包含在搜尋（或取代）文字中。"/>
 			<finder-find-in-finder value="在此搜尋結果中尋找..."/>
 			<finder-close-this value="關閉這個搜尋結果"/>
 			<finder-collapse-all value="層數全部收折"/>
 			<finder-uncollapse-all value="層數全部展開"/>
 			<finder-copy value="複製全行"/>
+			<finder-copy-selected-paths value="複製選取路徑到剪貼簿"/>
 			<finder-clear-all value="全部清除"/>
-			<finder-open-all value="全部開啟"/>
+			<finder-open-selected-paths value="開啟選取路徑檔案"/>
 			<finder-wrap-long-lines value="自動換行"/>
-			<common-ok value="OK啦"/>
-			<common-cancel value="取消啦"/>
+			<common-ok value="OK"/>
+			<common-cancel value="取消"/>
 			<common-name value="名稱："/>
 			<tabrename-title value="重新命名現有頁籤"/>
 			<tabrename-newname value="新的名稱："/>
@@ -1608,7 +1732,6 @@
 			<find-regex-zero-length-match value="零長度的字元相符"/>
 			<session-save-folder-as-workspace value="包含「資料夾工作區」"/>
 			<tab-untitled-string value="新文件 "/>
-			<IncrementalFind-FSFound value="$INT_REPLACE$ 相符"/>
 			<IncrementalFind-FSNotFound value="找不到相符字串"/>
 			<IncrementalFind-FSTopReached value="到達頁面頂部，從底部繼續"/>
 			<IncrementalFind-FSEndReached value="到達頁面末尾，從頂部繼續 "/>
@@ -1622,8 +1745,37 @@
 1. 修改這些選項需要重新開啟已開啟的大型文件以達到預期的效果。
 
 2. 如果「停用自動換行」被啟動，在開啟一個大型文件時，「自動換行」將對所有文件停用。 你可以通過選單「檢視-&gt;自動換行」重新啟動這個功能。"/>
-			<searchingInSelThresh-tip value="在尋找與取代對話方塊啟動時，為啟動自動勾選核取方塊「僅尋找選取範圍」在編輯區中選取的字符數量。 最大值為 1024。 將值設置為 0 將停止自動勾選功能。"/>
+			<searchingInSelThresh-tip value="在尋找與取代對話方塊啟動時，為啟動自動勾選核取方塊「僅尋找選取範圍」在編輯區中選取的最小字符數量。 最大值為 $INT_REPLACE$。 將值設置為 0 將停止自動勾選功能。"/>
+			<searchingFillFindWhat-tip value="在尋找與取代對話方塊啟動時，為啟動自動填入「尋找內容」欄位，以編輯區域中選定字元的最大值（最多 $INT_REPLACE 個字元）。此值是「尋找內容」欄位的最大長度，由系統限制。"/>
 			<verticalEdge-tip value="如欲添加列標記可以在下面以數字指示其列位置。使用空格分隔不同數字來定義多個列標記。"/>
+			<autoIndentBasic-tip value="確保目前行（即按 ENTER 鍵所打的新行）的縮排與上一行的縮排相同。"/>
+			<autoIndentAdvanced-tip value="啟用為「類 C 語言」和 Python 建構的智慧縮排 。 「類 C 語言」包括：
+C、C++、Java、C#、Objective-C、PHP、JavaScript、JSP、CSS、Perl、Rust、PowerShell 與 JSON
+
+如果你選擇進階模式但不編輯上述語言文件，縮排設定將保留為基本模式。"/>
+			<global-override-tip value="此處啟用「Global override」將覆蓋所有語言樣式中的此些參數。你可能真正想要的是使用「Default Style」設置"/>
+			<scintillaRenderingTechnology-tip value="變更選項可能會改善特殊字元的顯示或解決一些圖形問題。請重新啟動 Notepad++ 以套用變更。"/>
+			
+			<!-- Due to the limited space on the status bar, if the translations for 'length' & 'lines' are much longer than the English words, please leave them in English instead of translating them. -->
+			<statusbar-length-lines value="長度：$STR_REPLACE1$    行數：$STR_REPLACE2$"/>
+
+			<!-- Due to the limited space on the status bar, if the translations for 'Ln' & 'Col' are longer than the English words, please leave them in English instead of translating them. -->
+			<statusbar-Ln-Col value="行：$STR_REPLACE1$    列：$STR_REPLACE2$"/>
+			
+
+			<!-- Due to the limited space on the status bar, if the translations for 'Pos' & 'Sel' are longer than the English words, please leave them in English instead of translating them. -->
+			<statusbar-Pos value="位置："/>
+			<statusbar-Sel value="選取："/>
+			<statusbar-Sel-number value="選取"/>
+			<toolbar-accent-tip value="此選項可讓您的工具列圖示遵循 Windows 系統強調色。強調色是 Windows 中的按鈕、邊框和開始功能表圖塊所使用的反白顯示顏色。要更改它，請轉到「設定」&gt;「個性化」&gt;「顏色」，然後選擇您喜歡的強調色。"/>
+			<len-limit-exceeded-tip value="已超出長度限制：輸入內容可能超出允許的限制並已被截斷，此輸入也將不會保存以供下次 Notepad++ 啟動時使用。"/>
+			<max-len-on-search-tip value="輸入內容可能超出允許的限制並已被截斷，此輸入也將不會保存以供下次 Notepad++ 啟動時使用。"/>
+			<max-len-on-save-tip value="輸入內容過長，可能無法保存以供下次 Notepad++ 啟動時使用。"/>
+			<goto-setting-tip value="相關的偏好設定在此"/>
+			<tabbar-tabcompactlabellen-tip value="限制頁籤名稱的可見長度。按 Enter 鍵套用設定值。設定值範圍：1-257 個字元（0 取消截斷頁籤名稱功能）。"/>
+			<networkpathwarning-serverwhitelist-tip value="將目前檔案所屬的伺服器加入 Notepad++ 的 serverWhiteList.xml。
+
+如需更多資訊，請點擊此按鈕以開啟使用者手冊中相關的章節"/>
 		</MiscStrings>
 	</Native-Langue>
 </NotepadPlus>

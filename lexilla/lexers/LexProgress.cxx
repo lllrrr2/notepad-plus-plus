@@ -45,87 +45,84 @@ Differentiate between labels and variables
 using namespace Scintilla;
 using namespace Lexilla;
 
+// Intermediate style for compund identifiers; this style won't be seen in lexed documents
+#define SCE_ABL_IDENTIFIERCOMPOUND 30
+
 namespace {
    // Use an unnamed namespace to protect the functions and classes from name conflicts
 
-   bool IsSpaceEquiv(int state) {
-      return (state == SCE_ABL_COMMENT ||
-              state == SCE_ABL_LINECOMMENT ||
-              state == SCE_ABL_DEFAULT);
-   }
-
-   void highlightTaskMarker(StyleContext &sc, LexAccessor &styler, WordList &markerList){
-      if ((isoperator(sc.chPrev) || IsASpace(sc.chPrev)) && markerList.Length()) {
-         const int lengthMarker = 50;
-         char marker[lengthMarker+1];
-         Sci_Position currPos = (Sci_Position) sc.currentPos;
-         Sci_Position i = 0;
-         while (i < lengthMarker) {
-            char ch = styler.SafeGetCharAt(currPos + i);
-            if (IsASpace(ch) || isoperator(ch)) {
-               break;
-            }
-            marker[i] = ch;
-            i++;
+void highlightTaskMarker(StyleContext &sc, LexAccessor &styler, WordList &markerList){
+   if ((isoperator(sc.chPrev) || IsASpace(sc.chPrev)) && markerList.Length()) {
+      const int lengthMarker = 50;
+      char marker[lengthMarker+1];
+      Sci_Position currPos = (Sci_Position) sc.currentPos;
+      Sci_Position i = 0;
+      while (i < lengthMarker) {
+         char ch = styler.SafeGetCharAt(currPos + i);
+         if (IsASpace(ch) || isoperator(ch)) {
+            break;
          }
-         marker[i] = '\0';
-         if (markerList.InListAbbreviated (marker,'(')) {
-            sc.SetState(SCE_ABL_TASKMARKER);
-         }
+         marker[i] = ch;
+         i++;
+      }
+      marker[i] = '\0';
+      if (markerList.InListAbbreviated (marker,'(')) {
+         sc.SetState(SCE_ABL_TASKMARKER);
       }
    }
-
-   bool IsStreamCommentStyle(int style) {
-      return style == SCE_ABL_COMMENT;
-             // style == SCE_ABL_LINECOMMENT;  Only block comments are used for folding
-   }
-
-   // Options used for LexerABL
-   struct OptionsABL {
-      bool fold;
-      bool foldSyntaxBased;
-      bool foldComment;
-      bool foldCommentMultiline;
-      bool foldCompact;
-      OptionsABL() {
-         fold = false;
-         foldSyntaxBased = true;
-         foldComment = true;
-         foldCommentMultiline = true;
-         foldCompact = false;
-      }
-   };
-
-   const char *const ablWordLists[] = {
-               "Primary keywords and identifiers",
-               "Keywords that opens a block, only when used to begin a syntactic line",
-               "Keywords that opens a block anywhere in a syntactic line",
-               "Task Marker", /* "END MODIFY START TODO" */
-               0,
-   };
-
-   struct OptionSetABL : public OptionSet<OptionsABL> {
-      OptionSetABL() {
-         DefineProperty("fold", &OptionsABL::fold);
-
-         DefineProperty("fold.abl.syntax.based", &OptionsABL::foldSyntaxBased,
-            "Set this property to 0 to disable syntax based folding.");
-
-         DefineProperty("fold.comment", &OptionsABL::foldComment,
-            "This option enables folding multi-line comments and explicit fold points when using the ABL lexer. ");
-
-         DefineProperty("fold.abl.comment.multiline", &OptionsABL::foldCommentMultiline,
-            "Set this property to 0 to disable folding multi-line comments when fold.comment=1.");
-
-         DefineProperty("fold.compact", &OptionsABL::foldCompact);
-
-         DefineWordListSets(ablWordLists);
-      }
-   };
 }
+
+bool IsStreamCommentStyle(int style) {
+   return style == SCE_ABL_COMMENT;
+          // style == SCE_ABL_LINECOMMENT;  Only block comments are used for folding
+}
+
+// Options used for LexerABL
+struct OptionsABL {
+   bool fold;
+   bool foldSyntaxBased;
+   bool foldComment;
+   bool foldCommentMultiline;
+   bool foldCompact;
+   OptionsABL() {
+      fold = false;
+      foldSyntaxBased = true;
+      foldComment = true;
+      foldCommentMultiline = true;
+      foldCompact = false;
+   }
+};
+
+const char *const ablWordLists[] = {
+            "Primary keywords and identifiers",
+            "Keywords that opens a block, only when used to begin a syntactic line",
+            "Keywords that opens a block anywhere in a syntactic line",
+            "Task Marker", /* "END MODIFY START TODO" */
+            0,
+};
+
+struct OptionSetABL : public OptionSet<OptionsABL> {
+   OptionSetABL() {
+      DefineProperty("fold", &OptionsABL::fold);
+
+      DefineProperty("fold.abl.syntax.based", &OptionsABL::foldSyntaxBased,
+         "Set this property to 0 to disable syntax based folding.");
+
+      DefineProperty("fold.comment", &OptionsABL::foldComment,
+         "This option enables folding multi-line comments and explicit fold points when using the ABL lexer. ");
+
+      DefineProperty("fold.abl.comment.multiline", &OptionsABL::foldCommentMultiline,
+         "Set this property to 0 to disable folding multi-line comments when fold.comment=1.");
+
+      DefineProperty("fold.compact", &OptionsABL::foldCompact);
+
+      DefineWordListSets(ablWordLists);
+   }
+};
 
 class LexerABL : public DefaultLexer {
    CharacterSet setWord;
+   CharacterSet setClassName;
    CharacterSet setNegationOp;
    CharacterSet setArithmethicOp;
    CharacterSet setRelOp;
@@ -141,6 +138,7 @@ public:
    LexerABL() :
       DefaultLexer("abl", SCLEX_PROGRESS),
       setWord(CharacterSet::setAlphaNum, "_", 0x80, true),
+      setClassName(CharacterSet::setAlphaNum, "#$%_-", 0x80, true),
       setNegationOp(CharacterSet::setNone, "!"),
       setArithmethicOp(CharacterSet::setNone, "+-/*%"),
       setRelOp(CharacterSet::setNone, "=!<>"),
@@ -221,19 +219,11 @@ Sci_Position SCI_METHOD LexerABL::WordListSet(int n, const char *wl) {
    return firstModification;
 }
 
-#if defined(__clang__)
-#if __has_warning("-Wunused-but-set-variable")
-// Disable warning for visibleChars
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-#endif
-#endif
-
 void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int initStyle, IDocument *pAccess) {
    LexAccessor styler(pAccess);
 
    setWordStart = CharacterSet(CharacterSet::setAlpha, "_", 0x80, true);
 
-   int visibleChars = 0;
    int visibleChars1 = 0;
    int styleBeforeTaskMarker = SCE_ABL_DEFAULT;
    bool continuationLine = false;
@@ -252,10 +242,15 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
       }
    }
 
+   // Initialize the block comment /* */ nesting level if lexing is starting inside
+   // a block comment.
+   if (initStyle == SCE_ABL_COMMENT && lineCurrent > 0) {
+       commentNestingLevel = styler.GetLineState(lineCurrent - 1);
+   }
+
     // Look back to set variables that are actually invisible secondary states. The reason to avoid formal states is to cut down on state's bits
    if (startPos > 0) {
       Sci_Position back = startPos;
-      bool checkCommentNestingLevel = (initStyle == SCE_ABL_COMMENT);
       bool checkIsSentenceStart = (initStyle == SCE_ABL_DEFAULT || initStyle == SCE_ABL_IDENTIFIER);
       char ch;
       char st;
@@ -264,14 +259,14 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
       char chPrev_2;
       char chPrev_3;
 
-      while (back >= 0 && (checkCommentNestingLevel || checkIsSentenceStart)) {
+      while (back >= 0 && checkIsSentenceStart) {
          ch = styler.SafeGetCharAt(back);
          styler.Flush();  // looking at styles so need to flush
          st = styler.StyleAt(back);
 
          chPrev = styler.SafeGetCharAt(back-1);
          // isSentenceStart is a non-visible state, used to identify where statements and preprocessor declerations can start
-         if (checkIsSentenceStart && st != SCE_ABL_COMMENT && st != SCE_ABL_LINECOMMENT && st != SCE_ABL_CHARACTER  && st != SCE_ABL_STRING ) {
+         if (st != SCE_ABL_COMMENT && st != SCE_ABL_LINECOMMENT && st != SCE_ABL_CHARACTER  && st != SCE_ABL_STRING ) {
             chPrev_1 = styler.SafeGetCharAt(back-2);
             chPrev_2 = styler.SafeGetCharAt(back-3);
             chPrev_3 = styler.SafeGetCharAt(back-4);
@@ -288,20 +283,6 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
                isSentenceStart = false;
             }
          }
-
-         // commentNestingLevel is a non-visible state, used to identify the nesting level of a comment
-         if (checkCommentNestingLevel) {
-            if (chPrev == '/' && ch == '*') {
-               commentNestingLevel++;
-               // eat the '/' so we don't miscount a */ if we see /*/*
-               --back;
-            }
-            if (chPrev == '*' && ch == '/') {
-               commentNestingLevel--;
-               // eat the '*' so we don't miscount a /* if we see */*/
-               --back;
-            }
-         }
          --back;
       }
    }
@@ -310,14 +291,26 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
    Sci_Position lineEndNext = styler.LineEnd(lineCurrent);
 
    for (; sc.More();) {
+
       if (sc.atLineStart) {
-         visibleChars = 0;
          visibleChars1 = 0;
       }
+
       if (sc.atLineEnd) {
-         lineCurrent++;
-         lineEndNext = styler.LineEnd(lineCurrent);
+          // Update the line state, so it can be seen by next line
+          if (sc.state == SCE_ABL_COMMENT) {
+              // Inside a block comment; store the nesting level
+              styler.SetLineState(lineCurrent, commentNestingLevel);
+          }
+          else {
+              // Not inside a block comment; nesting level is 0
+              styler.SetLineState(lineCurrent, 0);
+          }
+
+          lineCurrent++;
+          lineEndNext = styler.LineEnd(lineCurrent);
       }
+
       // Handle line continuation generically.
       if (sc.ch == '~') {
          if (static_cast<Sci_Position>((sc.currentPos+1)) >= lineEndNext) {
@@ -352,7 +345,14 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
                char s[1000];
                sc.GetCurrentLowered(s, sizeof(s));
                bool isLastWordEnd = (s[0] == 'e' && s[1] =='n' && s[2] == 'd' && !IsAlphaNumeric(s[3]) && s[3] != '-');  // helps to identify "end trigger" phrase
-               if ((isSentenceStart && keywords2.InListAbbreviated (s,'(')) || (!isLastWordEnd && keywords3.InListAbbreviated (s,'('))) {
+               if (sc.ch == '.' && setWord.Contains(sc.chNext)) {
+                   // identifier.identifer[.identifier ...] - stay in the identifier state until not id char and not .
+                   // - is not included in the test above because it's not valid as the start of an identifier
+                   sc.Forward();
+                   sc.ChangeState(SCE_ABL_IDENTIFIERCOMPOUND);
+                   break;
+               }
+               else if ((isSentenceStart && keywords2.InListAbbreviated (s,'(')) || (!isLastWordEnd && keywords3.InListAbbreviated (s,'('))) {
                   sc.ChangeState(SCE_ABL_BLOCK);
                   isSentenceStart = false;
                }
@@ -375,6 +375,17 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
                sc.SetState(SCE_ABL_DEFAULT);
             }
             break;
+         case SCE_ABL_IDENTIFIERCOMPOUND:
+             // identifier.identifer[.identifier ...] - exit this state when we find something
+             // that's not a valid character in an identifier
+             // .* is included for cases like: USING System.Collections.*
+             if (sc.ch != '.' && sc.ch != '-' && !(sc.ch == '*' && sc.chPrev == '.') && !setWord.Contains(sc.ch)) {
+                 // change the entire compound identifier back to SCE_ABL_IDENTIFIER
+                 sc.ChangeState(SCE_ABL_IDENTIFIER);
+                 sc.SetState(SCE_ABL_DEFAULT);
+                 isSentenceStart = false;
+             }
+             break;
          case SCE_ABL_PREPROCESSOR:
             if (sc.atLineStart && !continuationLine) {
                sc.SetState(SCE_ABL_DEFAULT);
@@ -430,6 +441,13 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
                   sc.ForwardSetState(SCE_ABL_DEFAULT);
             }
             break;
+         case SCE_ABL_ANNOTATION:
+         case SCE_ABL_TYPEDANNOTATION:
+            // annotation state persists until we see a character that can't be part of a class name
+            if (!setClassName.Contains(sc.ch)) {
+               sc.SetState(SCE_ABL_DEFAULT);
+            }
+            break;
       }
 
       if (sc.atLineEnd && !atLineEndBeforeSwitch) {
@@ -481,6 +499,30 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
             if (sc.atLineEnd) {
                sc.SetState(SCE_ABL_DEFAULT);
             }
+         } else if (sc.ch == '@') {
+            if (setClassName.Contains(sc.chNext) && visibleChars1 == 0) {
+               // @sourceannotation
+               sc.SetState(SCE_ABL_ANNOTATION);
+            }
+            else {
+               // not a source annotation - it might be something like: display "test" @ a
+               sc.SetState(SCE_ABL_OPERATOR);
+            }
+         }
+         else if (sc.ch == '[') {
+             if (setClassName.Contains(sc.chNext) && visibleChars1 == 0) {
+                // [typedannotation]
+                // The bracket is an operator and what follows is a typed annotation.
+                // Only the annotation's class name is styled as SCE_ABL_TYPEDANNOTATION;
+                // any properties that follow it are styled normally.
+                sc.SetState(SCE_ABL_OPERATOR);
+                sc.Forward();
+                sc.SetState(SCE_ABL_TYPEDANNOTATION);
+             }
+             else {
+                // not a typed annotation - it might be something like: a[b] = 12
+                sc.SetState(SCE_ABL_OPERATOR);
+             }
          } else if (isoperator(sc.ch)) {
             sc.SetState(SCE_ABL_OPERATOR);
             /*    This code allows highlight of handles. Alas, it would cause the phrase "last-event:function"
@@ -493,9 +535,6 @@ void SCI_METHOD LexerABL::Lex(Sci_PositionU startPos, Sci_Position length, int i
       }
       if (!IsASpace(sc.ch)) {
          visibleChars1++;
-      }
-      if (!IsASpace(sc.ch) && !IsSpaceEquiv(sc.state)) {
-         visibleChars++;
       }
       continuationLine = false;
       sc.Forward();
@@ -575,4 +614,6 @@ void SCI_METHOD LexerABL::Fold(Sci_PositionU startPos, Sci_Position length, int 
    }
 }
 
-LexerModule lmProgress(SCLEX_PROGRESS, LexerABL::LexerFactoryABL, "abl", ablWordLists);
+}
+
+extern const LexerModule lmProgress(SCLEX_PROGRESS, LexerABL::LexerFactoryABL, "abl", ablWordLists);

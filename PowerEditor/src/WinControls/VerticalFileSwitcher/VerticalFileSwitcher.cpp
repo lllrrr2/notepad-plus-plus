@@ -22,6 +22,12 @@
 #include "resource.h"
 #include "localization.h"
 
+#include <commctrl.h>
+
+#include "NppConstants.h"
+
+using namespace std;
+
 #define GET_X_LPARAM(lp) static_cast<short>(LOWORD(lp))
 #define GET_Y_LPARAM(lp) static_cast<short>(HIWORD(lp))
 
@@ -35,8 +41,8 @@ COLORREF VerticalFileSwitcher::_bgColor = 0xFFFFFF;
 int CALLBACK ListViewCompareProc(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSort)
 {
 	sortCompareData* sortData = (sortCompareData*)lParamSort;
-	TCHAR str1[MAX_PATH] = { '\0' };
-	TCHAR str2[MAX_PATH] = { '\0' };
+	wchar_t str1[MAX_PATH] = { '\0' };
+	wchar_t str2[MAX_PATH] = { '\0' };
 
 	ListView_GetItemText(sortData->hListView, lParam1, sortData->columnIndex, str1, sizeof(str1));
 	ListView_GetItemText(sortData->hListView, lParam2, sortData->columnIndex, str2, sizeof(str2));
@@ -49,22 +55,34 @@ int CALLBACK ListViewCompareProc(LPARAM lParam1, LPARAM lParam2, LPARAM lParamSo
 	return (0 - result);
 }
 
-LRESULT run_listViewProc(WNDPROC oldEditProc, HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK VerticalFileSwitcher::ListViewParentNotifyProc(
+	HWND hWnd,
+	UINT uMsg,
+	WPARAM wParam,
+	LPARAM lParam,
+	UINT_PTR uIdSubclass,
+	[[maybe_unused]] DWORD_PTR /*dwRefData*/
+)
 {
-	switch (message)
+	switch (uMsg)
 	{
+		case WM_NCDESTROY:
+		{
+			::RemoveWindowSubclass(hWnd, VerticalFileSwitcher::ListViewParentNotifyProc, uIdSubclass);
+			break;
+		}
 
 		case WM_MBUTTONUP:
 		{
 			// Redirect the message to parent
-			::SendMessage(::GetParent(hwnd), WM_PARENTNOTIFY, WM_MBUTTONUP, lParam);
-			return TRUE;
+			::SendMessage(::GetParent(hWnd), WM_PARENTNOTIFY, WM_MBUTTONUP, lParam);
+			return 0;
 		}
 
 		default:
 			break;
 	}
-	return ::CallWindowProc(oldEditProc, hwnd, message, wParam, lParam);
+	return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
 void VerticalFileSwitcher::startColumnSort()
@@ -155,14 +173,14 @@ LRESULT VerticalFileSwitcher::listViewNotifyCustomDraw(HWND hWnd, UINT uMsg, WPA
 
 			if (colorID != -1)
 			{
-				bgColor = NppDarkMode::getIndividualTabColour(colorID, isThemeDark, false);
+				bgColor = NppParameters::getInstance().getIndividualTabColor(colorID, isThemeDark, false);
 				applyColor = true;
 			}
 			else if (isThemeDark)
 			{
 				if (isSelected)
 				{
-					bgColor = NppDarkMode::getSofterBackgroundColor();
+					bgColor = NppDarkMode::getCtrlBackgroundColor();
 					applyColor = true;
 				}
 				else if (isHot)
@@ -188,6 +206,7 @@ LRESULT VerticalFileSwitcher::listViewNotifyCustomDraw(HWND hWnd, UINT uMsg, WPA
 				{
 					::FillRect(lplvcd->nmcd.hdc, &rcSubItem2, hBrush);
 				}
+
 				if (colCount == 3)
 				{
 					::FillRect(lplvcd->nmcd.hdc, &rcSubItem3, hBrush);
@@ -256,16 +275,11 @@ LRESULT CALLBACK VerticalFileSwitcher::FileSwitcherNotifySubclass(
 	return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
-void VerticalFileSwitcher::autoSubclassWindowNotify(HWND hParent)
-{
-	::SetWindowSubclass(hParent, VerticalFileSwitcher::FileSwitcherNotifySubclass, _fileSwitcherNotifySubclassID, 0);
-}
-
 intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
-		case WM_INITDIALOG :
+		case WM_INITDIALOG:
 		{
 			VerticalFileSwitcher::initPopupMenus();
 
@@ -273,11 +287,9 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 			_fileListView.initList();
 			_fileListView.display();
 
-			::SetWindowLongPtr(_fileListView.getHSelf(), GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-			_defaultListViewProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtr(_fileListView.getHSelf(), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(listViewStaticProc)));
-
 			NppDarkMode::autoSubclassAndThemeChildControls(_hSelf);
-			VerticalFileSwitcher::autoSubclassWindowNotify(_hSelf);
+			::SetWindowSubclass(_hSelf, VerticalFileSwitcher::FileSwitcherNotifySubclass, static_cast<UINT_PTR>(SubclassID::first), 0);
+			::SetWindowSubclass(_fileListView.getHSelf(), VerticalFileSwitcher::ListViewParentNotifyProc, static_cast<UINT_PTR>(SubclassID::first), 0);
 
 			return TRUE;
 		}
@@ -292,7 +304,7 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 		// So we subclass listview to redirect WM_MBUTTONUP via WM_PARENTNOTIFY (as WM_MBUTTONDOWN)
 		case WM_PARENTNOTIFY:
 		{
-			switch ( wParam )
+			switch (wParam)
 			{
 				case WM_MBUTTONUP:
 				{
@@ -310,9 +322,9 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 						// Get the actual item info from the ID
 						LVITEM item{};
 						item.mask = LVIF_PARAM;
-						item.iItem = hitInfo.iItem;	
+						item.iItem = hitInfo.iItem;
 						ListView_GetItem(_fileListView.getHSelf(), &item);
-						TaskLstFnStatus *tlfs = (TaskLstFnStatus *)item.lParam;
+						auto* tlfs = reinterpret_cast<TaskLstFnStatus*>(item.lParam);
 
 						// Close the document
 						closeDoc(tlfs);
@@ -414,7 +426,7 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 					int i = pGetInfoTip->iItem;
 					if (i == -1)
 						return TRUE;
-					generic_string fn = getFullFilePath((size_t)i);
+					wstring fn = getFullFilePath((size_t)i);
 					lstrcpyn(pGetInfoTip->pszText, fn.c_str(), pGetInfoTip->cchTextMax);
 					return TRUE;
 				}
@@ -443,7 +455,7 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 					
 					LPNMHEADER test = (LPNMHEADER)lParam;
 					HWND hwndHD = ListView_GetHeader(_fileListView.getHSelf());
-					TCHAR HDtext[MAX_PATH] = { '\0' };
+					wchar_t HDtext[MAX_PATH] = { '\0' };
 					HDITEM hdi = {};
 					hdi.mask = HDI_TEXT | HDI_WIDTH;
 					hdi.pszText = HDtext;
@@ -451,9 +463,9 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 					Header_GetItem(hwndHD, test->iItem, &hdi);
 
 					// storing column width data
-					if (hdi.pszText == pNativeSpeaker->getAttrNameStr(TEXT("Ext."), FS_ROOTNODE, FS_CLMNEXT))
+					if (hdi.pszText == pNativeSpeaker->getAttrNameStr(L"Ext.", FS_ROOTNODE, FS_CLMNEXT))
 						nppParams.getNppGUI()._fileSwitcherExtWidth = hdi.cxy;
-					else if (hdi.pszText == pNativeSpeaker->getAttrNameStr(TEXT("Path"), FS_ROOTNODE, FS_CLMNPATH))
+					else if (hdi.pszText == pNativeSpeaker->getAttrNameStr(L"Path", FS_ROOTNODE, FS_CLMNPATH))
 						nppParams.getNppGUI()._fileSwitcherPathWidth = hdi.cxy;
 
 					return TRUE;
@@ -531,11 +543,11 @@ intptr_t CALLBACK VerticalFileSwitcher::run_dlgProc(UINT message, WPARAM wParam,
 void VerticalFileSwitcher::initPopupMenus()
 {
 	NativeLangSpeaker* pNativeSpeaker = NppParameters::getInstance().getNativeLangSpeaker();
-	NppGUI& nppGUI = NppParameters::getInstance().getNppGUI();
+	const NppGUI& nppGUI = NppParameters::getInstance().getNppGUI();
 
-	generic_string extStr = pNativeSpeaker->getAttrNameStr(TEXT("Ext."), FS_ROOTNODE, FS_CLMNEXT);
-	generic_string pathStr = pNativeSpeaker->getAttrNameStr(TEXT("Path"), FS_ROOTNODE, FS_CLMNPATH);
-	generic_string groupStr = pNativeSpeaker->getAttrNameStr(TEXT("Group by View"), FS_ROOTNODE, FS_LVGROUPS);
+	wstring extStr = pNativeSpeaker->getAttrNameStr(L"Ext.", FS_ROOTNODE, FS_CLMNEXT);
+	wstring pathStr = pNativeSpeaker->getAttrNameStr(L"Path", FS_ROOTNODE, FS_CLMNPATH);
+	wstring groupStr = pNativeSpeaker->getAttrNameStr(L"Group by View", FS_ROOTNODE, FS_LVGROUPS);
 
 	_hGlobalMenu = ::CreatePopupMenu();
 	::InsertMenu(_hGlobalMenu, CLMNEXT_ID, MF_BYCOMMAND | MF_STRING, CLMNEXT_ID, extStr.c_str());

@@ -16,15 +16,32 @@
 
 
 #include "ShortcutMapper.h"
-#include "Notepad_plus.h"
 
+#include <windows.h>
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "BabyGrid.h"
+#include "Common.h"
+#include "ContextMenu.h"
+#include "NppDarkMode.h"
+#include "Parameters.h"
+#include "PluginInterface.h"
+#include "ShortcutMapper_rc.h"
+#include "Window.h"
+#include "dpiManagerV2.h"
+#include "localization.h"
+#include "menuCmdID.h"
+#include "resource.h"
+#include "shortcut.h"
 
 using namespace std;
 
 void ShortcutMapper::initTabs()
 {
-	HWND hTab = _hTabCtrl = ::GetDlgItem(_hSelf, IDC_BABYGRID_TABBAR);
-	NppDarkMode::subclassTabControl(hTab);
+	_hTabCtrl = ::GetDlgItem(_hSelf, IDC_BABYGRID_TABBAR);
 	TCITEM tie{};
 	tie.mask = TCIF_TEXT;
 
@@ -33,74 +50,105 @@ void ShortcutMapper::initTabs()
 		_tabNames[i] = getTabString(i);
 
 		tie.pszText = const_cast<LPWSTR>(_tabNames[i].c_str());
-		::SendMessage(hTab, TCM_INSERTITEM, i, reinterpret_cast<LPARAM>(&tie));
+		::SendMessage(_hTabCtrl, TCM_INSERTITEM, i, reinterpret_cast<LPARAM>(&tie));
 	}
 
-    TabCtrl_SetCurSel(_hTabCtrl, int(_currentState));
-
-	// force alignment to babygrid
-	RECT rcTab{};
-	WINDOWPLACEMENT wp{};
-	wp.length = sizeof(wp);
-
-	::GetWindowPlacement(hTab, &wp);
-	::SendMessage(hTab, TCM_GETITEMRECT, 0, reinterpret_cast<LPARAM>(&rcTab));
-
-	wp.rcNormalPosition.bottom = NppParameters::getInstance()._dpiManager.scaleY(30);
-	wp.rcNormalPosition.top = wp.rcNormalPosition.bottom - rcTab.bottom;
-
-	::SetWindowPlacement(hTab, &wp);
+	TabCtrl_SetCurSel(_hTabCtrl, static_cast<int>(_currentState));
 }
 
-void ShortcutMapper::getClientRect(RECT & rc) const 
+void ShortcutMapper::getClientRect(RECT& rc) const
 {
-		Window::getClientRect(rc);
+	Window::getClientRect(rc);
 
-		RECT tabRect{}, btnRect{};
-		::GetClientRect(::GetDlgItem(_hSelf, IDC_BABYGRID_TABBAR), &tabRect);
-		int tabH = tabRect.bottom - tabRect.top;
-		int paddingTop = tabH / 2;
-		rc.top += tabH + paddingTop;
+	RECT rcTab{};
+	getMappedChildRect(IDC_BABYGRID_TABBAR, rcTab);
 
-		RECT infoRect{}, filterRect{};
-		::GetClientRect(::GetDlgItem(_hSelf, IDC_BABYGRID_INFO), &infoRect);
-		::GetClientRect(::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER), &filterRect);
-		::GetClientRect(::GetDlgItem(_hSelf, IDOK), &btnRect);
-		int infoH = infoRect.bottom - infoRect.top;
-		int filterH = filterRect.bottom - filterRect.top;
-		int btnH = btnRect.bottom - btnRect.top;
-		int paddingBottom = btnH + NppParameters::getInstance()._dpiManager.scaleY(16);
-		rc.bottom -= btnH + filterH + infoH + paddingBottom;
+	RECT rcInfo{};
+	HWND hInfo = ::GetDlgItem(_hSelf, IDC_BABYGRID_INFO);
+	::GetWindowRect(hInfo, &rcInfo);
+	::MapWindowPoints(nullptr, _hSelf, reinterpret_cast<LPPOINT>(&rcInfo), 2);
 
-		rc.left += NppParameters::getInstance()._dpiManager.scaleX(5);
-		rc.right -= NppParameters::getInstance()._dpiManager.scaleX(5);
+	RECT rcFilterEdit{};
+	HWND hFilterEdit = ::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER);
+	::GetWindowRect(hFilterEdit, &rcFilterEdit);
+	::MapWindowPoints(nullptr, _hSelf, reinterpret_cast<LPPOINT>(&rcFilterEdit), 2);
+
+	const UINT dpi = _dpiManager.getDpiForWindow(_hSelf);
+	const LONG padding = _dpiManager.scale(6, dpi);
+	const LONG gap = rcFilterEdit.top - rcInfo.bottom;
+
+	rc.top = rcTab.bottom;
+	rc.bottom = rcInfo.top - gap;
+	::InflateRect(&rc, -padding, 0);
 }
 
-generic_string ShortcutMapper::getTabString(size_t i) const
+wstring ShortcutMapper::getTabString(size_t i) const
 {
 	if (i >= _nbTab)
-		return TEXT("");
+		return L"";
 
 	NativeLangSpeaker* nativeLangSpeaker = NppParameters::getInstance().getNativeLangSpeaker();
 	switch (i)
 	{
 		case 1:
-			return nativeLangSpeaker->getShortcutMapperLangStr("MacrosTab", TEXT("Macros"));
+			return nativeLangSpeaker->getShortcutMapperLangStr("MacrosTab", L"Macros");
 
 		case 2:
-			return nativeLangSpeaker->getShortcutMapperLangStr("RunCommandsTab", TEXT("Run commands"));
+			return nativeLangSpeaker->getShortcutMapperLangStr("RunCommandsTab", L"Run commands");
 
 		case 3:
-			return nativeLangSpeaker->getShortcutMapperLangStr("PluginCommandsTab", TEXT("Plugin commands"));
+			return nativeLangSpeaker->getShortcutMapperLangStr("PluginCommandsTab", L"Plugin commands");
 
 		case 4:
-			return nativeLangSpeaker->getShortcutMapperLangStr("ScintillaCommandsTab", TEXT("Scintilla commands"));
+			return nativeLangSpeaker->getShortcutMapperLangStr("ScintillaCommandsTab", L"Scintilla commands");
 
 		default: //0
-			return nativeLangSpeaker->getShortcutMapperLangStr("MainMenuTab", TEXT("Main menu"));
+			return nativeLangSpeaker->getShortcutMapperLangStr("MainMenuTab", L"Main menu");
 	}
 }
 
+void ShortcutMapper::setFontColRowMetrics()
+{
+	destroyFont();
+
+	const auto fontSize = NppParameters::getInstance().getDlgFontSize();
+
+	LOGFONT lf{};
+	if (auto* hFont = reinterpret_cast<HFONT>(::SendMessage(_hSelf, WM_GETFONT, 0, 0));
+		hFont != nullptr && ::GetObjectW(hFont, sizeof(LOGFONT), &lf) != sizeof(LOGFONT))
+	{
+		lf = _dpiManager.getDefaultGUIFontForDpi();
+	}
+
+	lf.lfHeight = _dpiManager.scaleFont(DPIManagerV2::scaleFontForFactor(fontSize + 1));
+	_hGridFonts.at(GFONT_ROWS) = ::CreateFontIndirectW(&lf);
+	lf.lfHeight = _dpiManager.scaleFont(DPIManagerV2::scaleFontForFactor(fontSize + 3));
+	lf.lfWeight = FW_BOLD;
+	_hGridFonts.at(GFONT_HEADER) = ::CreateFontIndirectW(&lf);
+
+	_babygrid.setHeaderFont(_hGridFonts.at(GFONT_HEADER));
+	_babygrid.setRowFont(_hGridFonts.at(GFONT_ROWS));
+
+	const int padding = _dpiManager.scale(3);
+	const int width = DPIManagerV2::getFontDigitWidth(_babygrid.getHSelf(), _hGridFonts.at(GFONT_HEADER));
+	const size_t height = DPIManagerV2::getFontAdjustedHeight(_babygrid.getHSelf(), _hGridFonts.at(GFONT_HEADER));
+
+	_babygrid.setColWidth(0, width * 3 + padding); // Force the first col to be small, others col will be automatically sized
+	_babygrid.setHeaderHeight(height);
+	_babygrid.setRowHeight(height);
+}
+
+void ShortcutMapper::destroyFont() noexcept
+{
+	for (auto& hFont : _hGridFonts)
+	{
+		if (hFont != nullptr)
+		{
+			::DeleteObject(hFont);
+			hFont = nullptr;
+		}
+	}
+}
 
 void ShortcutMapper::initBabyGrid()
 {
@@ -111,30 +159,18 @@ void ShortcutMapper::initBabyGrid()
 	_lastCursorRow.resize(5, 1);
 
 	_hGridFonts.resize(MAX_GRID_FONTS);
-	_hGridFonts.at(GFONT_HEADER) = ::CreateFont(
-		NppParameters::getInstance()._dpiManager.scaleY(18), 0, 0, 0, FW_BOLD,
-		FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH,
-		TEXT("MS Shell Dlg"));
-	_hGridFonts.at(GFONT_ROWS) = ::CreateFont(
-		NppParameters::getInstance()._dpiManager.scaleY(16), 0, 0, 0, FW_NORMAL,
-		FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH,
-		TEXT("MS Shell Dlg"));
 	
 	_babygrid.init(_hInst, _hSelf, IDD_BABYGRID_ID1);
 
 	NppDarkMode::setDarkScrollBar(_babygrid.getHSelf());
 
-	_babygrid.setHeaderFont(_hGridFonts.at(GFONT_HEADER));
-	_babygrid.setRowFont(_hGridFonts.at(GFONT_ROWS));
-	
 	_babygrid.reSizeToWH(rect);
 	_babygrid.hideCursor();
 	_babygrid.makeColAutoWidth(true);
 	_babygrid.setAutoRow(true);
 	_babygrid.setColsNumbered(false);
-	_babygrid.setColWidth(0, NppParameters::getInstance()._dpiManager.scaleX(30));  // Force the first col to be small, others col will be automatically sized
-	_babygrid.setHeaderHeight(NppParameters::getInstance()._dpiManager.scaleY(21));
-	_babygrid.setRowHeight(NppParameters::getInstance()._dpiManager.scaleY(21));
+
+	setFontColRowMetrics();
 
 	if (NppDarkMode::isEnabled())
 	{
@@ -145,10 +181,10 @@ void ShortcutMapper::initBabyGrid()
 		_babygrid.setUnprotectColor(NppDarkMode::getBackgroundColor());
 		_babygrid.setTitleColor(NppDarkMode::getBackgroundColor());
 
-		_babygrid.setBackgroundColor(NppDarkMode::getDarkerBackgroundColor());
+		_babygrid.setBackgroundColor(NppDarkMode::getDlgBackgroundColor());
 
 		_babygrid.setHighlightColor(NppDarkMode::getHotBackgroundColor());
-		_babygrid.setHighlightColorNoFocus(NppDarkMode::getSofterBackgroundColor());
+		_babygrid.setHighlightColorNoFocus(NppDarkMode::getCtrlBackgroundColor());
 		_babygrid.setProtectColor(NppDarkMode::getErrorBackgroundColor());
 		_babygrid.setHighlightColorProtect(RGB(244, 10, 20));
 		_babygrid.setHighlightColorProtectNoFocus(RGB(230, 100, 110));
@@ -179,16 +215,16 @@ void ShortcutMapper::initBabyGrid()
 
 	NativeLangSpeaker* nativeLangSpeaker = NppParameters::getInstance().getNativeLangSpeaker();
 	nativeLangSpeaker->changeDlgLang(_hSelf, "ShortcutMapper");
-	_conflictInfoOk = nativeLangSpeaker->getShortcutMapperLangStr("ConflictInfoOk", TEXT("No shortcut conflicts for this item."));
-	_conflictInfoEditing = nativeLangSpeaker->getShortcutMapperLangStr("ConflictInfoEditing", TEXT("No conflicts . . ."));
+	_conflictInfoOk = nativeLangSpeaker->getShortcutMapperLangStr("ConflictInfoOk", L"No shortcut conflicts for this item.");
+	_conflictInfoEditing = nativeLangSpeaker->getShortcutMapperLangStr("ConflictInfoEditing", L"No conflicts . . .");
 }
 
-generic_string ShortcutMapper::getTextFromCombo(HWND hCombo)
+wstring ShortcutMapper::getTextFromCombo(HWND hCombo)
 {
 	const int NB_MAX(128);
-	TCHAR str[NB_MAX](TEXT("\0"));
+	wchar_t str[NB_MAX](L"\0");
 	::SendMessage(hCombo, WM_GETTEXT, NB_MAX, reinterpret_cast<LPARAM>(str));
-	generic_string res(str);
+	wstring res(str);
 	return stringToLower(res);
 }
 
@@ -207,7 +243,7 @@ bool ShortcutMapper::isFilterValid(Shortcut sc)
 
 	for (size_t i = 0; i < filterSize; ++i)
 	{
-		generic_string filterWord = _shortcutFilter.at(i);
+		wstring filterWord = _shortcutFilter.at(i);
 		// every word must be matched by keycombo or name
 		if (shortcut_name.find(filterWord) == std::string::npos &&
 			shortcut_value.find(filterWord) == std::string::npos)
@@ -232,7 +268,7 @@ bool ShortcutMapper::isFilterValid(PluginCmdShortcut sc)
 	
 	for (size_t i = 0; i < filterSize; ++i)
 	{
-		generic_string filterWord = _shortcutFilter.at(i);
+		wstring filterWord = _shortcutFilter.at(i);
 		// every word must be matched by keycombo or name or plugin name
 		if (shortcut_name.find(filterWord) == std::string::npos &&
 			shortcut_value.find(filterWord) == std::string::npos &&
@@ -257,7 +293,7 @@ bool ShortcutMapper::isFilterValid(ScintillaKeyMap sc)
 
 	for (size_t i = 0; i < filterSize; ++i)
 	{
-		generic_string filterWord = _shortcutFilter.at(i);
+		wstring filterWord = _shortcutFilter.at(i);
 		// every word must be matched by keycombo or name
 		if (shortcut_name.find(filterWord) == std::string::npos &&
 			shortcut_value.find(filterWord) == std::string::npos)
@@ -275,8 +311,8 @@ void ShortcutMapper::fillOutBabyGrid()
 
 	size_t nbItems = 0;
 	NativeLangSpeaker* nativeLangSpeaker = nppParam.getNativeLangSpeaker();
-	generic_string nameStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnName", TEXT("Name"));
-	generic_string shortcutStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnShortcut", TEXT("Shortcut"));
+	wstring nameStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnName", L"Name");
+	wstring shortcutStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnShortcut", L"Shortcut");
 
 	_babygrid.setText(0, 1, nameStr.c_str());
 	_babygrid.setText(0, 2, shortcutStr.c_str());
@@ -287,7 +323,7 @@ void ShortcutMapper::fillOutBabyGrid()
 		{
 			nbItems = nppParam.getUserShortcuts().size();
 			_babygrid.setLineColNumber(nbItems, 3);
-			generic_string categoryStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnCategory", TEXT("Category"));
+			wstring categoryStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnCategory", L"Category");
 			_babygrid.setText(0, 3, categoryStr.c_str());
 		}
 		break;
@@ -310,7 +346,7 @@ void ShortcutMapper::fillOutBabyGrid()
 		{
 			nbItems = nppParam.getPluginCommandList().size();
 			_babygrid.setLineColNumber(nbItems, 3);
-			generic_string pluginStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnPlugin", TEXT("Plugin"));
+			wstring pluginStr = nativeLangSpeaker->getShortcutMapperLangStr("ColumnPlugin", L"Plugin");
 			_babygrid.setText(0, 3, pluginStr.c_str());
 		}
 		break;
@@ -327,15 +363,15 @@ void ShortcutMapper::fillOutBabyGrid()
 	size_t cs_index = 0;
 	
 	// make _shortcutFilter a list of the words in IDC_BABYGRID_FILTER
-	generic_string shortcutFilterStr = getTextFromCombo(::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER));
-	const generic_string whitespace(TEXT(" "));
-	std::vector<generic_string> shortcutFilterWithEmpties;
+	wstring shortcutFilterStr = getTextFromCombo(::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER));
+	const wstring whitespace(L" ");
+	std::vector<wstring> shortcutFilterWithEmpties;
 	stringSplit(shortcutFilterStr, whitespace, shortcutFilterWithEmpties);
 	// now add only the non-empty strings in the split list to _shortcutFilter
-	_shortcutFilter = std::vector<generic_string>();
+	_shortcutFilter = std::vector<wstring>();
 	for (size_t i = 0; i < shortcutFilterWithEmpties.size(); ++i)
 	{
-		generic_string filterWord = shortcutFilterWithEmpties.at(i);
+		wstring filterWord = shortcutFilterWithEmpties.at(i);
 		if (!filterWord.empty())
 			_shortcutFilter.push_back(filterWord);
 	}
@@ -508,29 +544,128 @@ void ShortcutMapper::fillOutBabyGrid()
 	_babygrid.setInitialContent(false);
 }
 
+void ShortcutMapper::resizeDialogElements()
+{
+	constexpr auto getRcWidth = [](const RECT& rc) -> int {
+		return rc.right - rc.left;
+	};
+
+	constexpr auto getRcHeight = [](const RECT& rc) -> int {
+		return rc.bottom - rc.top;
+	};
+
+	auto setOrDeferWindowPos = [](HDWP hWinPosInfo, HWND hWnd, HWND hWndInsertAfter, int x, int y, int cx, int cy, UINT uFlags) -> HDWP {
+		if (hWinPosInfo != nullptr)
+		{
+			return ::DeferWindowPos(hWinPosInfo, hWnd, hWndInsertAfter, x, y, cx, cy, uFlags);
+		}
+		::SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, uFlags);
+		return nullptr;
+	};
+
+	constexpr UINT flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+
+	RECT rcClient{};
+	Window::getClientRect(rcClient);
+
+	RECT rcModBtn{};
+	HWND hModBtn = ::GetDlgItem(_hSelf, IDM_BABYGRID_MODIFY);
+	getMappedChildRect(hModBtn, rcModBtn);
+
+	RECT rcClearBtn{};
+	HWND hClearBtn = ::GetDlgItem(_hSelf, IDM_BABYGRID_CLEAR);
+	getMappedChildRect(hClearBtn, rcClearBtn);
+
+	RECT rcDelBtn{};
+	HWND hDelBtn = ::GetDlgItem(_hSelf, IDM_BABYGRID_DELETE);
+	::GetClientRect(hDelBtn, &rcDelBtn);
+
+	RECT rcOkBtn{};
+	HWND hOkBtn = ::GetDlgItem(_hSelf, IDOK);
+	::GetClientRect(hOkBtn, &rcOkBtn);
+
+	RECT rcStatic{};
+	HWND hStatic = ::GetDlgItem(_hSelf, IDC_BABYGRID_STATIC);
+	getMappedChildRect(hStatic, rcStatic);
+
+	RECT rcFilterEdit{};
+	HWND hFilterEdit = ::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER);
+	::GetWindowRect(hFilterEdit, &rcFilterEdit);
+	::MapWindowPoints(nullptr, _hSelf, reinterpret_cast<LPPOINT>(&rcFilterEdit), 2);
+
+	RECT rcFilterClearBtn{};
+	HWND hFilterClearBtn = ::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER_CLEAR);
+	::GetWindowRect(hFilterClearBtn, &rcFilterClearBtn);
+
+	int clrBtnWidth = rcFilterClearBtn.right - rcFilterClearBtn.left;
+	int clrBtnHeight = rcFilterClearBtn.bottom - rcFilterClearBtn.top;
+
+	RECT rcInfo{};
+	HWND hInfo = ::GetDlgItem(_hSelf, IDC_BABYGRID_INFO);
+	::GetWindowRect(hInfo, &rcInfo);
+	::MapWindowPoints(nullptr, _hSelf, reinterpret_cast<LPPOINT>(&rcInfo), 2);
+
+	const int wClient = getRcWidth(rcClient);
+	const int center = wClient / 2;
+
+	const int wBtn = getRcWidth(rcOkBtn);
+	const int gapBtn = rcClearBtn.left - rcModBtn.right;
+	const int gapBtnHalf = gapBtn / 2;
+
+	const int padding = _dpiManager.scale(6);
+	::InflateRect(&rcClient, -padding, -(gapBtn + getRcHeight(rcOkBtn)));
+
+	const int gapBtnEdit = rcClearBtn.top - rcFilterEdit.bottom;
+	const int heightFilter = getRcHeight(rcFilterEdit);
+	const int heightInfo = getRcHeight(rcInfo);
+
+	constexpr int nCtrls = 8;
+	auto hdwp = ::BeginDeferWindowPos(nCtrls);
+
+	hdwp = setOrDeferWindowPos(hdwp, hModBtn, nullptr, center - gapBtnHalf - wBtn * 2 - gapBtn, rcClient.bottom, 0, 0, SWP_NOSIZE | flags);
+	hdwp = setOrDeferWindowPos(hdwp, hClearBtn, nullptr, center - gapBtnHalf - wBtn, rcClient.bottom, 0, 0, SWP_NOSIZE | flags);
+	hdwp = setOrDeferWindowPos(hdwp, hDelBtn, nullptr, center + gapBtnHalf, rcClient.bottom, 0, 0, SWP_NOSIZE | flags);
+	hdwp = setOrDeferWindowPos(hdwp, hOkBtn, nullptr, center + gapBtnHalf + wBtn + gapBtn, rcClient.bottom, 0, 0, SWP_NOSIZE | flags);
+
+	rcClient.bottom -= (gapBtnEdit + heightFilter);
+	hdwp = setOrDeferWindowPos(hdwp, hStatic, nullptr, rcClient.left, rcClient.bottom + gapBtnEdit / 2, 0, 0, SWP_NOSIZE | flags);
+	hdwp = setOrDeferWindowPos(hdwp, hFilterEdit, nullptr, rcFilterEdit.left, rcClient.bottom, rcClient.right - rcFilterEdit.left - clrBtnWidth, heightFilter, flags);
+	hdwp = setOrDeferWindowPos(hdwp, hFilterClearBtn, nullptr, rcClient.right - clrBtnWidth + 2, rcClient.bottom, clrBtnWidth, clrBtnHeight, SWP_NOSIZE | flags);
+	hdwp = setOrDeferWindowPos(hdwp, hInfo, nullptr, rcClient.left, rcClient.bottom - gapBtnEdit - heightInfo, getRcWidth(rcClient), heightInfo, flags);
+
+	if (hdwp)
+		::EndDeferWindowPos(hdwp);
+
+	getClientRect(rcClient);
+	_babygrid.reSizeToWH(rcClient);
+}
+
 intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam)
 {
-	switch (message) 
+	switch (message)
 	{
-		case WM_INITDIALOG :
+		case WM_INITDIALOG:
 		{
+			setDpi();
 			initBabyGrid();
 			initTabs();
 			fillOutBabyGrid();
-			_babygrid.display();	
+			_babygrid.display();
 			goToCenter();
+
+			resizeDialogElements();
 
 			NppDarkMode::autoSubclassAndThemeChildControls(_hSelf);
 
+			const LONG padding = _dpiManager.getSystemMetricsForDpi(SM_CXPADDEDBORDER);
+			_szBorder.cx = (_dpiManager.getSystemMetricsForDpi(SM_CXFRAME) + padding) * 2;
+			_szBorder.cy = (_dpiManager.getSystemMetricsForDpi(SM_CYFRAME) + padding) * 2 + _dpiManager.getSystemMetricsForDpi(SM_CYCAPTION);
+
 			RECT rect{};
 			Window::getClientRect(rect);
-			_clientWidth = rect.right - rect.left;
-			_clientHeight = rect.bottom - rect.top;
+			_szMinDialog.cx = rect.right - rect.left;
+			_szMinDialog.cy = rect.bottom - rect.top;
 
-			int cy_border = GetSystemMetrics(SM_CYFRAME);
-			int cy_caption = GetSystemMetrics(SM_CYCAPTION);
-			_initClientWidth = _clientWidth;
-			_initClientHeight = _clientHeight + cy_caption + cy_border;
 			_dialogInitDone = true;
 
 			return TRUE;
@@ -538,13 +673,13 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 
 		case WM_CTLCOLOREDIT:
 		{
-			return NppDarkMode::onCtlColorSofter(reinterpret_cast<HDC>(wParam));
+			return NppDarkMode::onCtlColorCtrl(reinterpret_cast<HDC>(wParam));
 		}
 
 		case WM_CTLCOLORDLG:
 		case WM_CTLCOLORSTATIC:
 		{
-			return NppDarkMode::onCtlColorDarker(reinterpret_cast<HDC>(wParam));
+			return NppDarkMode::onCtlColorDlg(reinterpret_cast<HDC>(wParam));
 		}
 
 		case WM_PRINTCLIENT:
@@ -562,21 +697,20 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 			return TRUE;
 		}
 
-		case WM_GETMINMAXINFO :
+		case WM_GETMINMAXINFO:
 		{
-			MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+			auto mmi = reinterpret_cast<MINMAXINFO*>(lParam);
 			if (_dialogInitDone)
 			{
-				mmi->ptMinTrackSize.x = _initClientWidth;
-				mmi->ptMinTrackSize.y = _initClientHeight;
+				mmi->ptMinTrackSize.x = _szMinDialog.cx + _szBorder.cx;
+				mmi->ptMinTrackSize.y = _szMinDialog.cy + _szBorder.cy;
 			}
-			return 0;
+			return TRUE;
 		}
 
 		case WM_DESTROY:
 		{
-			for (const HFONT & hFont : _hGridFonts)
-				::DeleteObject(hFont);
+			destroyFont();
 
 			_hGridFonts.clear();
 			_hGridFonts.shrink_to_fit();
@@ -585,56 +719,13 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 
 		case WM_SIZE:
 		{
-			LONG newWidth = LOWORD(lParam);
-			LONG newHeight = HIWORD(lParam);
-			RECT rect{};
-
-			LONG addWidth = newWidth - _clientWidth;
-			LONG addHeight = newHeight - _clientHeight;
-			_clientWidth = newWidth;
-			_clientHeight = newHeight;
-
-			getClientRect(rect);
-			_babygrid.reSizeToWH(rect);
-			
-			//elements that need to be moved
-			const auto moveWindowIDs = {
-				IDM_BABYGRID_MODIFY, IDM_BABYGRID_CLEAR, IDM_BABYGRID_DELETE, IDOK
-			};
-			const UINT flags = SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
-			Window::getClientRect(rect);
-
-			for (int moveWndID : moveWindowIDs)
-			{
-				HWND moveHwnd = ::GetDlgItem(_hSelf, moveWndID);
-				::GetWindowRect(moveHwnd, &rect);
-				::MapWindowPoints(NULL, _hSelf, (LPPOINT)&rect, 2);
-				::SetWindowPos(moveHwnd, NULL, rect.left + addWidth / 2, rect.top + addHeight, 0, 0, SWP_NOSIZE | flags);
-			}
-			HWND moveHwnd = ::GetDlgItem(_hSelf, IDC_BABYGRID_STATIC);
-			::GetWindowRect(moveHwnd, &rect);
-			::MapWindowPoints(NULL, _hSelf, (LPPOINT)&rect, 2);
-			::SetWindowPos(moveHwnd, NULL, rect.left, rect.top + addHeight, 0, 0, SWP_NOSIZE | flags);
-			
-			// Move and resize IDC_BABYGRID_INFO and IDC_BABYGRID_FILTER
-			// Move the Y position, Resize the width
-			HWND resizeHwnd = ::GetDlgItem(_hSelf, IDC_BABYGRID_INFO);
-			::GetWindowRect(resizeHwnd, &rect);
-			::MapWindowPoints(NULL, _hSelf, (LPPOINT)&rect, 2);
-			::SetWindowPos(resizeHwnd, NULL, rect.left, rect.top + addHeight, rect.right - rect.left + addWidth, rect.bottom - rect.top, flags);
-			
-			resizeHwnd = ::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER);
-			::GetWindowRect(resizeHwnd, &rect);
-			::MapWindowPoints(NULL, _hSelf, (LPPOINT)&rect, 2);
-			::SetWindowPos(resizeHwnd, NULL, rect.left, rect.top + addHeight, rect.right - rect.left + addWidth, rect.bottom - rect.top, flags);
-
-			break;
+			resizeDialogElements();
+			return TRUE;
 		}
-		break;
 
 		case WM_NOTIFY:
 		{
-			NMHDR nmh = *((NMHDR*)lParam);
+			NMHDR nmh = *reinterpret_cast<NMHDR*>(lParam);
 			if (nmh.hwndFrom == _hTabCtrl)
 			{
 				if (nmh.code == TCN_SELCHANGE)
@@ -669,15 +760,15 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 					fillOutBabyGrid();
 				}
 			}
+			return TRUE;
 		}
-		break;
 
 		case NPPM_INTERNAL_FINDKEYCONFLICTS:
 		{
 			if (!wParam || !lParam)
 				break;
 
-			generic_string conflictInfo;
+			wstring conflictInfo;
 
 			// In case of using filter will make the filtered items change index, so here we get its real index
 			size_t realIndexOfSelectedItem = _shortcutIndex[_babygrid.getSelectedRow() - 1];
@@ -693,7 +784,27 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 			return TRUE;
 		}
 
-		case WM_COMMAND : 
+		case WM_DPICHANGED:
+		{
+			const UINT prevDpi = _dpiManager.getDpi();
+			_dpiManager.setDpiWP(wParam);
+
+			setFontColRowMetrics();
+
+			const LONG padding = _dpiManager.getSystemMetricsForDpi(SM_CXPADDEDBORDER);
+			_szBorder.cx = (_dpiManager.getSystemMetricsForDpi(SM_CXFRAME) + padding) * 2;
+			_szBorder.cy = (_dpiManager.getSystemMetricsForDpi(SM_CYFRAME) + padding) * 2 + _dpiManager.getSystemMetricsForDpi(SM_CYCAPTION);
+
+			const UINT dpi = _dpiManager.getDpi();
+			_szMinDialog.cx = _dpiManager.scale(_szMinDialog.cx, dpi, prevDpi);
+			_szMinDialog.cy = _dpiManager.scale(_szMinDialog.cy, dpi, prevDpi);
+
+			setPositionDpi(lParam, SWP_NOZORDER | SWP_NOACTIVATE);
+
+			return TRUE;
+		}
+
+		case WM_COMMAND:
 		{
 			switch (LOWORD(wParam))
 			{
@@ -812,7 +923,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 							shortcut._isShift = FALSE;
 							shortcut._key = '\0';
 
-							::SendMessage(_hParent, NPPM_INTERNAL_PLUGINSHORTCUTMOTIFIED, cmdID, reinterpret_cast<LPARAM>(&shortcut));
+							::SendMessage(_hParent, NPPM_INTERNAL_PLUGINSHORTCUTMODIFIED, cmdID, reinterpret_cast<LPARAM>(&shortcut));
 							nppParam.setShortcutDirty();
 						}
 						break;
@@ -949,7 +1060,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 								shortcut._isShift = pcsc.getKeyCombo()._isShift;
 								shortcut._key = pcsc.getKeyCombo()._key;
 
-								::SendMessage(_hParent, NPPM_INTERNAL_PLUGINSHORTCUTMOTIFIED, cmdID, reinterpret_cast<LPARAM>(&shortcut));
+								::SendMessage(_hParent, NPPM_INTERNAL_PLUGINSHORTCUTMODIFIED, cmdID, reinterpret_cast<LPARAM>(&shortcut));
 								nppParam.setShortcutDirty();
 							}
 						}
@@ -997,8 +1108,8 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 					NppParameters& nppParam = NppParameters::getInstance();
 					int res = nppParam.getNativeLangSpeaker()->messageBox("SCMapperDoDeleteOrNot",
 						_hSelf,
-						TEXT("Are you sure you want to delete this shortcut?"),
-						TEXT("Are you sure?"),
+						L"Are you sure you want to delete this shortcut?",
+						L"Are you sure?",
 						MB_OKCANCEL);
 
 					if (res == IDOK)
@@ -1046,7 +1157,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 									ms.setID(ms.getID() - 1);	//shift all IDs
 									theMacros[i] = ms;
 
-									// Ajust menu items
+									// Adjust menu items
 									MenuItemUnit& miu = macroMenu.getItemFromIndex(i);
 									miu._cmdID -= 1;	//shift all IDs
 								}
@@ -1102,7 +1213,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 									uc.setID(uc.getID() - 1);	//shift all IDs
 									theUserCmds[i] = uc;
 
-									// Ajust menu items
+									// Adjust menu items
 									MenuItemUnit& miu = runMenu.getItemFromIndex(i);
 									miu._cmdID -= 1;	//shift all IDs
 								}
@@ -1126,7 +1237,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 							break;
 						}
 
-                        // updateShortcuts() will update all menu item - the menu items will be shifted
+						// updateShortcuts() will update all menu item - the menu items will be shifted
 						nppParam.getAccelerator()->updateShortcuts();
 						nppParam.setShortcutDirty();
 					}
@@ -1150,9 +1261,9 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 							{
 								vector<MenuItemUnit> itemUnitArray;
 								NativeLangSpeaker* nativeLangSpeaker = NppParameters::getInstance().getNativeLangSpeaker();
-								generic_string modifyStr = nativeLangSpeaker->getShortcutMapperLangStr("ModifyContextMenu", TEXT("Modify"));
-								generic_string deleteStr = nativeLangSpeaker->getShortcutMapperLangStr("DeleteContextMenu", TEXT("Delete"));
-								generic_string clearStr = nativeLangSpeaker->getShortcutMapperLangStr("ClearContextMenu", TEXT("Clear"));
+								wstring modifyStr = nativeLangSpeaker->getShortcutMapperLangStr("ModifyContextMenu", L"Modify");
+								wstring deleteStr = nativeLangSpeaker->getShortcutMapperLangStr("DeleteContextMenu", L"Delete");
+								wstring clearStr = nativeLangSpeaker->getShortcutMapperLangStr("ClearContextMenu", L"Clear");
 								itemUnitArray.push_back(MenuItemUnit(IDM_BABYGRID_MODIFY, modifyStr.c_str()));
 								itemUnitArray.push_back(MenuItemUnit(IDM_BABYGRID_DELETE, deleteStr.c_str()));
 								itemUnitArray.push_back(MenuItemUnit(IDM_BABYGRID_CLEAR, clearStr.c_str()));
@@ -1225,7 +1336,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 							// In case of using filter will make the filtered items change index, so here we get its real index
 							size_t realIndexOfSelectedItem = _shortcutIndex[currentIndex];
 
-							generic_string conflictInfo;
+							wstring conflictInfo;
 
 							switch (_currentState)
 							{
@@ -1285,7 +1396,13 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 					}
 					return TRUE;
 				}
-
+				case IDC_BABYGRID_FILTER_CLEAR:
+				{
+					HWND hFilterEdit = ::GetDlgItem(_hSelf, IDC_BABYGRID_FILTER);
+					::SetWindowText(hFilterEdit, L"");
+					::SetFocus(hFilterEdit);
+					return TRUE;
+				}
 				default:
 				{
 					break;
@@ -1302,7 +1419,7 @@ intptr_t CALLBACK ShortcutMapper::run_dlgProc(UINT message, WPARAM wParam, LPARA
 	return FALSE;
 }
 
-bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConflictLocation,
+bool ShortcutMapper::findKeyConflicts(__inout_opt wstring * const keyConflictLocation,
 										const KeyCombo & itemKeyComboToTest, const size_t & itemIndexToTest) const
 {
 	if (itemKeyComboToTest._key == 0) //no key assignment
@@ -1335,15 +1452,15 @@ bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConf
 						else
 						{
 							if (!keyConflictLocation->empty())
-								*keyConflictLocation += TEXT("\r\n");
+								*keyConflictLocation += L"\r\n";
 							*keyConflictLocation += _tabNames[gridState];
-							*keyConflictLocation += TEXT("  |  ");
+							*keyConflictLocation += L"  |  ";
 							*keyConflictLocation += std::to_wstring(itemIndex + 1);
-							*keyConflictLocation += TEXT("   ");
+							*keyConflictLocation += L"   ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].getName(), CP_UTF8);
-							*keyConflictLocation += TEXT("  ( ");
+							*keyConflictLocation += L"  ( ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].toString(), CP_UTF8);
-							*keyConflictLocation += TEXT(" )");
+							*keyConflictLocation += L" )";
 						}
 					}
 				}
@@ -1369,15 +1486,15 @@ bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConf
 						else
 						{
 							if (!keyConflictLocation->empty())
-								*keyConflictLocation += TEXT("\r\n");
+								*keyConflictLocation += L"\r\n";
 							*keyConflictLocation += _tabNames[gridState];
-							*keyConflictLocation += TEXT("  |  ");
+							*keyConflictLocation += L"  |  ";
 							*keyConflictLocation += std::to_wstring(itemIndex + 1);
-							*keyConflictLocation += TEXT("   ");
+							*keyConflictLocation += L"   ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].getName(), CP_UTF8);
-							*keyConflictLocation += TEXT("  ( ");
+							*keyConflictLocation += L"  ( ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].toString(), CP_UTF8);
-							*keyConflictLocation += TEXT(" )");
+							*keyConflictLocation += L" )";
 						}
 					}
 				}
@@ -1403,15 +1520,15 @@ bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConf
 						else
 						{
 							if (!keyConflictLocation->empty())
-								*keyConflictLocation += TEXT("\r\n");
+								*keyConflictLocation += L"\r\n";
 							*keyConflictLocation += _tabNames[gridState];
-							*keyConflictLocation += TEXT("  |  ");
+							*keyConflictLocation += L"  |  ";
 							*keyConflictLocation += std::to_wstring(itemIndex + 1);
-							*keyConflictLocation += TEXT("   ");
+							*keyConflictLocation += L"   ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].getName(), CP_UTF8);
-							*keyConflictLocation += TEXT("  ( ");
+							*keyConflictLocation += L"  ( ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].toString(), CP_UTF8);
-							*keyConflictLocation += TEXT(" )");
+							*keyConflictLocation += L" )";
 						}
 					}
 				}
@@ -1437,15 +1554,15 @@ bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConf
 						else
 						{
 							if (!keyConflictLocation->empty())
-								*keyConflictLocation += TEXT("\r\n");
+								*keyConflictLocation += L"\r\n";
 							*keyConflictLocation += _tabNames[gridState];
-							*keyConflictLocation += TEXT("  |  ");
+							*keyConflictLocation += L"  |  ";
 							*keyConflictLocation += std::to_wstring(itemIndex + 1);
-							*keyConflictLocation += TEXT("   ");
+							*keyConflictLocation += L"   ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].getName(), CP_UTF8);
-							*keyConflictLocation += TEXT("  ( ");
+							*keyConflictLocation += L"  ( ";
 							*keyConflictLocation += string2wstring(vShortcuts[itemIndex].toString(), CP_UTF8);
-							*keyConflictLocation += TEXT(" )");
+							*keyConflictLocation += L" )";
 						}
 					}
 				}
@@ -1474,18 +1591,18 @@ bool ShortcutMapper::findKeyConflicts(__inout_opt generic_string * const keyConf
 							else
 							{
 								if (!keyConflictLocation->empty())
-									*keyConflictLocation += TEXT("\r\n");
+									*keyConflictLocation += L"\r\n";
 								*keyConflictLocation += _tabNames[gridState];
-								*keyConflictLocation += TEXT("  |  ");
+								*keyConflictLocation += L"  |  ";
 								*keyConflictLocation += std::to_wstring(itemIndex + 1);
 								if (sciIndex > 0)
-									*keyConflictLocation += TEXT("*   ");
+									*keyConflictLocation += L"*   ";
 								else
-									*keyConflictLocation += TEXT("   ");
+									*keyConflictLocation += L"   ";
 								*keyConflictLocation += string2wstring(vShortcuts[itemIndex].getName(), CP_UTF8);
-								*keyConflictLocation += TEXT("  ( ");
+								*keyConflictLocation += L"  ( ";
 								*keyConflictLocation += string2wstring(vShortcuts[itemIndex].toString(sciIndex), CP_UTF8);
-								*keyConflictLocation += TEXT(" )");
+								*keyConflictLocation += L" )";
 							}
 						}
 					}

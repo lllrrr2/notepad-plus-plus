@@ -29,13 +29,13 @@ public :
 		if (!ppEditView)
 			throw std::runtime_error("GoToLineDlg::init : ppEditView is null.");
 		_ppEditView = ppEditView;
-	};
+	}
 
 	void doDialog(bool isRTL = false) {
 		if (!isCreated())
 			create(IDD_GOLINE, isRTL);
 		display();
-	};
+	}
 
 	void display(bool toShow = true) const override {
 		Window::display(toShow);
@@ -43,13 +43,14 @@ public :
 		{
 			updateLinesNumbers();
 			::SetFocus(::GetDlgItem(_hSelf, ID_GOLINE_EDIT));
+			::SendMessageW(_hSelf, DM_REPOSITION, 0, 0);
 		}
 		else
 		{
 			// clean Line Edit
-			::SetDlgItemText(_hSelf, ID_GOLINE_EDIT, TEXT(""));
+			::SetDlgItemText(_hSelf, ID_GOLINE_EDIT, L"");
 		}
-	};
+	}
 
 	void updateLinesNumbers() const;
 
@@ -69,5 +70,5 @@ private :
 			return -1;
 		char* p_end = nullptr;
 		return strtoll(goLineEditStr, &p_end, 10);
-	};
+	}
 };

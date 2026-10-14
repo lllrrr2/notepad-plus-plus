@@ -15,7 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-//#define VerifySignedLibrary_DISABLE_REVOCATION_CHECK "Dont check certificat revocation"
+//#define VerifySignedLibrary_DISABLE_REVOCATION_CHECK "Don't check certificat revocation"
 
 /*
 * Verifies an Authenticde DLL signature and ownership
@@ -55,7 +55,13 @@ class SecurityGuard final
 {
 public:
 	SecurityGuard();
+
 	bool checkModule(const std::wstring& filePath, NppModule module2check);
+
+	std::wstring signer_display_name() const { return _signer_display_name; }
+	std::wstring signer_subject() const { return _signer_subject; }
+	std::wstring signer_key_id() const { return _signer_key_id; }
+
 
 private:
 	// SHA256
@@ -63,15 +69,16 @@ private:
 	std::vector<std::wstring> _gupSha256;
 	std::vector<std::wstring> _pluginListSha256;
 
-	bool checkSha256(const std::wstring& filePath, NppModule module2check);
+	bool checkSha256(const std::wstring& filePath, NppModule module2check) const;
 
 	// Code signing certificate
-	std::wstring _signer_display_name = TEXT("Notepad++");
-	std::wstring _signer_subject = TEXT("C=FR, S=Ile-de-France, L=Saint Cloud, O=\"Notepad++\", CN=\"Notepad++\"");
-	std::wstring _signer_key_id = TEXT("E687332916D6B681FE28C5EF423CEE259D3953B9");
-	bool _doCheckRevocation = false;
-	bool _doCheckChainOfTrust = false;
+	std::wstring _signer_display_name = L"NOTEPAD++";
+	std::wstring _signer_subject = L"C=FR, S=Île-de-France, L=Paris, O=\"NOTEPAD++\", CN=\"NOTEPAD++\", E=don.h@free.fr";
+	std::wstring _signer_key_id = L"CC0D94922CDA3A18A7D286138525AF9C3942E9E7"; //=> Should be UPPERCASE
 
-	bool verifySignedLibrary(const std::wstring& filepath);
+	bool _doCheckRevocation = false;
+	bool _doCheckChainOfTrust = true;
+
+	bool verifySignedBinary(const std::wstring& filepath) const;
 };
 

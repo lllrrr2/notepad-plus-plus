@@ -15,28 +15,32 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <locale>
-#include <codecvt>
 #include <shlwapi.h>
 #include "FileInterface.h"
 #include "Parameters.h"
 
+using namespace std;
 
 Win32_IO_File::Win32_IO_File(const wchar_t *fname)
 {
 	if (fname)
 	{
 		std::wstring fn = fname;
-		std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-		_path = converter.to_bytes(fn);
+		_path = wstring2string(fn, CP_UTF8);
 
 		WIN32_FILE_ATTRIBUTE_DATA attributes_original{};
+		attributes_original.dwFileAttributes = INVALID_FILE_ATTRIBUTES;
 		DWORD dispParam = CREATE_ALWAYS;
-		BOOL doesFileExist = ::PathFileExistsW(fname);
-		if (doesFileExist)
+		bool fileExists = false;
+		bool isTimeoutReached = false;
+		// Store the file creation date & attributes for a possible use later...
+		if (getFileAttributesExWithTimeout(fname, &attributes_original, 0, &isTimeoutReached))
 		{
-			// Store the file creation date & attributes for a possible use later...
-			::GetFileAttributesExW(fname, GetFileExInfoStandard, &attributes_original);
+			fileExists = (attributes_original.dwFileAttributes != INVALID_FILE_ATTRIBUTES && !(attributes_original.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY));
+		}
 
+		if (fileExists)
+		{
 			// Check the existence of Alternate Data Streams
 			WIN32_FIND_STREAM_DATA findData;
 			HANDLE hFind = FindFirstStreamW(fname, FindStreamInfoStandard, &findData, 0);
@@ -46,60 +50,54 @@ Win32_IO_File::Win32_IO_File(const wchar_t *fname)
 				FindClose(hFind);
 			}
 		}
+		else
+		{
+			bool isFromNetwork = PathIsNetworkPath(fname);
+			if (isFromNetwork && isTimeoutReached) // The file doesn't exist, and the file is a network file, plus the network problem has been detected due to timeout
+			{
+				_dwErrorCode = ERROR_FILE_NOT_FOUND; // store
+				return;                              // In this case, we don't call createFile to prevent hanging
+			}
+		}
 
 		_hFile = ::CreateFileW(fname, _accessParam, _shareParam, NULL, dispParam, _attribParam, NULL);
 
 		// Race condition management:
-		//  If file didn't exist while calling PathFileExistsW, but before calling CreateFileW, file is created:  use CREATE_ALWAYS is OK
-		//  If file did exist while calling PathFileExistsW, but before calling CreateFileW, file is deleted:  use TRUNCATE_EXISTING will cause the error
+		//  If file didn't exist while calling getFileAttributesExWithTimeout, but before calling CreateFileW, file is created: use CREATE_ALWAYS is OK
+		//  If file did exist while calling getFileAttributesExWithTimeout, but before calling CreateFileW, file is deleted: use TRUNCATE_EXISTING will cause the error
 		if (dispParam == TRUNCATE_EXISTING && _hFile == INVALID_HANDLE_VALUE && ::GetLastError() == ERROR_FILE_NOT_FOUND)
 		{
 			dispParam = CREATE_ALWAYS;
 			_hFile = ::CreateFileW(fname, _accessParam, _shareParam, NULL, dispParam, _attribParam, NULL);
 		}
 
-		if (doesFileExist && (dispParam == CREATE_ALWAYS) && (_hFile != INVALID_HANDLE_VALUE))
+		if (_hFile == INVALID_HANDLE_VALUE)
+			_dwErrorCode = ::GetLastError(); // store
+
+		if (fileExists && (dispParam == CREATE_ALWAYS) && (_hFile != INVALID_HANDLE_VALUE))
 		{
 			// restore back the original creation date & attributes
 			::SetFileTime(_hFile, &(attributes_original.ftCreationTime), NULL, NULL);
 			::SetFileAttributesW(fname, (_attribParam | attributes_original.dwFileAttributes));
-		}
-
-		NppParameters& nppParam = NppParameters::getInstance();
-		if (nppParam.isEndSessionStarted() && nppParam.doNppLogNulContentCorruptionIssue())
-		{
-			generic_string issueFn = nppLogNulContentCorruptionIssue;
-			issueFn += TEXT(".log");
-			generic_string nppIssueLog = nppParam.getUserPath();
-			pathAppend(nppIssueLog, issueFn);
-
-			std::string msg = _path;
-			if (_hFile != INVALID_HANDLE_VALUE)
-			{
-				msg += " is opened.";
-			}
-			else
-			{
-				msg += " failed to open, CreateFileW ErrorCode: ";
-				msg += std::to_string(::GetLastError());
-			}
-			writeLog(nppIssueLog.c_str(), msg.c_str());
 		}
 	}
 }
 
 void Win32_IO_File::close()
 {
+	_dwErrorCode = NO_ERROR; // reset
+
 	if (isOpened())
 	{
 		NppParameters& nppParam = NppParameters::getInstance();
 
-		DWORD flushError = NOERROR;
+		DWORD flushError = NO_ERROR;
 		if (_written)
 		{
 			if (!::FlushFileBuffers(_hFile))
 			{
 				flushError = ::GetLastError();
+				std::wstring errNumberMsg = std::to_wstring(flushError) + L" - " + GetLastErrorAsString(flushError);
 
 				if (!nppParam.isEndSessionCritical())
 				{
@@ -108,14 +106,13 @@ void Win32_IO_File::close()
 
 					std::wstring curFilePath;
 					const DWORD cchPathBuf = MAX_PATH + 128;
-					WCHAR pathbuf[cchPathBuf]{};
+					wchar_t pathbuf[cchPathBuf]{};
 					// the dwFlags used below are the most error-proof and informative
 					DWORD dwRet = ::GetFinalPathNameByHandle(_hFile, pathbuf, cchPathBuf, FILE_NAME_OPENED | VOLUME_NAME_NT);
 					if ((dwRet == 0) || (dwRet >= cchPathBuf))
 					{
 						// probably insufficient path-buffer length, the classic style must suffice
-						std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-						curFilePath = converter.from_bytes(_path);
+						curFilePath = string2wstring(_path, CP_UTF8);
 					}
 					else
 					{
@@ -133,44 +130,40 @@ void Win32_IO_File::close()
 					errMsg += L"\n\nThat file, temporarily stored in the system cache, cannot be finally committed to the storage device selected! \
 This is probably a storage driver or hardware issue, beyond the control of the Notepad++. \
 Please try using another storage and also check if your saved data is not corrupted.\n\nError Code reported: ";
-					errMsg += std::to_wstring(flushError) + L" - " + GetLastErrorAsString(flushError);
+					errMsg += errNumberMsg;
 					::MessageBoxW(NULL, errMsg.c_str(), L"WARNING - filebuffer flushing fail!", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+				}
+				else
+				{
+					// writing breif log here
+					std::wstring nppFlushFileBuffersFailsLog = L"nppFlushFileBuffersFails.log";
+					std::wstring nppIssueLog = nppParam.getUserPath();
+					pathAppend(nppIssueLog, nppFlushFileBuffersFailsLog);
+
+					std::string errNumberMsgA = wstring2string(errNumberMsg, CP_UTF8);
+
+					writeLog(nppIssueLog.c_str(), errNumberMsgA.c_str());
 				}
 			}
 		}
-		::CloseHandle(_hFile);
+
+		_dwErrorCode = flushError; // store possible flushing error 1st
+
+		if (!::CloseHandle(_hFile))
+		{
+			if (!flushError)
+				_dwErrorCode = ::GetLastError(); // store
+		}
 
 		_hFile = INVALID_HANDLE_VALUE;
-
-		if (nppParam.isEndSessionStarted() && nppParam.doNppLogNulContentCorruptionIssue())
-		{
-			generic_string issueFn = nppLogNulContentCorruptionIssue;
-			issueFn += TEXT(".log");
-			generic_string nppIssueLog = nppParam.getUserPath();
-			pathAppend(nppIssueLog, issueFn);
-
-			std::string msg;
-			if (flushError != NOERROR)
-			{
-				LPSTR messageBuffer = nullptr;
-				FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-					nullptr, flushError, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, nullptr);
-				msg += messageBuffer;
-
-				//Free the buffer.
-				LocalFree(messageBuffer);
-				msg += "\n";
-			}
-			msg += _path;
-			msg += " is closed.";
-			writeLog(nppIssueLog.c_str(), msg.c_str());
-		}
 	}
 }
 
 
 bool Win32_IO_File::write(const void *wbuf, size_t buf_size)
 {
+	_dwErrorCode = NO_ERROR; // reset
+
 	if (!isOpened() || (wbuf == nullptr))
 		return false;
 
@@ -180,6 +173,7 @@ bool Win32_IO_File::write(const void *wbuf, size_t buf_size)
 	size_t bytes_left_to_write = buf_size;
 
 	BOOL success = FALSE;
+	DWORD writeError = NO_ERROR; // use also a local var here to be 100% thread-safe
 
 	do
 	{
@@ -196,50 +190,19 @@ bool Win32_IO_File::write(const void *wbuf, size_t buf_size)
 			bytes_left_to_write -= static_cast<size_t>(bytes_written);
 			total_bytes_written += static_cast<size_t>(bytes_written);
 		}
+		else
+		{
+			writeError = ::GetLastError();
+		}
 	} while (success && bytes_left_to_write);
-
-	NppParameters& nppParam = NppParameters::getInstance();
 
 	if (success == FALSE)
 	{
-		if (nppParam.isEndSessionStarted() && nppParam.doNppLogNulContentCorruptionIssue())
-		{
-			generic_string issueFn = nppLogNulContentCorruptionIssue;
-			issueFn += TEXT(".log");
-			generic_string nppIssueLog = nppParam.getUserPath();
-			pathAppend(nppIssueLog, issueFn);
-
-			std::string msg = _path;
-			msg += " written failed: ";
-			std::wstring lastErrorMsg = GetLastErrorAsString(::GetLastError());
-			std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-			msg += converter.to_bytes(lastErrorMsg);
-			writeLog(nppIssueLog.c_str(), msg.c_str());
-		}
-
+		_dwErrorCode = writeError; // store
 		return false;
 	}
-	else
-	{
-		if (nppParam.isEndSessionStarted() && nppParam.doNppLogNulContentCorruptionIssue())
-		{
-			generic_string issueFn = nppLogNulContentCorruptionIssue;
-			issueFn += TEXT(".log");
-			generic_string nppIssueLog = nppParam.getUserPath();
-			pathAppend(nppIssueLog, issueFn);
 
-			std::string msg = _path;
-			msg += "  ";
-			msg += std::to_string(total_bytes_written);
-			msg += "/";
-			msg += std::to_string(buf_size);
-			msg += " bytes are written.";
-			writeLog(nppIssueLog.c_str(), msg.c_str());
-		}
-	}
-
-	if (!_written)
-		_written = true;
+	_written = true;
 
 	return (total_bytes_written == buf_size);
 }

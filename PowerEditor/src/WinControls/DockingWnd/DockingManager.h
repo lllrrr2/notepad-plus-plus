@@ -23,73 +23,68 @@
 #include "DockingCont.h"
 #include "SplitterContainer.h"
 
-#define DSPC_CLASS_NAME TEXT("dockingManager")
+#define DSPC_CLASS_NAME L"dockingManager"
 #define	CONT_MAP_MAX	50
 
 class DockingSplitter;
 
 class DockingManager : public Window
 {
-public :
+public:
 	DockingManager();
-	~DockingManager();
+	~DockingManager() override;
 
-	void init(HINSTANCE hInst, HWND hWnd, Window ** ppWin);
-	virtual void reSizeTo(RECT & rc);
+	void init(HINSTANCE hInst, HWND hParent, Window ** ppWin);
+	void reSizeTo(RECT & rc) override;
 
 	void setClientWnd(Window ** ppWin) {
 		_ppWindow = ppWin;
 		_ppMainWindow = ppWin;
-	};
+	}
 
 	void showFloatingContainers(bool show);
 
 	void updateContainerInfo(HWND hClient);
-	void createDockableDlg(tTbData data, int iCont = CONT_LEFT, bool isVisible = false);
+	void createDockableDlg(DockedWidgetData data, int iCont = CONT_LEFT, bool isVisible = false);
 	void setActiveTab(int iCont, int iItem);
 	void showDockableDlg(HWND hDlg, BOOL view);
-	void showDockableDlg(TCHAR* pszName, BOOL view);
+	void showDockableDlg(wchar_t* pszName, BOOL view);
 
-	DockingCont* toggleActiveTb(DockingCont* pContSrc, UINT message, BOOL bNew = FALSE, LPRECT rcFloat = NULL);
-	DockingCont* toggleVisTb(DockingCont* pContSrc, UINT message, LPRECT rcFloat = NULL);
-	void		 toggleActiveTb(DockingCont* pContSrc, DockingCont* pContTgt);
-	void		 toggleVisTb(DockingCont* pContSrc, DockingCont* pContTgt);
+	DockingCont* toggleActiveWidget(DockingCont* pContSrc, UINT message, BOOL bNew = FALSE, LPRECT rcFloat = NULL);
+	DockingCont* toggleVisWidget(DockingCont* pContSrc, UINT message, LPRECT rcFloat = NULL);
+
+	void toggleActiveWidget(DockingCont* pContSrc, DockingCont* pContTgt);
+	void toggleVisWidget(DockingCont* pContSrc, DockingCont* pContTgt);
 
 	// get number of container
-	int  GetContainer(DockingCont* pCont); 
+	int getContainerIndex(DockingCont* pCont); 
 
 	// get all container in vector
 	std::vector<DockingCont*> & getContainerInfo() {
 		return _vContainer;
-	};
+	}
+
 	// get dock data (sized areas)
 	void getDockInfo(tDockMgr *pDockData) {
 		*pDockData	= _dockData;
-	};
+	}
 
 	// setting styles of docking
 	void setStyleCaption(BOOL captionOnTop) {
 		_vContainer[CONT_TOP]->setCaptionTop(captionOnTop);
 		_vContainer[CONT_BOTTOM]->setCaptionTop(captionOnTop);
-	};
-
-	void setTabStyle(BOOL orangeLine) {
-		for (size_t i = 0; i < _vContainer.size(); ++i)
-			_vContainer[i]->setTabStyle(orangeLine);
-	};
+	}
 
 	int getDockedContSize(int iCont);
 	void setDockedContSize(int iCont, int iSize);
-	virtual void destroy();
+	void destroy() override;
 	void resize();
 
-private :
+private:
 	Window						**_ppWindow = nullptr;
 	RECT						_rcWork = {};
 	RECT						_rect = {};
 	Window						**_ppMainWindow = nullptr;
-	std::vector<HWND>			_vImageList;
-	HIMAGELIST					_hImageList = nullptr;
 	std::vector<DockingCont*>	_vContainer;
 	tDockMgr					_dockData;
 	static BOOL					_isRegistered;
@@ -101,13 +96,10 @@ private :
 	static LRESULT CALLBACK staticWinProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
 	LRESULT runProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
 
-	void	toggleTb(DockingCont* pContSrc, DockingCont* pContTgt, tTbData TbData);
+	void	toggleWidget(DockingCont* pContSrc, DockingCont* pContTgt, DockedWidgetData TbData);
 
 	// test if container exists
-	BOOL ContExists(size_t iCont);
-	int	 FindEmptyContainer();
+	BOOL doesContExist(size_t iCont);
+	int	 findEmptyContainerIndex();
 	LRESULT SendNotify(HWND hWnd, UINT message);
-	
-
 };
-

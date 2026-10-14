@@ -17,8 +17,9 @@
 
 #pragma once
 
-#include "documentSnapshot_rc.h"
 #include "StaticDialog.h"
+
+#include <windows.h>
 
 class ScintillaEditView;
 class Buffer;
@@ -29,22 +30,18 @@ class DocumentPeeker : public StaticDialog {
 public:
 	DocumentPeeker() = default;
 
-	void init(HINSTANCE hInst, HWND hPere) {
-		Window::init(hInst, hPere);
-	};
-
 	void doDialog(POINT p, Buffer *buf, const ScintillaEditView & scintSource);
 	void syncDisplay(Buffer *buf, const ScintillaEditView & scintSource);
 
-    void setParent(HWND parent2set){
-        _hParent = parent2set;
-    };
+	void setParent(HWND parent2set){
+		_hParent = parent2set;
+	}
 
 	void scrollSnapshotWith(const MapPosition & mapPos, int textZoneWidth);
-	void saveCurrentSnapshot(ScintillaEditView & editView);
+	void saveCurrentSnapshot(const ScintillaEditView& editView);
 
 protected:
-	virtual intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam);
+	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 	void goTo(POINT p);
 
 private:

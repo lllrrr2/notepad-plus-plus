@@ -15,16 +15,61 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 
-
 #include "DocTabView.h"
+
+#include <windows.h>
+
+#include <cwchar>
+
+#include "Buffer.h"
+#include "NppConstants.h"
+#include "Parameters.h"
 #include "ScintillaEditView.h"
+#include "TabBar.h"
+#include "resource.h"
 
-#ifndef _WIN32_IE
-#define _WIN32_IE	0x0600
-#endif //_WIN32_IE
+enum ImgIdx
+{
+	SAVED_IMG_INDEX,
+	UNSAVED_IMG_INDEX,
+	REDONLY_IMG_INDEX,
+	REDONLYSYS_IMG_INDEX,
+	MONITORING_IMG_INDEX,
+};
 
+static constexpr int docTabIconIDs[] = { IDI_SAVED_ICON, IDI_UNSAVED_ICON, IDI_READONLY_ICON, IDI_READONLYSYS_ICON, IDI_MONITORING_ICON };
+static constexpr int docTabIconIDs_darkMode[] = { IDI_SAVED_DM_ICON, IDI_UNSAVED_DM_ICON, IDI_READONLY_DM_ICON, IDI_READONLYSYS_DM_ICON, IDI_MONITORING_DM_ICON };
+static constexpr int docTabIconIDs_alt[] = { IDI_SAVED_ALT_ICON, IDI_UNSAVED_ALT_ICON, IDI_READONLY_ALT_ICON, IDI_READONLYSYS_ALT_ICON, IDI_MONITORING_ICON };
 
-bool DocTabView::_hideTabBarStatus = false;
+void DocTabView::init(HINSTANCE hInst, HWND parent, ScintillaEditView* pView, unsigned char indexChoice, unsigned char buttonsStatus)
+{
+	TabBarPlus::init(hInst, parent, false, false, buttonsStatus);
+	_pView = pView;
+
+	createIconSets();
+
+	_pIconListVector.push_back(&_docTabIconList);         // 0
+	_pIconListVector.push_back(&_docTabIconListAlt);      // 1
+	_pIconListVector.push_back(&_docTabIconListDarkMode); // 2
+
+	if (indexChoice >= _pIconListVector.size())
+		_iconListIndexChoice = 0;
+	else
+		_iconListIndexChoice = indexChoice;
+
+	if (_iconListIndexChoice != -1)
+		TabBar::setImageList(_pIconListVector[_iconListIndexChoice]->getHandle());
+	return;
+}
+
+void DocTabView::createIconSets()
+{
+	int iconDpiDynamicalSize = _dpiManager.scale(g_TabIconSize);
+
+	_docTabIconList.create(iconDpiDynamicalSize, _hInst, docTabIconIDs, sizeof(docTabIconIDs) / sizeof(int));
+	_docTabIconListAlt.create(iconDpiDynamicalSize, _hInst, docTabIconIDs_alt, sizeof(docTabIconIDs_alt) / sizeof(int));
+	_docTabIconListDarkMode.create(iconDpiDynamicalSize, _hInst, docTabIconIDs_darkMode, sizeof(docTabIconIDs_darkMode) / sizeof(int));
+}
 
 void DocTabView::addBuffer(BufferID buffer)
 {
@@ -32,7 +77,7 @@ void DocTabView::addBuffer(BufferID buffer)
 		return;
 	if (getIndexByBuffer(buffer) != -1)	//no duplicates
 		return;
-	Buffer * buf = MainFileManager.getBufferByID(buffer);
+	const Buffer* buf = MainFileManager.getBufferByID(buffer);
 	TCITEM tie{};
 	tie.mask = TCIF_TEXT | TCIF_IMAGE | TCIF_PARAM;
 
@@ -40,7 +85,7 @@ void DocTabView::addBuffer(BufferID buffer)
 	if (_hasImgLst)
 		index = 0;
 	tie.iImage = index;
-	tie.pszText = const_cast<TCHAR *>(buf->getFileName());
+	tie.pszText = const_cast<wchar_t*>(buf->getCompactFileName());
 	tie.lParam = reinterpret_cast<LPARAM>(buffer);
 	::SendMessage(_hSelf, TCM_INSERTITEM, _nbItem++, reinterpret_cast<LPARAM>(&tie));
 	bufferUpdated(buf, BufferChangeMask);
@@ -48,11 +93,10 @@ void DocTabView::addBuffer(BufferID buffer)
 	::SendMessage(_hParent, WM_SIZE, 0, 0);
 }
 
-
 void DocTabView::closeBuffer(BufferID buffer)
 {
 	int indexToClose = getIndexByBuffer(buffer);
-	deletItemAt((size_t)indexToClose);
+	deletItemAt(static_cast<size_t>(indexToClose));
 	::SendMessage(_hParent, WM_SIZE, 0, 0);
 }
 
@@ -61,9 +105,12 @@ void DocTabView::setIndividualTabColour(BufferID bufferId, int colorId)
 	bufferId->setDocColorId(colorId);
 }
 
-int DocTabView::getIndividualTabColour(int tabIndex)
+int DocTabView::getIndividualTabColourId(int tabIndex)
 {
 	BufferID bufferId = getBufferByIndex(tabIndex);
+	if (!bufferId)
+		return -1;
+
 	return bufferId->getDocColorId();
 }
 
@@ -85,7 +132,7 @@ BufferID DocTabView::activeBuffer()
 }
 
 
-BufferID DocTabView::findBufferByName(const TCHAR * fullfilename) //-1 if not found, something else otherwise
+BufferID DocTabView::findBufferByName(const wchar_t * fullfilename) //-1 if not found, something else otherwise
 {
 	TCITEM tie{};
 	tie.lParam = -1;
@@ -94,8 +141,8 @@ BufferID DocTabView::findBufferByName(const TCHAR * fullfilename) //-1 if not fo
 	{
 		::SendMessage(_hSelf, TCM_GETITEM, i, reinterpret_cast<LPARAM>(&tie));
 		BufferID id = reinterpret_cast<BufferID>(tie.lParam);
-		Buffer * buf = MainFileManager.getBufferByID(id);
-		if (OrdinalIgnoreCaseCompareStrings(fullfilename, buf->getFullPathName()) == 0)
+		const Buffer* buf = MainFileManager.getBufferByID(id);
+		if (_wcsicmp(fullfilename, buf->getFullPathName()) == 0)
 		{
 			return id;
 		}
@@ -130,7 +177,7 @@ BufferID DocTabView::getBufferByIndex(size_t index)
 }
 
 
-void DocTabView::bufferUpdated(Buffer * buffer, int mask)
+void DocTabView::bufferUpdated(const Buffer* buffer, int mask)
 {
 	int index = getIndexByBuffer(buffer->getID());
 	if (index == -1)
@@ -148,14 +195,18 @@ void DocTabView::bufferUpdated(Buffer * buffer, int mask)
 		{
 			tie.iImage = MONITORING_IMG_INDEX;
 		}
-		else if (buffer->isReadOnly())
+		else if (buffer->getFileReadOnly())
+		{
+			tie.iImage = REDONLYSYS_IMG_INDEX;
+		}
+		else if (buffer->getUserReadOnly())
 		{
 			tie.iImage = REDONLY_IMG_INDEX;
 		}
 	}
 
 	//We must make space for the added ampersand characters.
-	TCHAR encodedLabel[2 * MAX_PATH] = { '\0' };
+	wchar_t encodedLabel[2 * MAX_PATH] = { '\0' };
 
 	if (mask & BufferChangeFilename)
 	{
@@ -163,8 +214,8 @@ void DocTabView::bufferUpdated(Buffer * buffer, int mask)
 		tie.pszText = encodedLabel;
 
 		{
-			const TCHAR* in = buffer->getFileName();
-			TCHAR* out = encodedLabel;
+			const wchar_t* in = buffer->getCompactFileName();
+			wchar_t* out = encodedLabel;
 
 			//This code will read in one character at a time and duplicate every first ampersand(&).
 			//ex. If input is "test & test && test &&&" then output will be "test && test &&& test &&&&".
@@ -211,8 +262,10 @@ void DocTabView::setBuffer(size_t index, BufferID id)
 
 void DocTabView::reSizeTo(RECT & rc)
 {
-	int borderWidth = ((NppParameters::getInstance()).getSVP())._borderWidth;
-	if (_hideTabBarStatus)
+	NppParameters& nppParam = NppParameters::getInstance();
+	int borderWidth = nppParam.getSVP()._borderWidth;
+	const NppGUI& nppGUI = nppParam.getNppGUI();
+	if (nppGUI._tabStatus & TAB_HIDE)
 	{
 		RECT rcTmp = rc;
 		TabBar::reSizeTo(rcTmp);
@@ -229,4 +282,3 @@ void DocTabView::reSizeTo(RECT & rc)
 	}
 	SendMessage(_hParent, NPPM_INTERNAL_UPDATECLICKABLELINKS, reinterpret_cast<WPARAM>(_pView), 0);
 }
-

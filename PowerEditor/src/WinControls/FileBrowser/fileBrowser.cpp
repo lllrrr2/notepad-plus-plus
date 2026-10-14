@@ -16,30 +16,55 @@
 
 
 #include "fileBrowser.h"
-#include "resource.h"
-#include "tinyxml.h"
-#include "localization.h"
+
+#include <windows.h>
+
+#include <shlwapi.h>
+#include <windowsx.h>
+#include <shlobj.h>
+
+#include <algorithm>
+#include <cstdlib>
+#include <cwchar>
+#include <functional>
+#include <string>
+#include <vector>
+#include <filesystem>
+
+#include "Common.h"
+#include "DockingDlgInterface.h"
+#include "Notepad_plus_msgs.h"
+#include "NppDarkMode.h"
 #include "Parameters.h"
-#include "RunDlg.h"
 #include "ReadDirectoryChanges.h"
+#include "RunDlg.h"
+#include "dockingResource.h"
+#include "dpiManagerV2.h"
+#include "fileBrowser_rc.h"
+#include "localization.h"
 #include "menuCmdID.h"
-
-#define INDEX_OPEN_ROOT      0
-#define INDEX_CLOSE_ROOT     1
-#define INDEX_OPEN_NODE	     2
-#define INDEX_CLOSE_NODE     3
-#define INDEX_LEAF           4
+#include "resource.h"
 
 
-#define GET_X_LPARAM(lp) static_cast<short>(LOWORD(lp))
-#define GET_Y_LPARAM(lp) static_cast<short>(HIWORD(lp))
+enum ItemIdx
+{
+	INDEX_OPEN_ROOT,
+	INDEX_CLOSE_ROOT,
+	INDEX_OPEN_NODE,
+	INDEX_CLOSE_NODE,
+	INDEX_LEAF
+};
 
 #define FB_ADDFILE (WM_USER + 1024)
 #define FB_RMFILE  (WM_USER + 1025)
 #define FB_RNFILE  (WM_USER + 1026)
-#define FB_CMD_AIMFILE 1
-#define FB_CMD_FOLDALL 2
-#define FB_CMD_EXPANDALL 3
+
+enum FBCmd
+{
+	FB_CMD_AIMFILE,
+	FB_CMD_FOLDALL,
+	FB_CMD_EXPANDALL
+};
 
 
 FileBrowser::~FileBrowser()
@@ -50,15 +75,24 @@ FileBrowser::~FileBrowser()
 		delete folder;
 	}
 
-	for (const auto cd : sortingDataArray)
+	for (const auto cd : _sortingDataArray)
 	{
 		delete cd;
 	}
+
+	for (auto hImgList : _iconListVector)
+	{
+		if (hImgList != nullptr)
+		{
+			::ImageList_Destroy(hImgList);
+		}
+	}
+	_iconListVector.clear();
 }
 
-vector<generic_string> split(const generic_string & string2split, TCHAR sep)
+static std::vector<std::wstring> split(const std::wstring& string2split, wchar_t sep)
 {
-	vector<generic_string> splitedStrings;
+	vector<wstring> splitedStrings;
 	size_t len = string2split.length();
 	size_t beginPos = 0;
 	for (size_t i = 0; i < len + 1; ++i)
@@ -72,7 +106,7 @@ vector<generic_string> split(const generic_string & string2split, TCHAR sep)
 	return splitedStrings;
 }
 
-bool isRelatedRootFolder(const generic_string & relatedRoot, const generic_string & subFolder)
+static bool isRelatedRootFolder(const std::wstring& relatedRoot, const std::wstring& subFolder)
 {
 	if (relatedRoot.empty())
 		return false;
@@ -84,8 +118,8 @@ bool isRelatedRootFolder(const generic_string & relatedRoot, const generic_strin
 	if (pos != 0) // pos == 0 is the necessary condition, but not enough
 		return false;
 
-	vector<generic_string> relatedRootArray = split(relatedRoot, '\\');
-	vector<generic_string> subFolderArray = split(subFolder, '\\');
+	vector<wstring> relatedRootArray = split(relatedRoot, '\\');
+	vector<wstring> subFolderArray = split(subFolder, '\\');
 
 	size_t index2Compare = relatedRootArray.size() - 1;
 
@@ -96,44 +130,65 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 {
 	switch (message)
 	{
-		case WM_INITDIALOG :
+		case WM_INITDIALOG:
 		{
 			NppParameters& nppParam = NppParameters::getInstance();
-			int style = WS_CHILD | WS_VISIBLE | CCS_ADJUSTABLE | TBSTYLE_AUTOSIZE | TBSTYLE_FLAT | TBSTYLE_LIST | TBSTYLE_TRANSPARENT | BTNS_AUTOSIZE | BTNS_SEP | TBSTYLE_TOOLTIPS | TBSTYLE_CUSTOMERASE;
+
+			constexpr DWORD style = WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST | TBSTYLE_TRANSPARENT | TBSTYLE_TOOLTIPS | TBSTYLE_CUSTOMERASE;
 			_hToolbarMenu = CreateWindowEx(WS_EX_LAYOUTRTL, TOOLBARCLASSNAME, NULL, style, 0, 0, 0, 0, _hSelf, nullptr, _hInst, NULL);
 
-			// Add the bmap image into toolbar's imagelist
-			int iconSizeDyn = nppParam._dpiManager.scaleX(16);
-			::SendMessage(_hToolbarMenu, TB_SETBITMAPSIZE, 0, MAKELPARAM(iconSizeDyn, iconSizeDyn));
+			const DWORD tbExStyle = static_cast<DWORD>(::SendMessage(_hToolbarMenu, TB_GETEXTENDEDSTYLE, 0, 0));
+			::SendMessage(_hToolbarMenu, TB_SETEXTENDEDSTYLE, 0, tbExStyle | TBSTYLE_EX_DOUBLEBUFFER);
 
-			TBADDBITMAP addbmp = { 0, 0 };
-			const int nbIcons = 3;
+			setDpi();
+			const int iconSizeDyn = _dpiManager.scale(16);
+			constexpr int nbIcons = 3;
 			int iconIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE, IDI_FB_FOLDALL, IDI_FB_EXPANDALL};
 			int iconDarkModeIDs[nbIcons] = { IDI_FB_SELECTCURRENTFILE_DM, IDI_FB_FOLDALL_DM, IDI_FB_EXPANDALL_DM};
+
+			// Create an image lists for the toolbar icons
+			HIMAGELIST hImageList = ImageList_Create(iconSizeDyn, iconSizeDyn, ILC_COLOR32 | ILC_MASK, nbIcons, 0);
+			HIMAGELIST hImageListDm = ImageList_Create(iconSizeDyn, iconSizeDyn, ILC_COLOR32 | ILC_MASK, nbIcons, 0);
+			_iconListVector.push_back(hImageList);
+			_iconListVector.push_back(hImageListDm);
+
 			for (size_t i = 0; i < nbIcons; ++i)
 			{
-				int icoID = NppDarkMode::isEnabled() ? iconDarkModeIDs[i] : iconIDs[i];
-				HBITMAP hBmp = static_cast<HBITMAP>(::LoadImage(_hInst, MAKEINTRESOURCE(icoID), IMAGE_BITMAP, iconSizeDyn, iconSizeDyn, LR_LOADMAP3DCOLORS | LR_LOADTRANSPARENT));
-				addbmp.nID = reinterpret_cast<UINT_PTR>(hBmp);
-				::SendMessage(_hToolbarMenu, TB_ADDBITMAP, 1, reinterpret_cast<LPARAM>(&addbmp));
+				int icoID = iconIDs[i];
+				HICON hIcon = nullptr;
+				DPIManagerV2::loadIcon(_hInst, MAKEINTRESOURCE(icoID), iconSizeDyn, iconSizeDyn, &hIcon, LR_LOADMAP3DCOLORS | LR_LOADTRANSPARENT);
+				ImageList_AddIcon(_iconListVector.at(0), hIcon);
+				::DestroyIcon(hIcon);
+				hIcon = nullptr;
+
+				icoID = iconDarkModeIDs[i];
+				DPIManagerV2::loadIcon(_hInst, MAKEINTRESOURCE(icoID), iconSizeDyn, iconSizeDyn, &hIcon, LR_LOADMAP3DCOLORS | LR_LOADTRANSPARENT);
+				ImageList_AddIcon(_iconListVector.at(1), hIcon);
+				::DestroyIcon(hIcon); // Clean up the loaded icon
 			}
 
-			TBBUTTON tbButtons[nbIcons];
+			// Attach the image list to the toolbar
+			::SendMessage(_hToolbarMenu, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(_iconListVector.at(NppDarkMode::isEnabled() ? 1 : 0)));
+
+			TBBUTTON tbButtons[nbIcons]{};
+
 			tbButtons[0].idCommand = FB_CMD_AIMFILE;
 			tbButtons[0].iBitmap = 0;
 			tbButtons[0].fsState = TBSTATE_ENABLED;
-			tbButtons[0].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-			tbButtons[0].iString = reinterpret_cast<intptr_t>(TEXT(""));
+			tbButtons[0].fsStyle = BTNS_BUTTON;
+			tbButtons[0].iString = 0;
+
 			tbButtons[1].idCommand = FB_CMD_FOLDALL;
 			tbButtons[1].iBitmap = 1;
 			tbButtons[1].fsState = TBSTATE_ENABLED;
-			tbButtons[1].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-			tbButtons[1].iString = reinterpret_cast<intptr_t>(TEXT(""));
+			tbButtons[1].fsStyle = BTNS_BUTTON;
+			tbButtons[1].iString = 0;
+
 			tbButtons[2].idCommand = FB_CMD_EXPANDALL;
 			tbButtons[2].iBitmap = 2;
 			tbButtons[2].fsState = TBSTATE_ENABLED;
-			tbButtons[2].fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-			tbButtons[2].iString = reinterpret_cast<intptr_t>(TEXT(""));
+			tbButtons[2].fsStyle = BTNS_BUTTON;
+			tbButtons[2].iString = 0;
 
 			// tips text for toolbar buttons
 			NativeLangSpeaker *pNativeSpeaker = nppParam.getNativeLangSpeaker();
@@ -142,18 +197,22 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 			_locateCurrentFile = pNativeSpeaker->getAttrNameStr(_locateCurrentFile.c_str(), FOLDERASWORKSPACE_NODE, "LocateCurrentFileTip");
 
 			::SendMessage(_hToolbarMenu, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-			::SendMessage(_hToolbarMenu, TB_SETBUTTONSIZE, 0, MAKELONG(nppParam._dpiManager.scaleX(20), nppParam._dpiManager.scaleY(20)));
-			::SendMessage(_hToolbarMenu, TB_SETPADDING, 0, MAKELONG(nppParam._dpiManager.scaleX(10), 0));
+			::SendMessage(_hToolbarMenu, TB_SETBUTTONSIZE, 0, MAKELONG(iconSizeDyn, iconSizeDyn));
 			::SendMessage(_hToolbarMenu, TB_ADDBUTTONS, sizeof(tbButtons) / sizeof(TBBUTTON), reinterpret_cast<LPARAM>(&tbButtons));
 			::SendMessage(_hToolbarMenu, TB_AUTOSIZE, 0, 0);
 			
-			::SendMessage(_hToolbarMenu, TB_GETIMAGELIST, 0, 0);
 			ShowWindow(_hToolbarMenu, SW_SHOW);
 
 			FileBrowser::initPopupMenus();
 
+			std::vector<int> imgIds = _treeView.getImageIds(
+				{ IDI_FB_ROOTOPEN, IDI_FB_ROOTCLOSE, IDI_PROJECT_FOLDEROPEN, IDI_PROJECT_FOLDERCLOSE, IDI_PROJECT_FILE }
+				, { IDI_FB_ROOTOPEN_DM, IDI_FB_ROOTCLOSE_DM, IDI_PROJECT_FOLDEROPEN_DM, IDI_PROJECT_FOLDERCLOSE_DM, IDI_PROJECT_FILE_DM }
+				, { IDI_FB_ROOTOPEN2, IDI_FB_ROOTCLOSE2, IDI_PROJECT_FOLDEROPEN2, IDI_PROJECT_FOLDERCLOSE2, IDI_PROJECT_FILE2 }
+			);
+
 			_treeView.init(_hInst, _hSelf, ID_FILEBROWSERTREEVIEW);
-			_treeView.setImageList(CX_BITMAP, CY_BITMAP, 5, IDI_FB_ROOTOPEN, IDI_FB_ROOTCLOSE, IDI_PROJECT_FOLDEROPEN, IDI_PROJECT_FOLDERCLOSE, IDI_PROJECT_FILE);
+			_treeView.setImageList(imgIds);
 
 			_treeView.addCanNotDropInList(INDEX_OPEN_ROOT);
 			_treeView.addCanNotDropInList(INDEX_CLOSE_ROOT);
@@ -181,8 +240,21 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 			if (static_cast<BOOL>(lParam) != TRUE)
 			{
 				NppDarkMode::autoThemeChildControls(_hSelf);
+				::SendMessage(_hToolbarMenu, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(_iconListVector.at(NppDarkMode::isEnabled() ? 1 : 0)));
 			}
-			NppDarkMode::setTreeViewStyle(_treeView.getHSelf());
+			else
+			{
+				NppDarkMode::setTreeViewStyle(_treeView.getHSelf());
+			}
+
+			std::vector<int> imgIds = _treeView.getImageIds(
+				{ IDI_FB_ROOTOPEN, IDI_FB_ROOTCLOSE, IDI_PROJECT_FOLDEROPEN, IDI_PROJECT_FOLDERCLOSE, IDI_PROJECT_FILE }
+				, { IDI_FB_ROOTOPEN_DM, IDI_FB_ROOTCLOSE_DM, IDI_PROJECT_FOLDEROPEN_DM, IDI_PROJECT_FOLDERCLOSE_DM, IDI_PROJECT_FILE_DM }
+				, { IDI_FB_ROOTOPEN2, IDI_FB_ROOTCLOSE2, IDI_PROJECT_FOLDEROPEN2, IDI_PROJECT_FOLDERCLOSE2, IDI_PROJECT_FILE2 }
+			);
+
+			_treeView.setImageList(imgIds);
+
 			return TRUE;
 		}
 
@@ -208,7 +280,7 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 		{
 			int width = LOWORD(lParam);
 			int height = HIWORD(lParam);
-			int extraValue = NppParameters::getInstance()._dpiManager.scaleX(4);
+			int extraValue = _dpiManager.scale(4);
 
 			RECT toolbarMenuRect;
 			::GetClientRect(_hToolbarMenu, &toolbarMenuRect);
@@ -290,31 +362,31 @@ intptr_t CALLBACK FileBrowser::run_dlgProc(UINT message, WPARAM wParam, LPARAM l
 
 		case FB_RNFILE:
 		{
-			const std::vector<generic_string> file2Change = *(std::vector<generic_string> *)lParam;
-			generic_string separator = TEXT("\\\\");
+			const auto& file2Change = *reinterpret_cast<std::vector<std::wstring>*>(lParam);
+			wstring separator = L"\\\\";
 
 			size_t sepPos = file2Change[0].find(separator);
-			if (sepPos == generic_string::npos)
+			if (sepPos == wstring::npos)
 				return false;
 
-			generic_string pathSuffix = file2Change[0].substr(sepPos + separator.length(), file2Change[0].length() - 1);
+			wstring pathSuffix = file2Change[0].substr(sepPos + separator.length(), file2Change[0].length() - 1);
 
 			// remove prefix of file/folder in changeInfo, splite the remained path
-			vector<generic_string> linarPathArray = split(pathSuffix, '\\');
+			vector<wstring> linarPathArray = split(pathSuffix, '\\');
 
-			generic_string rootPath = file2Change[0].substr(0, sepPos);
+			wstring rootPath = file2Change[0].substr(0, sepPos);
 
 			size_t sepPos2 = file2Change[1].find(separator);
-			if (sepPos2 == generic_string::npos)
+			if (sepPos2 == wstring::npos)
 				return false;
 
-			generic_string pathSuffix2 = file2Change[1].substr(sepPos2 + separator.length(), file2Change[1].length() - 1);
-			vector<generic_string> linarPathArray2 = split(pathSuffix2, '\\');
+			wstring pathSuffix2 = file2Change[1].substr(sepPos2 + separator.length(), file2Change[1].length() - 1);
+			vector<wstring> linarPathArray2 = split(pathSuffix2, '\\');
 
 			bool isRenamed = renameInTree(rootPath, nullptr, linarPathArray, linarPathArray2[linarPathArray2.size() - 1]);
 			if (!isRenamed)
 			{
-				//MessageBox(NULL, file2Change[0].c_str(), TEXT("file/folder is not removed"), MB_OK);
+				//MessageBox(NULL, file2Change[0].c_str(), L"file/folder is not removed", MB_OK);
 			}
 			break;
 		}
@@ -329,16 +401,17 @@ void FileBrowser::initPopupMenus()
 {
 	NativeLangSpeaker* pNativeSpeaker = NppParameters::getInstance().getNativeLangSpeaker();
 
-	generic_string addRoot = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_ADDROOT, FB_ADDROOT);
-	generic_string removeAllRoot = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_REMOVEALLROOTS, FB_REMOVEALLROOTS);
-	generic_string removeRootFolder = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_REMOVEROOTFOLDER, FB_REMOVEROOTFOLDER);
-	generic_string copyPath = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_COPYPATH, FB_COPYPATH);
-	generic_string copyFileName = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_COPYFILENAME, FB_COPYFILENAME);
-	generic_string findInFile = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_FINDINFILES, FB_FINDINFILES);
-	generic_string explorerHere = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_EXPLORERHERE, FB_EXPLORERHERE);
-	generic_string cmdHere = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_CMDHERE, FB_CMDHERE);
-	generic_string openInNpp = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_OPENINNPP, FB_OPENINNPP);
-	generic_string shellExecute = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_SHELLEXECUTE, FB_SHELLEXECUTE);
+	wstring addRoot = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_ADDROOT, FB_ADDROOT);
+	wstring removeAllRoot = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_REMOVEALLROOTS, FB_REMOVEALLROOTS);
+	wstring removeRootFolder = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_REMOVEROOTFOLDER, FB_REMOVEROOTFOLDER);
+	wstring copyPath = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_COPYPATH, FB_COPYPATH);
+	wstring copyFileName = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_COPYFILENAME, FB_COPYFILENAME);
+	wstring findInFile = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_FINDINFILES, FB_FINDINFILES);
+	wstring explorerHere = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_EXPLORERHERE, FB_EXPLORERHERE);
+	wstring cmdHere = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_CMDHERE, FB_CMDHERE);
+	wstring powershellHere = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_POWERSHELLHERE, FB_POWERSHELLHERE);
+	wstring openInNpp = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_OPENINNPP, FB_OPENINNPP);
+	wstring shellExecute = pNativeSpeaker->getDlgLangMenuStr(FOLDERASWORKSPACE_NODE, nullptr, IDM_FILEBROWSER_SHELLEXECUTE, FB_SHELLEXECUTE);
 
 	_hGlobalMenu = ::CreatePopupMenu();
 	::InsertMenu(_hGlobalMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_ADDROOT, addRoot.c_str());
@@ -352,6 +425,7 @@ void FileBrowser::initPopupMenus()
 	::InsertMenu(_hRootMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
 	::InsertMenu(_hRootMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_EXPLORERHERE, explorerHere.c_str());
 	::InsertMenu(_hRootMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_CMDHERE, cmdHere.c_str());
+	::InsertMenu(_hRootMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_POWERSHELLHERE, powershellHere.c_str());
 
 	_hFolderMenu = ::CreatePopupMenu();
 	::InsertMenu(_hFolderMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_COPYPATH, copyPath.c_str());
@@ -359,7 +433,8 @@ void FileBrowser::initPopupMenus()
 	::InsertMenu(_hFolderMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
 	::InsertMenu(_hFolderMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_EXPLORERHERE, explorerHere.c_str());
 	::InsertMenu(_hFolderMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_CMDHERE, cmdHere.c_str());
-	
+	::InsertMenu(_hFolderMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_POWERSHELLHERE, powershellHere.c_str());
+
 	_hFileMenu = ::CreatePopupMenu();
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_OPENINNPP, openInNpp.c_str());
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
@@ -369,9 +444,10 @@ void FileBrowser::initPopupMenus()
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, static_cast<UINT>(-1), 0);
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_EXPLORERHERE, explorerHere.c_str());
 	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_CMDHERE, cmdHere.c_str());
+	::InsertMenu(_hFileMenu, 0, MF_BYCOMMAND, IDM_FILEBROWSER_POWERSHELLHERE, powershellHere.c_str());
 }
 
-bool FileBrowser::selectItemFromPath(const generic_string& itemPath) const
+bool FileBrowser::selectItemFromPath(const wstring& itemPath) const
 {
 	if (itemPath.empty())
 		return false;
@@ -382,19 +458,19 @@ bool FileBrowser::selectItemFromPath(const generic_string& itemPath) const
 	{
 		if (isRelatedRootFolder(f->_rootFolder._rootPath, itemPath))
 		{
-			generic_string rootPath = f->_rootFolder._rootPath;
+			wstring rootPath = f->_rootFolder._rootPath;
 			size_t rootPathLen = rootPath.size();
 			if (rootPathLen > itemPathLen) // It should never happen
 				return false;
 
-			vector<generic_string> linarPathArray;
+			vector<wstring> linarPathArray;
 			if (rootPathLen == itemPathLen)
 			{
 				// Do nothing and use empty linarPathArray
 			}
 			else
 			{
-				generic_string pathSuffix = itemPath.substr(rootPathLen + 1, itemPathLen - rootPathLen);
+				wstring pathSuffix = itemPath.substr(rootPathLen + 1, itemPathLen - rootPathLen);
 				linarPathArray = split(pathSuffix, '\\');
 			}
 			HTREEITEM foundItem = findInTree(rootPath, nullptr, linarPathArray);
@@ -402,7 +478,7 @@ bool FileBrowser::selectItemFromPath(const generic_string& itemPath) const
 			if (foundItem)
 			{
 				_treeView.selectItem(foundItem);
-				_treeView.getFocus();
+				_treeView.grabFocus();
 				return true;
 			}
 		}
@@ -412,9 +488,9 @@ bool FileBrowser::selectItemFromPath(const generic_string& itemPath) const
 
 bool FileBrowser::selectCurrentEditingFile() const
 {
-	TCHAR currentDocPath[MAX_PATH] = { '\0' };
+	wchar_t currentDocPath[MAX_PATH] = { '\0' };
 	::SendMessage(_hParent, NPPM_GETFULLCURRENTPATH, MAX_PATH, reinterpret_cast<LPARAM>(currentDocPath));
-	generic_string currentDocPathStr = currentDocPath;
+	wstring currentDocPathStr = currentDocPath;
 
 	return selectItemFromPath(currentDocPathStr);
 }
@@ -427,23 +503,23 @@ void FileBrowser::destroyMenus()
 	::DestroyMenu(_hFileMenu);
 }
 
-generic_string FileBrowser::getNodePath(HTREEITEM node) const
+wstring FileBrowser::getNodePath(HTREEITEM node) const
 {
-	if (!node) return TEXT("");
+	if (!node) return L"";
 
-	vector<generic_string> fullPathArray;
-	generic_string fullPath;
+	vector<wstring> fullPathArray;
+	wstring fullPath;
 
 	// go up until to root, then get the full path
 	HTREEITEM parent = node;
 	for (; parent != nullptr;)
 	{
-		generic_string folderName = _treeView.getItemDisplayName(parent);
+		wstring folderName = _treeView.getItemDisplayName(parent);
 	
 		HTREEITEM temp = _treeView.getParent(parent);
 		if (temp == nullptr)
 		{
-			SortingData4lParam* customData = reinterpret_cast<SortingData4lParam*>(_treeView.getItemParam(parent));
+			const SortingData4lParam* customData = reinterpret_cast<SortingData4lParam*>(_treeView.getItemParam(parent));
 			folderName = customData->_rootPath;
 		}
 		parent = temp;
@@ -455,15 +531,15 @@ generic_string FileBrowser::getNodePath(HTREEITEM node) const
 	{
 		fullPath += fullPathArray[i];
 		if (i != 0)
-			fullPath += TEXT("\\");
+			fullPath += L"\\";
 	}
 
 	return fullPath;
 }
 
-generic_string FileBrowser::getNodeName(HTREEITEM node) const
+wstring FileBrowser::getNodeName(HTREEITEM node) const
 {
-	return node ? _treeView.getItemDisplayName(node) : TEXT("");
+	return node ? _treeView.getItemDisplayName(node) : L"";
 }
 
 void FileBrowser::openSelectFile()
@@ -475,9 +551,7 @@ void FileBrowser::openSelectFile()
 	_selectedNodeFullPath = getNodePath(selectedNode);
 
 	// test the path - if it's a file, open it, otherwise just fold or unfold it
-	if (!::PathFileExists(_selectedNodeFullPath.c_str()))
-		return;
-	if (::PathIsDirectory(_selectedNodeFullPath.c_str()))
+	if (!doesFileExist(_selectedNodeFullPath.c_str()))
 		return;
 
 	::PostMessage(_hParent, NPPM_DOOPEN, 0, reinterpret_cast<LPARAM>(_selectedNodeFullPath.c_str()));
@@ -510,8 +584,8 @@ void FileBrowser::notified(LPNMHDR notification)
 	}
 	else if (notification->hwndFrom == _treeView.getHSelf())
 	{
-		TCHAR textBuffer[MAX_PATH] = { '\0' };
-		TVITEM tvItem;
+		wchar_t textBuffer[MAX_PATH] = { '\0' };
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_TEXT | TVIF_PARAM;
 		tvItem.pszText = textBuffer;
 		tvItem.cchTextMax = MAX_PATH;
@@ -542,16 +616,16 @@ void FileBrowser::notified(LPNMHDR notification)
 
 					// Find the position of old label in File path
 					SortingData4lParam* customData = reinterpret_cast<SortingData4lParam*>(tvnotif->item.lParam);
-					generic_string *filePath = &(customData->_rootPath);
+					wstring *filePath = &(customData->_rootPath);
 					size_t found = filePath->rfind(tvItem.pszText);
 
 					// If found the old label, replace it with the modified one
-					if (found != generic_string::npos)
+					if (found != wstring::npos)
 						filePath->replace(found, len, tvnotif->item.pszText);
 
 					// Check the validity of modified file path
 					tvItem.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-					if (::PathFileExists(filePath->c_str()))
+					if (doesPathExist(filePath->c_str()))
 					{
 						tvItem.iImage = INDEX_LEAF;
 						tvItem.iSelectedImage = INDEX_LEAF;
@@ -571,11 +645,11 @@ void FileBrowser::notified(LPNMHDR notification)
 			case TVN_GETINFOTIP:
 			{
 				LPNMTVGETINFOTIP lpGetInfoTip = (LPNMTVGETINFOTIP)notification;
-				static generic_string tipStr;
+				static wstring tipStr;
 				BrowserNodeType nType = getNodeType(lpGetInfoTip->hItem);
 				if (nType == browserNodeType_root)
 				{
-					tipStr = *((generic_string *)lpGetInfoTip->lParam);
+					tipStr = *(reinterpret_cast<std::wstring*>(lpGetInfoTip->lParam));
 				}
 				else if (nType == browserNodeType_file)
 				{
@@ -667,7 +741,6 @@ void FileBrowser::notified(LPNMHDR notification)
 			case TVN_BEGINDRAG:
 			{
 				_treeView.beginDrag((LPNMTREEVIEW)notification);
-				
 			}
 			break;
 		}
@@ -676,7 +749,7 @@ void FileBrowser::notified(LPNMHDR notification)
 
 BrowserNodeType FileBrowser::getNodeType(HTREEITEM hItem)
 {
-	TVITEM tvItem;
+	TVITEM tvItem{};
 	tvItem.hItem = hItem;
 	tvItem.mask = TVIF_IMAGE | TVIF_PARAM;
 	SendMessage(_treeView.getHSelf(), TVM_GETITEM, 0, reinterpret_cast<LPARAM>(&tvItem));
@@ -750,7 +823,7 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		{
 			if (!selectedNode) return;
 
-			generic_string *rootPath = (generic_string *)_treeView.getItemParam(selectedNode);
+			const auto* rootPath = reinterpret_cast<std::wstring*>(_treeView.getItemParam(selectedNode));
 			if (_treeView.getParent(selectedNode) != nullptr || rootPath == nullptr)
 				return;
 
@@ -771,33 +844,69 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_EXPLORERHERE:
 		{
 			if (!selectedNode) return;
-
-			generic_string path = getNodePath(selectedNode);
-			if (::PathFileExists(path.c_str()))
+			wstring selPath = getNodePath(selectedNode);
+			if (doesPathExist(selPath.c_str()))
 			{
-				TCHAR cmdStr[1024] = {};
-				if (getNodeType(selectedNode) == browserNodeType_file)
-					wsprintf(cmdStr, TEXT("explorer /select,\"%s\""), path.c_str());
+				namespace fs = std::filesystem;
+				bool isFolder = fs::is_directory(selPath);
+				
+				if (isFolder)
+				{
+					// Just open the folder without selecting anything
+					::ShellExecuteW(getHSelf(), L"explore", selPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+				}
 				else
-					wsprintf(cmdStr, TEXT("explorer \"%s\""), path.c_str());
-				Command cmd(cmdStr);
-				cmd.run(nullptr);
+				{
+					HRESULT hr = openInExplorerAndSelect(selPath.c_str());
+					if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
+					{
+						// Fallback: open parent folder
+						::ShellExecuteW(getHSelf(), L"explore", fs::path(selPath).parent_path().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+					}
+				}
 			}
 		}
 		break;
 
 		case IDM_FILEBROWSER_CMDHERE:
+		case IDM_FILEBROWSER_POWERSHELLHERE:
 		{
 			if (!selectedNode) return;
 
 			if (getNodeType(selectedNode) == browserNodeType_file)
 				selectedNode = _treeView.getParent(selectedNode);
 
-			generic_string path = getNodePath(selectedNode);
-			if (::PathFileExists(path.c_str()))
+			wstring path = getNodePath(selectedNode);
+			if (doesPathExist(path.c_str()))
 			{
-				Command cmd(NppParameters::getInstance().getNppGUI()._commandLineInterpreter.c_str());
-				cmd.run(nullptr, path.c_str());
+				if (cmdID == IDM_FILEBROWSER_CMDHERE)
+				{
+					Command cmd(L"%COMSPEC%");
+					cmd.run(nullptr, path.c_str());
+				}
+				else
+				{
+					static wchar_t psPath[512] = { L'\0' };
+					if (psPath[0] == L'\0')
+					{
+						const wchar_t* subkey = L"SOFTWARE\\Microsoft\\PowerShell\\1\\ShellIds\\Microsoft.PowerShell";
+						const wchar_t* valueName = L"Path";
+						HKEY hKey = nullptr;
+
+						LONG status = ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ, &hKey);
+
+						if (status != ERROR_SUCCESS) return; // key not found
+
+						DWORD bufSize = sizeof(psPath);
+
+						status = ::RegGetValueW(hKey, nullptr, valueName, RRF_RT_REG_SZ, nullptr, psPath, &bufSize);
+						::RegCloseKey(hKey);
+
+						if (status != ERROR_SUCCESS) return; // value not found
+					}
+					Command powerShell(psPath);
+					powerShell.run(nullptr, path.c_str());
+				}
 			}
 		}
 		break;
@@ -805,7 +914,7 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_COPYPATH:
 		{
 			if (!selectedNode) return;
-			generic_string path = getNodePath(selectedNode);
+			wstring path = getNodePath(selectedNode);
 			str2Clipboard(path, _hParent);
 		}
 		break;
@@ -813,7 +922,7 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_COPYFILENAME:
 		{
 			if (!selectedNode) return;
-			generic_string fileName = getNodeName(selectedNode);
+			wstring fileName = getNodeName(selectedNode);
 			str2Clipboard(fileName, _hParent);
 		}
 		break;
@@ -821,7 +930,7 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_FINDINFILES:
 		{
 			if (!selectedNode) return;
-			generic_string path = getNodePath(selectedNode);
+			wstring path = getNodePath(selectedNode);
 			::SendMessage(_hParent, NPPM_LAUNCHFINDINFILESDLG, reinterpret_cast<WPARAM>(path.c_str()), 0);
 		}
 		break;
@@ -850,8 +959,8 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_ADDROOT:
 		{
 			NativeLangSpeaker *pNativeSpeaker = (NppParameters::getInstance()).getNativeLangSpeaker();
-			generic_string openWorkspaceStr = pNativeSpeaker->getAttrNameStr(TEXT("Select a folder to add in Folder as Workspace panel"), FOLDERASWORKSPACE_NODE, "SelectFolderFromBrowserString");
-			generic_string folderPath = folderBrowser(_hParent, openWorkspaceStr);
+			wstring openWorkspaceStr = pNativeSpeaker->getAttrNameStr(L"Select a folder to add in Folder as Workspace panel", FOLDERASWORKSPACE_NODE, "SelectFolderFromBrowserString");
+			wstring folderPath = folderBrowser(_hParent, openWorkspaceStr);
 			if (!folderPath.empty())
 			{
 				addRootFolder(folderPath);
@@ -862,10 +971,18 @@ void FileBrowser::popupMenuCmd(int cmdID)
 		case IDM_FILEBROWSER_SHELLEXECUTE:
 		{
 			if (!selectedNode) return;
-			generic_string path = getNodePath(selectedNode);
+			wstring literalPath = L"\\\\?\\" + getNodePath(selectedNode);
 
-			if (::PathFileExists(path.c_str()))
-				::ShellExecute(NULL, TEXT("open"), path.c_str(), NULL, NULL, SW_SHOWNORMAL);
+			if (doesPathExist(literalPath.c_str()))
+			{
+				SHELLEXECUTEINFO sei{};
+				sei.cbSize = sizeof(sei);
+				sei.fMask = SEE_MASK_FLAG_NO_UI;
+				sei.lpVerb = L"open";
+				sei.lpFile = literalPath.c_str();
+				sei.nShow = SW_SHOWNORMAL;
+				::ShellExecuteEx(&sei);
+			}
 		}
 		break;
 	}
@@ -873,15 +990,15 @@ void FileBrowser::popupMenuCmd(int cmdID)
 
 
 
-void FileBrowser::getDirectoryStructure(const TCHAR *dir, const std::vector<generic_string> & patterns, FolderInfo & directoryStructure, bool isRecursive, bool isInHiddenDir)
+void FileBrowser::getDirectoryStructure(const wchar_t *dir, const std::vector<wstring> & patterns, FolderInfo & directoryStructure, bool isRecursive, bool isInHiddenDir)
 {
 	if (directoryStructure._parent == nullptr) // Root!
 		directoryStructure.setRootPath(dir);
 
-	generic_string dirFilter(dir);
+	wstring dirFilter(dir);
 	if (dirFilter[dirFilter.length() - 1] != '\\')
-		dirFilter += TEXT("\\");
-	dirFilter += TEXT("*.*");
+		dirFilter += L"\\";
+	dirFilter += L"*.*";
 	WIN32_FIND_DATA foundData;
 
 	HANDLE hFindFile = ::FindFirstFile(dirFilter.c_str(), &foundData);
@@ -889,6 +1006,9 @@ void FileBrowser::getDirectoryStructure(const TCHAR *dir, const std::vector<gene
 	{
 		do
 		{
+			if ((foundData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && !NppParameters::getInstance().getNppGUI()._isFawSymlinkAllowed) // Ignore junctions and symbolic links to prevent infinite recursive loop, if not allowed
+				return;
+
 			if (foundData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 			{
 				if (!isInHiddenDir && (foundData.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
@@ -897,14 +1017,14 @@ void FileBrowser::getDirectoryStructure(const TCHAR *dir, const std::vector<gene
 				}
 				else if (isRecursive)
 				{
-					if ((OrdinalIgnoreCaseCompareStrings(foundData.cFileName, TEXT(".")) != 0) && 
-						(OrdinalIgnoreCaseCompareStrings(foundData.cFileName, TEXT("..")) != 0))
+					if ((wcscmp(foundData.cFileName, L".") != 0) && 
+						(wcscmp(foundData.cFileName, L"..") != 0))
 					{
-						generic_string pathDir(dir);
+						wstring pathDir(dir);
 						if (pathDir[pathDir.length() - 1] != '\\')
-							pathDir += TEXT("\\");
+							pathDir += L"\\";
 						pathDir += foundData.cFileName;
-						pathDir += TEXT("\\");
+						pathDir += L"\\";
 
 						FolderInfo subDirectoryStructure(foundData.cFileName, &directoryStructure);
 						getDirectoryStructure(pathDir.c_str(), patterns, subDirectoryStructure, isRecursive, isInHiddenDir);
@@ -924,12 +1044,9 @@ void FileBrowser::getDirectoryStructure(const TCHAR *dir, const std::vector<gene
 	}
 }
 
-void FileBrowser::addRootFolder(generic_string rootFolderPath)
+void FileBrowser::addRootFolder(wstring rootFolderPath, std::unordered_set<std::wstring>* pExpandedPaths)
 {
-	if (!::PathFileExists(rootFolderPath.c_str()))
-		return;
-
-	if (!::PathIsDirectory(rootFolderPath.c_str()))
+	if (!doesDirectoryExist(rootFolderPath.c_str()))
 		return;
 
 	// make sure there's no '\' at the end
@@ -947,9 +1064,9 @@ void FileBrowser::addRootFolder(generic_string rootFolderPath)
 			if (isRelatedRootFolder(f->_rootFolder._rootPath, rootFolderPath))
 			{
 				//do nothing, go down to select the dir
-				generic_string rootPath = f->_rootFolder._rootPath;
-				generic_string pathSuffix = rootFolderPath.substr(rootPath.size() + 1, rootFolderPath.size() - rootPath.size());
-				vector<generic_string> linarPathArray = split(pathSuffix, '\\');
+				wstring rootPath = f->_rootFolder._rootPath;
+				wstring pathSuffix = rootFolderPath.substr(rootPath.size() + 1, rootFolderPath.size() - rootPath.size());
+				vector<wstring> linarPathArray = split(pathSuffix, '\\');
 				
 				HTREEITEM foundItem = findInTree(rootPath, nullptr, linarPathArray);
 				if (foundItem)
@@ -961,8 +1078,8 @@ void FileBrowser::addRootFolder(generic_string rootFolderPath)
 			{
 				NppParameters::getInstance().getNativeLangSpeaker()->messageBox("FolderAsWorspaceSubfolderExists",
 					_hParent,
-					TEXT("A sub-folder of the folder you want to add exists.\rPlease remove its root from the panel before you add folder \"$STR_REPLACE$\"."),
-					TEXT("Folder as Workspace adding folder problem"),
+					L"A sub-folder of the folder you want to add exists.\rPlease remove its root from the panel before you add folder \"$STR_REPLACE$\".",
+					L"Folder as Workspace adding folder problem",
 					MB_OK,
 					0, // not used
 					rootFolderPath.c_str());
@@ -971,11 +1088,11 @@ void FileBrowser::addRootFolder(generic_string rootFolderPath)
 		}
 	}
 
-	std::vector<generic_string> patterns2Match;
-	patterns2Match.push_back(TEXT("*.*"));
+	std::vector<wstring> patterns2Match;
+	patterns2Match.push_back(L"*.*");
 
-	TCHAR *label = ::PathFindFileName(rootFolderPath.c_str());
-	TCHAR rootLabel[MAX_PATH] = {'\0'};
+	wchar_t *label = ::PathFindFileName(rootFolderPath.c_str());
+	wchar_t rootLabel[MAX_PATH] = {'\0'};
 	wcscpy_s(rootLabel, label);
 	size_t len = lstrlen(rootLabel);
 	if (rootLabel[len - 1] == '\\')
@@ -984,7 +1101,20 @@ void FileBrowser::addRootFolder(generic_string rootFolderPath)
 	FolderInfo directoryStructure(rootLabel, nullptr);
 	getDirectoryStructure(rootFolderPath.c_str(), patterns2Match, directoryStructure, true, false);
 	HTREEITEM hRootItem = createFolderItemsFromDirStruct(nullptr, directoryStructure);
-	_treeView.expand(hRootItem);
+	_treeView.customSorting(hRootItem, categorySortFunc, 0, true); // needed here for possible *nix like storages (Samba, WebDAV, WSL, ...)
+
+	if (pExpandedPaths)
+	{
+		applyExpandState(hRootItem, pExpandedPaths);
+	}
+	/*
+	else
+	{
+		//_treeView.fold(hRootItem);
+		// Nothing to do, the root is already folded by default
+	}
+	*/
+
 	_folderUpdaters.push_back(new FolderUpdater(directoryStructure, this));
 	_folderUpdaters[_folderUpdaters.size() - 1]->startWatcher();
 }
@@ -994,21 +1124,21 @@ HTREEITEM FileBrowser::createFolderItemsFromDirStruct(HTREEITEM hParentItem, con
 	HTREEITEM hFolderItem = nullptr;
 	if (directoryStructure._parent == nullptr && hParentItem == nullptr)
 	{
-		TCHAR rootPath[MAX_PATH] = { '\0' };
+		wchar_t rootPath[MAX_PATH] = { '\0' };
 		wcscpy_s(rootPath, directoryStructure._rootPath.c_str());
 		size_t len = lstrlen(rootPath);
 		if (rootPath[len - 1] == '\\')
 			rootPath[len - 1] = '\0';
 
-		SortingData4lParam* customData = new SortingData4lParam(rootPath, TEXT(""), true);
-		sortingDataArray.push_back(customData);
+		SortingData4lParam* customData = new SortingData4lParam(rootPath, L"", true);
+		_sortingDataArray.push_back(customData);
 
 		hFolderItem = _treeView.addItem(directoryStructure._name.c_str(), TVI_ROOT, INDEX_CLOSE_ROOT, reinterpret_cast<LPARAM>(customData));
 	}
 	else
 	{
-		SortingData4lParam* customData = new SortingData4lParam(TEXT(""), directoryStructure._name, true);
-		sortingDataArray.push_back(customData);
+		SortingData4lParam* customData = new SortingData4lParam(L"", directoryStructure._name, true);
+		_sortingDataArray.push_back(customData);
 
 		hFolderItem = _treeView.addItem(directoryStructure._name.c_str(), hParentItem, INDEX_CLOSE_NODE, reinterpret_cast<LPARAM>(customData));
 	}
@@ -1020,8 +1150,8 @@ HTREEITEM FileBrowser::createFolderItemsFromDirStruct(HTREEITEM hParentItem, con
 
 	for (const auto& file : directoryStructure._files)
 	{
-		SortingData4lParam* customData = new SortingData4lParam(TEXT(""), file._name, false);
-		sortingDataArray.push_back(customData);
+		SortingData4lParam* customData = new SortingData4lParam(L"", file._name, false);
+		_sortingDataArray.push_back(customData);
 
 		_treeView.addItem(file._name.c_str(), hFolderItem, INDEX_LEAF, reinterpret_cast<LPARAM>(customData));
 	}
@@ -1031,14 +1161,14 @@ HTREEITEM FileBrowser::createFolderItemsFromDirStruct(HTREEITEM hParentItem, con
 	return hFolderItem;
 }
 
-HTREEITEM FileBrowser::getRootFromFullPath(const generic_string & rootPath) const
+HTREEITEM FileBrowser::getRootFromFullPath(const wstring & rootPath) const
 {
 	HTREEITEM node = nullptr;
 	for (HTREEITEM hItemNode = _treeView.getRoot();
 		hItemNode != nullptr && node == nullptr;
 		hItemNode = _treeView.getNextSibling(hItemNode))
 	{
-		TVITEM tvItem;
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_PARAM;
 		tvItem.cchTextMax = MAX_PATH;
 		tvItem.hItem = hItemNode;
@@ -1050,14 +1180,14 @@ HTREEITEM FileBrowser::getRootFromFullPath(const generic_string & rootPath) cons
 	return node;
 }
 
-HTREEITEM FileBrowser::findChildNodeFromName(HTREEITEM parent, const generic_string& label) const
+HTREEITEM FileBrowser::findChildNodeFromName(HTREEITEM parent, const wstring& label) const
 {
 	for (HTREEITEM hItemNode = _treeView.getChildFrom(parent);
 		hItemNode != NULL;
 		hItemNode = _treeView.getNextSibling(hItemNode))
 	{
-		TCHAR textBuffer[MAX_PATH] = { '\0' };
-		TVITEM tvItem;
+		wchar_t textBuffer[MAX_PATH] = { '\0' };
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_TEXT;
 		tvItem.pszText = textBuffer;
 		tvItem.cchTextMax = MAX_PATH;
@@ -1072,28 +1202,28 @@ HTREEITEM FileBrowser::findChildNodeFromName(HTREEITEM parent, const generic_str
 	return nullptr;
 }
 
-vector<generic_string> FileBrowser::getRoots() const
+vector<wstring> FileBrowser::getRoots() const
 {
-	vector<generic_string> roots;
+	vector<wstring> roots;
 
 	for (HTREEITEM hItemNode = _treeView.getRoot();
 		hItemNode != nullptr;
 		hItemNode = _treeView.getNextSibling(hItemNode))
 	{
-		TVITEM tvItem;
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_PARAM;
 		tvItem.cchTextMax = MAX_PATH;
 		tvItem.hItem = hItemNode;
 		SendMessage(_treeView.getHSelf(), TVM_GETITEM, 0, reinterpret_cast<LPARAM>(&tvItem));
 
-		roots.push_back(reinterpret_cast<SortingData4lParam*>(tvItem.lParam)->_rootPath);
+		roots.push_back((reinterpret_cast<SortingData4lParam*>(tvItem.lParam))->_rootPath);
 	}
 	return roots;
 }
 
-generic_string FileBrowser::getSelectedItemPath() const
+wstring FileBrowser::getSelectedItemPath() const
 {
-	generic_string itemPath;
+	wstring itemPath;
 	HTREEITEM hItemNode = _treeView.getSelection();
 	if (hItemNode)
 	{
@@ -1104,38 +1234,38 @@ generic_string FileBrowser::getSelectedItemPath() const
 
 std::vector<FileBrowser::FilesToChange> FileBrowser::getFilesFromParam(LPARAM lParam) const
 {
-	const std::vector<generic_string> filesToChange = *(std::vector<generic_string>*)lParam;
-	const generic_string separator = TEXT("\\\\");
+	const auto& filesToChange = *(reinterpret_cast<std::vector<std::wstring>*>(lParam));
+	const wstring separator = L"\\\\";
 	const size_t separatorLength = separator.length();
 
 	std::vector<FilesToChange> groupedFiles;
 	for (size_t i = 0; i < filesToChange.size(); i++)
 	{
 		const size_t sepPos = filesToChange[i].find(separator);
-		if (sepPos == generic_string::npos)
+		if (sepPos == wstring::npos)
 			continue;
 
-		const generic_string pathSuffix = filesToChange[i].substr(sepPos + separatorLength, filesToChange[i].length() - 1);
+		const wstring pathSuffix = filesToChange[i].substr(sepPos + separatorLength, filesToChange[i].length() - 1);
 
 		// remove prefix of file/folder in changeInfo, split the remained path
-		vector<generic_string> linarPathArray = split(pathSuffix, '\\');
+		vector<wstring> linarPathArray = split(pathSuffix, '\\');
 
-		const generic_string lastElement = linarPathArray.back();
+		const wstring lastElement = linarPathArray.back();
 		linarPathArray.pop_back();
 
-		const generic_string rootPath = filesToChange[i].substr(0, sepPos);
+		const wstring rootPath = filesToChange[i].substr(0, sepPos);
 
-		const generic_string addedFilePath = filesToChange[i].substr(0, sepPos + 1) + pathSuffix;
+		const wstring addedFilePath = filesToChange[i].substr(0, sepPos + 1) + pathSuffix;
 
-		generic_string commonPath = rootPath;
+		wstring commonPath = rootPath;
 
 		for (const auto & element : linarPathArray)
 		{
-			commonPath.append(TEXT("\\"));
+			commonPath.append(L"\\");
 			commonPath.append(element);
 		}
 
-		commonPath.append(TEXT("\\"));
+		commonPath.append(L"\\");
 
 		const auto it = std::find_if(groupedFiles.begin(), groupedFiles.end(), [&commonPath](const auto & group) { return group._commonPath == commonPath; });
 
@@ -1174,7 +1304,7 @@ bool FileBrowser::addToTree(FilesToChange & group, HTREEITEM node)
 		group._files.erase(std::remove_if(group._files.begin(), group._files.end(), 
 			[&group](const auto & file)
 			{
-				return !::PathFileExists((group._commonPath + file).c_str());
+				return !doesPathExist((group._commonPath + file).c_str());
 			}),
 			group._files.end());
 
@@ -1192,17 +1322,17 @@ bool FileBrowser::addToTree(FilesToChange & group, HTREEITEM node)
 
 		// Not found, good - Action
 		for (auto & file : group._files) {
-			if (::PathIsDirectory((group._commonPath + file).c_str()))
+			if (doesDirectoryExist((group._commonPath + file).c_str()))
 			{
-				SortingData4lParam* customData = new SortingData4lParam(TEXT(""), file, true);
-				sortingDataArray.push_back(customData);
+				SortingData4lParam* customData = new SortingData4lParam(L"", file, true);
+				_sortingDataArray.push_back(customData);
 
 				_treeView.addItem(file.c_str(), node, INDEX_CLOSE_NODE, reinterpret_cast<LPARAM>(customData));
 			}
 			else
 			{
-				SortingData4lParam* customData = new SortingData4lParam(TEXT(""), file, false);
-				sortingDataArray.push_back(customData);
+				SortingData4lParam* customData = new SortingData4lParam(L"", file, false);
+				_sortingDataArray.push_back(customData);
 
 				_treeView.addItem(file.c_str(), node, INDEX_LEAF, reinterpret_cast<LPARAM>(customData));
 			}
@@ -1216,8 +1346,8 @@ bool FileBrowser::addToTree(FilesToChange & group, HTREEITEM node)
 			hItemNode != NULL;
 			hItemNode = _treeView.getNextSibling(hItemNode))
 		{
-			TCHAR textBuffer[MAX_PATH] = { '\0' };
-			TVITEM tvItem;
+			wchar_t textBuffer[MAX_PATH] = { '\0' };
+			TVITEM tvItem{};
 			tvItem.mask = TVIF_TEXT;
 			tvItem.pszText = textBuffer;
 			tvItem.cchTextMax = MAX_PATH;
@@ -1253,7 +1383,7 @@ bool FileBrowser::deleteFromTree(FilesToChange & group)
 	return true;
 }
 
-HTREEITEM FileBrowser::findInTree(const generic_string& rootPath, HTREEITEM node, std::vector<generic_string> linarPathArray) const
+HTREEITEM FileBrowser::findInTree(const wstring& rootPath, HTREEITEM node, std::vector<wstring> linarPathArray) const
 {
 	if (node == nullptr) // it's a root. Search the right root with rootPath
 	{
@@ -1277,8 +1407,8 @@ HTREEITEM FileBrowser::findInTree(const generic_string& rootPath, HTREEITEM node
 			hItemNode != NULL;
 			hItemNode = _treeView.getNextSibling(hItemNode))
 		{
-			TCHAR textBuffer[MAX_PATH] = { '\0' };
-			TVITEM tvItem;
+			wchar_t textBuffer[MAX_PATH] = { '\0' };
+			TVITEM tvItem{};
 			tvItem.mask = TVIF_TEXT;
 			tvItem.pszText = textBuffer;
 			tvItem.cchTextMax = MAX_PATH;
@@ -1309,6 +1439,19 @@ std::vector<HTREEITEM> FileBrowser::findInTree(FilesToChange & group, HTREEITEM 
 
 	if (group._linarWithoutLastPathElement.empty())
 	{
+		// items to find should have existing corresponding files on disk (fixes vanishing or multiplying of FaW-panel items)
+		group._files.erase(std::remove_if(group._files.begin(), group._files.end(),
+			[&group](const auto& file)
+			{
+				return doesPathExist((group._commonPath + file).c_str());
+			}),
+			group._files.end());
+
+		if (group._files.empty())
+		{
+			return {};
+		}
+
 		// Search
 		return findChildNodesFromNames(node, group._files);
 	}
@@ -1318,8 +1461,8 @@ std::vector<HTREEITEM> FileBrowser::findInTree(FilesToChange & group, HTREEITEM 
 			hItemNode != NULL;
 			hItemNode = _treeView.getNextSibling(hItemNode))
 		{
-			TCHAR textBuffer[MAX_PATH] = {'\0'};
-			TVITEM tvItem;
+			wchar_t textBuffer[MAX_PATH] = {'\0'};
+			TVITEM tvItem{};
 			tvItem.mask = TVIF_TEXT;
 			tvItem.pszText = textBuffer;
 			tvItem.cchTextMax = MAX_PATH;
@@ -1337,7 +1480,7 @@ std::vector<HTREEITEM> FileBrowser::findInTree(FilesToChange & group, HTREEITEM 
 	}
 }
 
-std::vector<HTREEITEM> FileBrowser::findChildNodesFromNames(HTREEITEM parent, std::vector<generic_string> & labels) const
+std::vector<HTREEITEM> FileBrowser::findChildNodesFromNames(HTREEITEM parent, std::vector<wstring> & labels) const
 {
 	std::vector<HTREEITEM> itemNodes;
 
@@ -1346,8 +1489,8 @@ std::vector<HTREEITEM> FileBrowser::findChildNodesFromNames(HTREEITEM parent, st
 		hItemNode = _treeView.getNextSibling(hItemNode)
 		)
 	{
-		TCHAR textBuffer[MAX_PATH];
-		TVITEM tvItem;
+		wchar_t textBuffer[MAX_PATH]{};
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_TEXT;
 		tvItem.pszText = textBuffer;
 		tvItem.cchTextMax = MAX_PATH;
@@ -1364,7 +1507,7 @@ std::vector<HTREEITEM> FileBrowser::findChildNodesFromNames(HTREEITEM parent, st
 	return itemNodes;
 }
 
-void FileBrowser::removeNamesAlreadyInNode(HTREEITEM parent, std::vector<generic_string> & labels) const
+void FileBrowser::removeNamesAlreadyInNode(HTREEITEM parent, std::vector<wstring> & labels) const
 {
 	// We have to search for the labels in the child nodes of parent, and remove the ones that already exist
 	for (HTREEITEM hItemNode = _treeView.getChildFrom(parent);
@@ -1372,8 +1515,8 @@ void FileBrowser::removeNamesAlreadyInNode(HTREEITEM parent, std::vector<generic
 		hItemNode = _treeView.getNextSibling(hItemNode)
 		)
 	{
-		TCHAR textBuffer[MAX_PATH];
-		TVITEM tvItem;
+		wchar_t textBuffer[MAX_PATH]{};
+		TVITEM tvItem{};
 		tvItem.mask = TVIF_TEXT;
 		tvItem.pszText = textBuffer;
 		tvItem.cchTextMax = MAX_PATH;
@@ -1388,19 +1531,105 @@ void FileBrowser::removeNamesAlreadyInNode(HTREEITEM parent, std::vector<generic
 	}
 }
 
-bool FileBrowser::renameInTree(const generic_string& rootPath, HTREEITEM node, const std::vector<generic_string>& linarPathArrayFrom, const generic_string & renameTo)
+bool FileBrowser::renameInTree(const wstring& rootPath, HTREEITEM node, const std::vector<wstring>& linarPathArrayFrom, const wstring & renameTo)
 {
 	HTREEITEM foundItem = findInTree(rootPath, node, linarPathArrayFrom);
 	if (foundItem == nullptr)
 			return false;
 
-	// found it, rename it
+	// found it, try to rename it
+	if (!_treeView.renameItem(foundItem, renameTo.c_str()))
+	{
+		// renameItem just prevented multiplication of a FaW-panel item
+		// (typical situation - renaming of a previously added short-lived "filepath.tmp" treeview item,
+		// which had been created before as a part of a complex save-file-as-tmp-then-rename op...)
+
+		std::filesystem::path path2Check = rootPath;
+		for (const auto& part : linarPathArrayFrom)
+		{
+			path2Check /= part; // reconstruct back the split path of item being renamed
+		}
+
+		if (!doesPathExist(path2Check.wstring().c_str()))
+		{
+			_treeView.removeItem(foundItem); // remove non-existing orphan
+			return false;
+		}
+	}
+
 	_treeView.renameItem(foundItem, renameTo.c_str());
 	SortingData4lParam* compareData = reinterpret_cast<SortingData4lParam*>(_treeView.getItemParam(foundItem));
 	compareData->_label = renameTo;
 	_treeView.customSorting(_treeView.getParent(foundItem), categorySortFunc, 0, false);
 
 	return true;
+}
+
+std::vector<std::wstring> FileBrowser::getExpandedPathsFromFaW() const
+{
+	std::vector<std::wstring> expandedList;
+	HWND hTree = _treeView.getHSelf();
+
+	std::function<void(HTREEITEM)> walk = [&](HTREEITEM hItem) {
+		while (hItem != nullptr)
+		{
+			UINT state = TreeView_GetItemState(hTree, hItem, TVIS_EXPANDED);
+			if (state & TVIS_EXPANDED)
+			{
+				std::wstring path = getNodePath(hItem);
+				if (!path.empty())
+				{
+					expandedList.push_back(path);
+				}
+			}
+
+			HTREEITEM hChild = TreeView_GetChild(hTree, hItem);
+			if (hChild)
+			{
+				walk(hChild);
+			}
+
+			hItem = TreeView_GetNextSibling(hTree, hItem);
+		}
+	};
+
+	HTREEITEM hRoot = TreeView_GetRoot(hTree);
+	walk(hRoot);
+	return expandedList;
+}
+
+void FileBrowser::applyExpandState(HTREEITEM rootHItem, std::unordered_set<std::wstring>* pExpandedPaths)
+{
+	if (!rootHItem || !pExpandedPaths || pExpandedPaths->empty()) return;
+
+	std::wstring rootPath = getNodePath(rootHItem);
+	if (rootPath.empty()) return;
+
+	// Walk the tree and expand nodes that match the paths in pExpandedPaths.
+	// pExpandedPaths is the list of expaned node under rootHItem, which is modified in place to remove paths that have been expanded,
+	// so we can stop early the recursive walking if all paths are found.
+	std::function<void(HTREEITEM)> walkAndExpand = [&](HTREEITEM hItem) {
+		if (!hItem || pExpandedPaths->empty()) return;
+
+		std::wstring path = getNodePath(hItem);
+		auto it = pExpandedPaths->find(path);
+		if (it != pExpandedPaths->end())
+		{
+			_treeView.expand(hItem);
+			pExpandedPaths->erase(it);
+		}
+
+		if (pExpandedPaths->empty()) return;
+
+		for (HTREEITEM hChild = _treeView.getChildFrom(hItem);
+			hChild != nullptr;
+			hChild = _treeView.getNextSibling(hChild))
+		{
+			walkAndExpand(hChild);
+		}
+	};
+
+	walkAndExpand(rootHItem);
 }
 
 int CALLBACK FileBrowser::categorySortFunc(LPARAM lParam1, LPARAM lParam2, LPARAM /*lParamSort*/)
@@ -1419,13 +1648,13 @@ int CALLBACK FileBrowser::categorySortFunc(LPARAM lParam1, LPARAM lParam2, LPARA
 		return lstrcmpi(item1->_label.c_str(), item2->_label.c_str());
 }
 
-bool FolderInfo::addToStructure(generic_string & fullpath, std::vector<generic_string> linarPathArray)
+bool FolderInfo::addToStructure(wstring & fullpath, std::vector<wstring> linarPathArray)
 {
 	if (linarPathArray.size() == 1) // could be file or folder
 	{
-		fullpath += TEXT("\\");
+		fullpath += L"\\";
 		fullpath += linarPathArray[0];
-		if (PathIsDirectory(fullpath.c_str()))
+		if (doesDirectoryExist(fullpath.c_str()))
 		{
 			// search in folders, if found - no good
 			for (const auto& folder : _subFolders)
@@ -1444,7 +1673,7 @@ bool FolderInfo::addToStructure(generic_string & fullpath, std::vector<generic_s
 				if (linarPathArray[0] == file.getName())
 					return false; // Maybe already added?
 			}
-			_files.push_back(FileInfo(linarPathArray[0], this));
+			_files.push_back(FileInfo(linarPathArray[0]));
 			return true;
 		}	
 	}
@@ -1454,7 +1683,7 @@ bool FolderInfo::addToStructure(generic_string & fullpath, std::vector<generic_s
 		{
 			if (folder.getName() == linarPathArray[0])
 			{
-				fullpath += TEXT("\\");
+				fullpath += L"\\";
 				fullpath += linarPathArray[0];
 				linarPathArray.erase(linarPathArray.begin());
 				return folder.addToStructure(fullpath, linarPathArray);
@@ -1464,7 +1693,7 @@ bool FolderInfo::addToStructure(generic_string & fullpath, std::vector<generic_s
 	}
 }
 
-bool FolderInfo::removeFromStructure(std::vector<generic_string> linarPathArray)
+bool FolderInfo::removeFromStructure(std::vector<wstring> linarPathArray)
 {
 	if (linarPathArray.size() == 1) // could be file or folder
 	{
@@ -1502,7 +1731,7 @@ bool FolderInfo::removeFromStructure(std::vector<generic_string> linarPathArray)
 	return false;
 }
 
-bool FolderInfo::renameInStructure(std::vector<generic_string> linarPathArrayFrom, std::vector<generic_string> linarPathArrayTo)
+bool FolderInfo::renameInStructure(std::vector<wstring> linarPathArrayFrom, std::vector<wstring> linarPathArrayTo)
 {
 	if (linarPathArrayFrom.size() == 1) // could be file or folder
 	{
@@ -1556,33 +1785,13 @@ void FolderUpdater::stopWatcher()
 	::CloseHandle(_EventHandle);
 }
 
-LPCWSTR explainAction(DWORD dwAction)
-{
-	switch (dwAction)
-	{
-	case FILE_ACTION_ADDED:
-		return L"Added";
-	case FILE_ACTION_REMOVED:
-		return L"Deleted";
-	case FILE_ACTION_MODIFIED:
-		return L"Modified";
-	case FILE_ACTION_RENAMED_OLD_NAME:
-		return L"Renamed From";
-	case FILE_ACTION_RENAMED_NEW_NAME:
-		return L"Renamed ";
-	default:
-		return L"BAD DATA";
-	}
-}
-
-
 DWORD WINAPI FolderUpdater::watching(void *params)
 {
-	FolderUpdater *thisFolderUpdater = (FolderUpdater *)params;
+	auto* thisFolderUpdater = static_cast<FolderUpdater*>(params);
 
-	generic_string dir2Watch = (thisFolderUpdater->_rootFolder)._rootPath;
+	wstring dir2Watch = (thisFolderUpdater->_rootFolder)._rootPath;
 	if (dir2Watch[dir2Watch.length() - 1] != '\\')
-		dir2Watch += TEXT("\\"); // CReadDirectoryChanges will add another '\' so we will get "\\" as a separator (of monitored root) in the notification
+		dir2Watch += L"\\"; // CReadDirectoryChanges will add another '\' so we will get "\\" as a separator (of monitored root) in the notification
 
 	const DWORD dwNotificationFlags = FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_FILE_NAME;
 
@@ -1611,9 +1820,9 @@ DWORD WINAPI FolderUpdater::watching(void *params)
 
 				DWORD dwPreviousAction = 0;
 				DWORD dwAction;
-				generic_string wstrFilename;
+				wstring wstrFilename;
 
-				std::vector<generic_string> filesToChange;
+				std::vector<wstring> filesToChange;
 				// Process all available changes, ignore User actions
 				while (changes.Pop(dwAction, wstrFilename))
 				{
@@ -1671,29 +1880,29 @@ DWORD WINAPI FolderUpdater::watching(void *params)
 	// call Terminate() automatically.
 	changes.Terminate();
 	//printStr(L"Quit watching thread");
-	return EXIT_SUCCESS;
+	return ERROR_SUCCESS;
 }
 
-void FolderUpdater::processChange(DWORD dwAction, std::vector<generic_string> filesToChange, FolderUpdater* thisFolderUpdater)
+void FolderUpdater::processChange(DWORD dwAction, std::vector<wstring> filesToChange, FolderUpdater* thisFolderUpdater)
 {
-	static generic_string oldName;
+	static wstring oldName;
 
 	switch (dwAction)
 	{
 	case FILE_ACTION_ADDED:
 
 		::SendMessage((thisFolderUpdater->_pFileBrowser)->getHSelf(), FB_ADDFILE, reinterpret_cast<WPARAM>(nullptr), reinterpret_cast<LPARAM>(&filesToChange));
-		oldName = TEXT("");
+		oldName = L"";
 		break;
 
 	case FILE_ACTION_REMOVED:
 		
 		::SendMessage((thisFolderUpdater->_pFileBrowser)->getHSelf(), FB_RMFILE, reinterpret_cast<WPARAM>(nullptr), reinterpret_cast<LPARAM>(&filesToChange));
-		oldName = TEXT("");
+		oldName = L"";
 		break;
 
 	case FILE_ACTION_MODIFIED:
-		oldName = TEXT("");
+		oldName = L"";
 		break;
 
 	case FILE_ACTION_RENAMED_OLD_NAME:
@@ -1703,17 +1912,17 @@ void FolderUpdater::processChange(DWORD dwAction, std::vector<generic_string> fi
 	case FILE_ACTION_RENAMED_NEW_NAME:
 		if (!oldName.empty())
 		{
-			std::vector<generic_string> fileRename;
+			std::vector<wstring> fileRename;
 			fileRename.push_back(oldName);
 			fileRename.push_back(filesToChange.back());
 			//thisFolderUpdater->updateTree(dwAction, fileRename);
 			::SendMessage((thisFolderUpdater->_pFileBrowser)->getHSelf(), FB_RNFILE, reinterpret_cast<WPARAM>(nullptr), reinterpret_cast<LPARAM>(&fileRename));
 		}
-		oldName = TEXT("");
+		oldName = L"";
 		break;
 
 	default:
-		oldName = TEXT("");
+		oldName = L"";
 		break;
 	}
 }

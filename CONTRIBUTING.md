@@ -17,7 +17,15 @@ Bug reports are appreciated. Following a few guidelines listed below will help s
 
 ## Pull Requests
 
-Your pull requests are welcome; however, they may not be accepted for various reasons. If you want to make some GUI enhancement like renaming some graphic items or fixing typos, please create the issue instead of the pull requests. All Pull Requests, except for translations and user documentation, need to be attached to a issue on GitHub. For Pull Requests regarding enhancements and questions, the issue must first be approved by one of project's administrators before being merged into the project. An approved issue will have the label `Accepted`. For issues that have not been accepted, you may request to be assigned to that issue.
+*The first rule of Notepad++ is: you do not ask for permission to contribute.*<br/>
+*The second rule of Notepad++ is: you DO NOT ask for permission to contribute.*
+
+Just do your contribution if you have something to offer, and your pull requests are welcome.
+
+However, they may be rejected for various reasons:
+- All Pull Requests, except for translations and user documentation, need to be attached to a issue or comment on GitHub -- whether they are implementing feature requests, feature enhancements, or bug fixes.  Any PR that is not attached to an Issue is likely to be rejected.
+- If you want to make some GUI enhancement like renaming some graphic items or fixing typos, please create the issue instead of the pull requests.  Do not submit a PR for these kinds of requests: let an administrator review the Issue and implement the typo fix or item rename. PRs for fixing typos or renaming graphic items are likely to be rejected.
+- A project administrator will review every Pull Request.  If the PR meets all the requirements, follows the guidelines, follows the coding style, and the administrator feels it's appropriate to add to the codebase, the PR may be approved and merged (approval can be explicit through the `Accepted` tag on the Issue and/or PR before merging, or implicit by merging it without other tagging first).  The administrator or other project volunteers may request improvements to a PR.  The administrator may choose to reject a PR if the administrator does not believe it meets requirements, follows guidelines or coding style, or otherwise feels it is not appropriate to add to the code base.
 
 Opening an issue beforehand allows the administrators and the community to discuss bugs and enhancements before work begins, preventing wasted effort.
 
@@ -27,14 +35,15 @@ Opening an issue beforehand allows the administrators and the community to discu
 2. Create a new branch for each PR. **Make sure your branch name wasn't used before** - you can add date (for example `patch3_20200528`) to ensure its uniqueness.
 3. Single feature or bug-fix per PR.
 4. Create a PR with a single commit to make the review process easier.
-5. Make your modification compact - don't reformat source code in your request. It makes code review more difficult.
-6. PR of reformatting (changing of ws/TAB, line endings or coding style) of source code won't be accepted. Use issue trackers for your request instead.
-7. Typo fixing and code refactoring won't be accepted - please create issues with title started with `TYPO` to request the changing.
-8. The PR for the enhancement of Function List parser should also include unit test. Please refer [here](https://npp-user-manual.org/docs/function-list/#contribute-your-new-or-enhanced-parser-rule-to-the-notepad-codebase) for more information. 
-9. Address the review change requests by pushing new commits to the same PR. Avoid amending a commit and then force pushing it. All the PR commits are squashed before merging to the main branch.
-10. When creating new PR, try to base it on latest master.
-11. Don't merge `upstream/master` (using git or via github sync), if your PR is based on older `upstream/master`. If you need to base it on latest `master` (e.g. to check and fix merge conflict), use commands `git fetch upstream` to get latest `master` and then `git rebase upstream/master` to rebase it onto this latest `upstream/master`.
-12. Finally, please test your pull requests, at least once.
+5. For the PR of translation, don't guess or use the next version number. Use the current version number instead.
+6. Make your modification compact - don't reformat source code in your request. It makes code review more difficult.
+7. PR of reformatting (changing of ws/TAB, line endings or coding style) of source code won't be accepted. Use issue trackers for your request instead.
+8. Typo fixing and code refactoring won't be accepted - please create issues with title started with `TYPO` to request the changing.
+9. The PR for the enhancement of Function List parser should also include unit test. Please refer [here](https://npp-user-manual.org/docs/function-list/#contribute-your-new-or-enhanced-parser-rule-to-the-notepad-codebase) for more information. 
+10. Address the review change requests by pushing new commits to the same PR. Avoid amending a commit and then force pushing it. All the PR commits are squashed before merging to the main branch.
+11. When creating new PR, try to base it on latest master.
+12. Normally you don't need to merge `upstream/master` (using git or via github sync), if your PR is based on older `upstream/master`. If you need to base it on latest `master` (e.g. to check and fix merge conflict), use commands `git fetch upstream` to get latest `master` and then `git rebase upstream/master` to rebase it onto this latest `upstream/master`.
+13. Finally, please test your pull requests, at least once.
 
 In short: The easier the code review is, the better the chance your pull request will get accepted.
 
@@ -79,10 +88,24 @@ In short: The easier the code review is, the better the chance your pull request
         void method1();
         int method2() {
             return _x; // only one line code can be placed in .h as method definition
-        };
+        }
 
     private:
         int _x;
+    }
+    ```
+
+    For try bloc, Java-like braces should be used as well, in .cpp or .h files.
+
+    * Good:
+  
+    ```cpp
+    try {
+        // instructions
+    }
+    catch (...)
+    {
+        // instructions
     }
     ```
 

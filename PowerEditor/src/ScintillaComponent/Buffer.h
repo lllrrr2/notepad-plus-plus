@@ -17,11 +17,13 @@
 #pragma once
 
 #include <mutex>
+#include <cstdio>
 #include "Utf8_16.h"
 
 
 class Notepad_plus;
 class Buffer;
+class ScintillaEditView;
 typedef Buffer* BufferID;	//each buffer has unique ID by which it can be retrieved
 #define BUFFER_INVALID	reinterpret_cast<BufferID>(0)
 
@@ -52,10 +54,11 @@ enum BufferStatusInfo {
 };
 
 enum SavingStatus {
-	SaveOK             = 0,
-	SaveOpenFailed     = 1,
-	SaveWritingFailed  = 2,
-	NotEnoughRoom      = 3
+	SaveOK                      = 0,
+	SaveOpenFailed              = 1,
+	SaveWritingFailed           = 2,
+	NotEnoughRoom               = 3,
+	FullReadOnlySavingForbidden = 4
 };
 
 struct BufferViewInfo {
@@ -63,10 +66,38 @@ struct BufferViewInfo {
 	int _iView = 0;
 
 	BufferViewInfo() = delete;
-	BufferViewInfo(BufferID buf, int view) : _bufID(buf), _iView(view) {};
+	BufferViewInfo(BufferID buf, int view) : _bufID(buf), _iView(view) {}
 };
 
-const TCHAR UNTITLED_STR[] = TEXT("new ");
+const wchar_t UNTITLED_STR[] = L"new ";
+
+// File discovered for Find in Files (size comes from FindFirstFile; -1 if unknown)
+struct SearchCandidate {
+	std::wstring _path;
+	int64_t _size = -1;
+};
+
+// Ingest-kernel policy: editor load detects language from content; Find in Files does not (no lexer).
+struct DocumentFillPolicy {
+	bool _detectLanguageFromContent = true;
+
+	static DocumentFillPolicy forEditing() { return { true }; }
+	static DocumentFillPolicy forSearching() { return { false }; }
+};
+
+// Caller-owned scratch Scintilla document used only by Find in Files (not an editor Buffer)
+struct SearchFillRequest {
+	Document _scratchDoc = static_cast<Document>(NULL);
+	const wchar_t* _path = nullptr;
+	int64_t _knownSize = -1;
+	ScintillaEditView* _ingestView = nullptr; // already showing scratchDoc; loadFileContentForSearch does not detach it
+};
+
+struct SearchLoadResult {
+	bool _ok = false;
+	UniMode _unicodeMode = uni8Bit;
+	int _encoding = -1;
+};
 
 //File manager class maintains all buffers
 class FileManager final {
@@ -75,7 +106,7 @@ public:
 
 	void checkFilesystemChanges(bool bCheckOnlyCurrentBuffer);
 
-	size_t getNbBuffers() const { return _nbBufs; };
+	size_t getNbBuffers() const { return _nbBufs; }
 	size_t getNbDirtyBuffers() const;
 	int getBufferIndexByID(BufferID id);
 	Buffer * getBufferByIndex(size_t index);
@@ -83,43 +114,55 @@ public:
 
 	void beNotifiedOfBufferChange(Buffer * theBuf, int mask);
 
-	void closeBuffer(BufferID, ScintillaEditView * identifer);		//called by Notepad++
+	void closeBuffer(BufferID, const ScintillaEditView* identifer);		//called by Notepad++
 
 	void addBufferReference(BufferID id, ScintillaEditView * identifer);	//called by Scintilla etc indirectly
 
-	BufferID loadFile(const TCHAR * filename, Document doc = static_cast<Document>(NULL), int encoding = -1, const TCHAR *backupFileName = nullptr, FILETIME fileNameTimestamp = {});	//ID == BUFFER_INVALID on failure. If Doc == NULL, a new file is created, otherwise data is loaded in given document
+	BufferID loadFile(const wchar_t * filename, Document doc = static_cast<Document>(NULL), int encoding = -1, const wchar_t *backupFileName = nullptr, FILETIME fileNameTimestamp = {});	//ID == BUFFER_INVALID on failure. If Doc == NULL, a new file is created, otherwise data is loaded in given document
+
+	// Find in Files only: fill a reused document without creating a Buffer or touching editor session state
+	Document createSearchDocument();
+	void releaseSearchDocument(Document doc);
+	SearchLoadResult loadFileContentForSearch(const SearchFillRequest& request);
+
 	BufferID newEmptyDocument();
 	// create an empty placeholder for a missing file when loading session
-	BufferID newPlaceholderDocument(const TCHAR * missingFilename, int whichOne, const wchar_t* userCreatedSessionName);
+	BufferID newPlaceholderDocument(const wchar_t * missingFilename, int whichOne, const wchar_t* userCreatedSessionName);
 
 	//create Buffer from existing Scintilla, used from new Scintillas.
 	BufferID bufferFromDocument(Document doc, bool isMainEditZone);
 
-	BufferID getBufferFromName(const TCHAR * name);
+	BufferID getBufferFromName(const wchar_t * name);
 	BufferID getBufferFromDocument(Document doc);
 
-	void setLoadedBufferEncodingAndEol(Buffer* buf, const Utf8_16_Read& UnicodeConvertor, int encoding, EolType bkformat);
+	void setLoadedBufferEncodingAndEol(Buffer* buf, const Utf8_16_Read& unicodeConvertor, int encoding, EolType bkformat);
 	bool reloadBuffer(BufferID id);
 	bool reloadBufferDeferred(BufferID id);
-	SavingStatus saveBuffer(BufferID id, const TCHAR* filename, bool isCopy = false);
+	SavingStatus saveBuffer(BufferID id, const wchar_t* filename, bool isCopy = false);
 	bool backupCurrentBuffer();
 	bool deleteBufferBackup(BufferID id);
 	bool deleteFile(BufferID id);
-	bool moveFile(BufferID id, const TCHAR * newFilename);
-	bool createEmptyFile(const TCHAR * path);
+	bool moveFile(BufferID id, const wchar_t * newFilename);
+	bool createEmptyFile(const wchar_t * path);
 	static FileManager& getInstance() {
 		static FileManager instance;
 		return instance;
-	};
-	int getFileNameFromBuffer(BufferID id, TCHAR * fn2copy);
+	}
+	int getFileNameFromBuffer(BufferID id, wchar_t * fn2copy);
 	size_t docLength(Buffer * buffer) const;
+	void removeHotSpot(Buffer * buffer) const;
 	size_t nextUntitledNewNumber() const;
+
+	void enableAutoDetectEncoding4Loading() { isAutoDetectEncodingDisabled4Loading = false; }
+	void disableAutoDetectEncoding4Loading() { isAutoDetectEncodingDisabled4Loading = true; } // Disable the encoding auto-detection on loading file while switching among the different encoding.
+	                                                                                          // The value of isAutoDetectEncodingDisabled4Loading will be restored to false after each file loading 
+	                                                                                          // to restore the encoding auto-detection ability for other file loading operations. 
 
 private:
 	struct LoadedFileFormat {
 		LoadedFileFormat() = default;
 		LangType _language = L_TEXT;
-		int _encoding = 0;
+		int _encoding = uni8Bit;
 		EolType _eolFormat = EolType::osdefault;
 	};
 
@@ -135,8 +178,12 @@ private:
 	FileManager& operator=(FileManager&&) = delete;
 
 	int detectCodepage(char* buf, size_t len);
-	bool loadFileData(Document doc, int64_t fileSize, const TCHAR* filename, char* buffer, Utf8_16_Read* UnicodeConvertor, LoadedFileFormat& fileFormat);
-	LangType detectLanguageFromTextBegining(const unsigned char *data, size_t dataLen);
+	bool isAutoDetectEncodingDisabled4Loading = false;
+
+	bool loadFileData(Document doc, int64_t fileSize, const wchar_t* filename, char* buffer, Utf8_16_Read* UnicodeConvertor, LoadedFileFormat& fileFormat);
+	bool copyFileContentToScintilla(ScintillaEditView* ingestView, FILE* fp, char* data, int64_t fileSize, Utf8_16_Read* unicodeConvertor, LoadedFileFormat& fileFormat, EolType& format, int& sciStatus, const DocumentFillPolicy& policy);
+	void resolveLoadedEncoding(int& encodingOut, UniMode& unicodeModeOut) const;
+	LangType detectLanguageFromTextBeginning(const unsigned char *data, size_t dataLen);
 
 	Notepad_plus* _pNotepadPlus = nullptr;
 	ScintillaEditView* _pscratchTilla = nullptr;
@@ -158,16 +205,22 @@ public:
 	//Load the document into Scintilla/add to TabBar
 	//The entire lifetime if the buffer, the Document has reference count of _atleast_ one
 	//Destructor makes sure its purged
-	Buffer(FileManager * pManager, BufferID id, Document doc, DocFileStatus type, const TCHAR *fileName, bool isLargeFile);
+	Buffer(FileManager * pManager, BufferID id, Document doc, DocFileStatus type, const wchar_t *fileName, bool isLargeFile);
 
 	// this method 1. copies the file name
-	//             2. determinates the language from the ext of file name
+	//             2. determines the language from the ext of file name
 	//             3. gets the last modified time
-	void setFileName(const TCHAR *fn);
+	void setFileName(const wchar_t *fn);
 
-	const TCHAR * getFullPathName() const { return _fullPathName.c_str(); }
+	const wchar_t * getFullPathName() const { return _fullPathName.c_str(); }
 
-	const TCHAR * getFileName() const { return _fileName; }
+	const wchar_t * getFileName() const { return _fileName; }
+
+	const wchar_t* getCompactFileName() const { return _compactFileName.c_str(); }
+
+	void refreshCompactFileName();
+
+	void normalizeTabName(std::wstring& tabName);
 
 	BufferID getID() const { return _id; }
 
@@ -186,6 +239,8 @@ public:
 
 	bool isUntitled() const { return ((_currentStatus & DOC_UNNAMED) == DOC_UNNAMED); }
 
+	bool isFromNetwork() const { return _isFromNetwork; }
+
 	bool isInaccessible() const { return _isInaccessible; }
 	void setInaccessibility(bool val) { _isInaccessible = val; }
 
@@ -197,11 +252,7 @@ public:
 	}
 
 	bool getUserReadOnly() const { return _isUserReadOnly; }
-
-	void setUserReadOnly(bool ro) {
-		_isUserReadOnly = ro;
-		doNotify(BufferChangeReadonly);
-	}
+	void setUserReadOnly(bool ro);
 
 	EolType getEolFormat() const { return _eolFormat; }
 
@@ -212,7 +263,7 @@ public:
 
 	LangType getLangType() const { return _lang; }
 
-	void setLangType(LangType lang, const TCHAR * userLangName = TEXT(""));
+	void setLangType(LangType lang, const wchar_t * userLangName = L"");
 
 	UniMode getUnicodeMode() const { return _unicodeMode; }
 
@@ -228,35 +279,35 @@ public:
 
 	void setDirty(bool dirty);
 
-	void setPosition(const Position & pos, ScintillaEditView * identifier);
-	Position & getPosition(ScintillaEditView * identifier);
+	void setPosition(const Position & pos, const ScintillaEditView * identifier);
+	Position & getPosition(const ScintillaEditView * identifier);
 
 	void setHeaderLineState(const std::vector<size_t> & folds, ScintillaEditView * identifier);
 	const std::vector<size_t> & getHeaderLineState(const ScintillaEditView * identifier) const;
 
 	bool isUserDefineLangExt() const { return (_userLangExt[0] != '\0'); }
 
-	const TCHAR * getUserDefineLangName() const	{ return _userLangExt.c_str(); }
+	const wchar_t * getUserDefineLangName() const	{ return _userLangExt.c_str(); }
 
-	const TCHAR * getCommentLineSymbol() const {
-		Lang *l = getCurrentLang();
+	const char* getCommentLineSymbol() const {
+		const Lang* l = getCurrentLang();
 		if (!l)
-			return NULL;
-		return l->_pCommentLineSymbol;
+			return nullptr;
+		return l->_pCommentLineSymbol.c_str();
 	}
 
-	const TCHAR * getCommentStart() const {
-		Lang *l = getCurrentLang();
+	const char* getCommentStart() const {
+		const Lang* l = getCurrentLang();
 		if (!l)
-			return NULL;
-		return l->_pCommentStart;
+			return nullptr;
+		return l->_pCommentStart.c_str();
 	}
 
-	const TCHAR * getCommentEnd() const {
-		Lang *l = getCurrentLang();
+	const char* getCommentEnd() const {
+		const Lang* l = getCurrentLang();
 		if (!l)
-			return NULL;
-		return l->_pCommentEnd;
+			return nullptr;
+		return l->_pCommentEnd.c_str();
 	}
 
 	bool getNeedsLexing() const { return _needLexer; }
@@ -266,9 +317,12 @@ public:
 		doNotify(BufferChangeLexing);
 	}
 
+	bool isUntitledTabRenamed() const { return _isUntitledTabRenamed; }
+	void setUntitledTabRenamedStatus(bool isRenamed) { _isUntitledTabRenamed = isRenamed; }
+
 	//these two return reference count after operation
 	int addReference(ScintillaEditView * identifier);		//if ID not registered, creates a new Position for that ID and new foldstate
-	int removeReference(ScintillaEditView * identifier);		//reduces reference. If zero, Document is purged
+	int removeReference(const ScintillaEditView * identifier);		//reduces reference. If zero, Document is purged
 
 	void setHideLineChanged(bool isHide, size_t location);
 
@@ -276,6 +330,20 @@ public:
 
 	bool getNeedReload() const { return _needReloading; }
 	void setNeedReload(bool reload) { _needReloading = reload; }
+
+	std::wstring tabCreatedTimeString() const { return _tabCreatedTimeString; }
+	void setTabCreatedTimeStringFromBakFile() {
+		if (!_isFromNetwork && _currentStatus == DOC_UNNAMED)
+			_tabCreatedTimeString = getFileTime(Buffer::ft_created); // while DOC_UNNAMED, getFileTime will retrieve time from backup file
+	}
+	void setTabCreatedTimeStringWithCurrentTime() {
+		if (_currentStatus == DOC_UNNAMED)
+		{
+			FILETIME now{};
+			GetSystemTimeAsFileTime(&now);
+			_tabCreatedTimeString = getTimeString(now);
+		}
+	}
 
 	size_t docLength() const {
 		assert(_pManager != nullptr);
@@ -285,17 +353,33 @@ public:
 	int64_t getFileLength() const; // return file length. -1 if file is not existing.
 
 	enum fileTimeType { ft_created, ft_modified, ft_accessed };
-	generic_string getFileTime(fileTimeType ftt) const;
+	std::wstring getFileTime(fileTimeType ftt) const;
+	std::wstring getTimeString(FILETIME rawtime) const;
 
 	Lang * getCurrentLang() const;
 
 	bool isModified() const { return _isModified; }
 	void setModifiedStatus(bool isModified) { _isModified = isModified; }
 
-	generic_string getBackupFileName() const { return _backupFileName; }
-	void setBackupFileName(const generic_string& fileName) { _backupFileName = fileName; }
+	std::wstring getBackupFileName() const { return _backupFileName; }
+	void setBackupFileName(const std::wstring& fileName) { _backupFileName = fileName; }
 
-	FILETIME getLastModifiedTimestamp() const { return _timeStamp; }
+	FILETIME getLastModifiedFileTimestamp() const { return _timeStamp; }
+	FILETIME getLastModifiedTimestamp() const {
+		if (_backupFileName.empty())
+			return _timeStamp;
+
+		WIN32_FILE_ATTRIBUTE_DATA attributes{};
+		attributes.dwFileAttributes = INVALID_FILE_ATTRIBUTES;
+		bool bWorkerThreadTerminated = true;
+		DWORD dwWin32ApiError = NO_ERROR;
+		BOOL bGetFileAttributesExSucceeded = getFileAttributesExWithTimeout(_backupFileName.c_str(), &attributes, 0, &bWorkerThreadTerminated, &dwWin32ApiError);
+		if (bGetFileAttributesExSucceeded && (attributes.dwFileAttributes != INVALID_FILE_ATTRIBUTES) && !(attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		{
+			return attributes.ftLastWriteTime;
+		}
+		return _timeStamp;
+	}
 
 	bool isLoadedDirty() const { return _isLoadedDirty; }
 	void setLoadedDirty(bool val) {	_isLoadedDirty = val; }
@@ -311,23 +395,23 @@ public:
 	void startMonitoring() {
 		_isMonitoringOn = true;
 		_eventHandle = ::CreateEvent(nullptr, TRUE, FALSE, nullptr);
-	};
+	}
 
-	HANDLE getMonitoringEvent() const { return _eventHandle; };
+	HANDLE getMonitoringEvent() const { return _eventHandle; }
 
 	void stopMonitoring() {
 		_isMonitoringOn = false;
 		::SetEvent(_eventHandle);
 		::CloseHandle(_eventHandle);
-	};
+	}
 
-	bool isMonitoringOn() const { return _isMonitoringOn; };
+	bool isMonitoringOn() const { return _isMonitoringOn; }
 	void updateTimeStamp();
 	void reload();
-	void setMapPosition(const MapPosition & mapPosition) { _mapPosition = mapPosition; };
-	MapPosition getMapPosition() const { return _mapPosition; };
+	void setMapPosition(const MapPosition& mapPosition) { _mapPosition = mapPosition; }
+	MapPosition getMapPosition() const { return _mapPosition; }
 
-	void langHasBeenSetFromMenu() { _hasLangBeenSetFromMenu = true; };
+	void langHasBeenSetFromMenu() { _hasLangBeenSetFromMenu = true; }
 
 	bool allowBraceMach() const;
 	bool allowAutoCompletion() const;
@@ -336,14 +420,17 @@ public:
 
 	void setDocColorId(int idx) {
 		_docColorId = idx;
-	};
+	}
 
 	int getDocColorId() {
 		return _docColorId;
-	};
+	}
 
-	bool isRTL() const { return _isRTL; };
-	void setRTL(bool isRTL) { _isRTL = isRTL; };
+	bool isRTL() const { return _isRTL; }
+	void setRTL(bool isRTL) { _isRTL = isRTL; }
+
+	bool isPinned() const { return _isPinned; }
+	void setPinned(bool isPinned) { _isPinned = isPinned; }
 
 private:
 	int indexOfReference(const ScintillaEditView * identifier) const;
@@ -368,14 +455,21 @@ private:
 	//document properties
 	Document _doc;	//invariable
 	LangType _lang = L_TEXT;
-	generic_string _userLangExt; // it's useful if only (_lang == L_USER)
+	std::wstring _userLangExt; // it's useful if only (_lang == L_USER)
 	bool _isDirty = false;
 	EolType _eolFormat = EolType::osdefault;
-	UniMode _unicodeMode = uniUTF8;
+
+	// if _encoding == -1, then _unicodeMode is used.
+	// otherwise _encoding is used.
 	int _encoding = -1;
+	UniMode _unicodeMode = uniUTF8;
+
 	bool _isUserReadOnly = false;
+	bool _isFromNetwork = false;
 	bool _needLexer = false; // new buffers do not need lexing, Scintilla takes care of that
 	//these properties have to be duplicated because of multiple references
+
+	bool _isUntitledTabRenamed = false;
 
 	//All the vectors must have the same size at all times
 	std::vector<ScintillaEditView *> _referees; // Instances of ScintillaEditView which contain this buffer
@@ -387,9 +481,12 @@ private:
 	FILETIME _timeStamp = {}; // 0 if it's a new doc
 
 	bool _isFileReadOnly = false;
-	generic_string _fullPathName;
-	TCHAR * _fileName = nullptr; // points to filename part in _fullPathName
+	std::wstring _fullPathName;
+	wchar_t * _fileName = nullptr; // points to filename part in _fullPathName
+	std::wstring _compactFileName; // shortened filename form of the _fileName with possible ellipsis (...) at the end
 	bool _needReloading = false; // True if Buffer needs to be reloaded on activation
+
+	std::wstring _tabCreatedTimeString;
 
 	long _recentTag = -1;
 	static long _recentTagCtr;
@@ -397,12 +494,12 @@ private:
 	int _docColorId = -1;
 
 	// For backup system
-	generic_string _backupFileName;
+	std::wstring _backupFileName;
 	bool _isModified = false;
 	bool _isLoadedDirty = false; // it's the indicator for finding buffer's initial state
 
-	bool _isUnsync = false; // Buffer should be always dirty (with any undo/redo operation) if the editing buffer is unsyncronized with file on disk.
-	                        // By "unsyncronized" it means :
+	bool _isUnsync = false; // Buffer should be always dirty (with any undo/redo operation) if the editing buffer is unsynchronized with file on disk.
+	                        // By "unsynchronized" it means :
 	                        // 1. the file is deleted outside but the buffer in Notepad++ is kept.
 	                        // 2. the file is modified by another app but the buffer is not reloaded in Notepad++.
 	                        // Note that if the buffer is untitled, there's no correspondent file on the disk so the buffer is considered as independent therefore synchronized.
@@ -425,4 +522,5 @@ private:
 	bool _isInaccessible = false;
 
 	bool _isRTL = false;
+	bool _isPinned = false;
 };

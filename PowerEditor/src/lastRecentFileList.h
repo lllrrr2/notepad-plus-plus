@@ -22,8 +22,8 @@
 
 struct RecentItem {
 	int _id = 0;
-	generic_string _name;
-	explicit RecentItem(const TCHAR * name) : _name(name) {};
+	std::wstring _name;
+	explicit RecentItem(const wchar_t* name) : _name(name) {}
 };
 
 typedef std::deque<RecentItem> recentList;
@@ -33,38 +33,37 @@ class LastRecentFileList
 public:
 	LastRecentFileList() {
 		_userMax = (NppParameters::getInstance()).getNbMaxRecentFile();
-	};
+	}
 
 	void initMenu(HMENU hMenu, int idBase, int posBase, Accelerator *accelerator, bool doSubMenu = false);
 	void switchMode();
 	void updateMenu();
 
-	void add(const TCHAR *fn);
-	void remove(const TCHAR *fn);
+	void add(const wchar_t *fn);
+	void remove(const wchar_t *fn);
 	void remove(size_t index);
 	void clear();
 
 	int getSize() {
 		return _size;
-	};
+	}
 
-
-	int getMaxNbLRF() const {
+	static int getMaxNbLRF() {
 		return NB_MAX_LRF_FILE;
-	};
+	}
 
 	int getUserMaxNbLRF() const {
 		return _userMax;
-	};
+	}
 
-	generic_string & getItem(int id);	//use menu id
-	generic_string & getIndex(int index);	//use menu id
+	std::wstring & getItem(int id);	//use menu id
+	std::wstring & getIndex(int index);	//use menu id
 
-	generic_string getFirstItem() const {
+	std::wstring getFirstItem() const {
 		if (_lrfl.size() == 0)
-			return TEXT("");
+			return L"";
 		return _lrfl.front()._name;
-	};
+	}
 
 	void setUserMaxNbLRF(int size);
 
@@ -72,15 +71,15 @@ public:
 
 	void setLock(bool lock) {
 		_locked = lock;
-	};
+	}
 
 	void setLangEncoding(int nativeLangEncoding) {
 		_nativeLangEncoding = nativeLangEncoding;
-	};
+	}
 
 	bool isSubMenuMode() const {
 		return (_hParentMenu != NULL);
-	};
+	}
 
 private:
 	recentList _lrfl;
@@ -98,8 +97,7 @@ private:
 	bool _hasSeparators = false;
 	bool _locked = false;
 
-	int find(const TCHAR *fn);
+	int find(const wchar_t *fn);
 	int popFirstAvailableID();
 	void setAvailable(int id);
 };
-

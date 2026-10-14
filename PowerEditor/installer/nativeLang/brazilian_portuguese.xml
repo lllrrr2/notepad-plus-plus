@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<!-- Brazilian Portuguese by Hélio de Souza and Luxy, updated: Jul 2021, for Notepad++ 8.1.2, last update by Marcello, 10 Mar 2024, for Notepad++ 8.6.5
+<!-- Brazilian Portuguese by Hélio de Souza and Luxy, updated: Jul 2021, for Notepad++ 8.1.2; last update by Marcello, 16 Sep 2026 for 8.9.8+
 Translation note:
 1. Please install XML Tools plugin for formatting your XML translation. Via menu "Plugins -> XML Tools-> Pretty Print - indent only" command.
 2. All the comments are for explanation, they are not for translation.
 -->
 <NotepadPlus>
-	<Native-Langue name="Brazilian Portuguese" filename="brazilian_portuguese.xml" version="8.6.5">
+	<Native-Langue name="Brazilian Portuguese" filename="brazilian_portuguese.xml" version="8.9.8">
 		<Menu>
 			<Main>
 				<!-- Main Menu Entries -->
@@ -41,6 +41,7 @@ Translation note:
 					<Item subMenuId="edit-onSelection" name="Na seleção"/>
 					<Item subMenuId="edit-multiSelectALL" name="Multi-seleciona TODOS"/>
 					<Item subMenuId="edit-multiSelectNext" name="Multi-seleciona Próximo"/>	
+					<Item subMenuId="edit-readonlyInNotepad++" name="Apenas-Leitura no Notepad++"/>
 					<Item subMenuId="search-changeHistory" name="Histórico de Alterações"/>
 					<Item subMenuId="search-markAll" name="Marcar todos"/>
 					<Item subMenuId="search-markOne" name="Marcar um"/>
@@ -49,11 +50,11 @@ Translation note:
 					<Item subMenuId="search-jumpDown" name="Saltar abaixo"/>
 					<Item subMenuId="search-copyStyledText" name="Copiar texto estilizado"/>
 					<Item subMenuId="search-bookmark" name="Marcadores"/>
-					<Item subMenuId="view-currentFileIn" name="Visualizar arquivo atual no"/>
-					<Item subMenuId="view-showSymbol" name="Mostrar símbolo"/>
-					<Item subMenuId="view-zoom" name="Zoom"/>
-					<Item subMenuId="view-moveCloneDocument" name="Mover/Clonar documento atual"/>
-					<Item subMenuId="view-tab" name="Aba"/>
+					<Item subMenuId="view-currentFileIn" name="&amp;Visualizar arquivo atual no"/>
+					<Item subMenuId="view-showSymbol" name="Mostrar &amp;Símbolo"/>
+					<Item subMenuId="view-zoom" name="&amp;Zoom"/>
+					<Item subMenuId="view-moveCloneDocument" name="&amp;Mover/Clonar documento atual"/>
+					<Item subMenuId="view-tab" name="A&amp;ba"/>
 					<Item subMenuId="view-collapseLevel" name="Recolher o nível"/>
 					<Item subMenuId="view-uncollapseLevel" name="Expandir o nível"/>
 					<Item subMenuId="view-project" name="Projeto"/>
@@ -89,10 +90,12 @@ Translation note:
 					<Item id="41002" name="&amp;Abrir..."/>
 					<Item id="41019" name="Explorer"/>
 					<Item id="41020" name="CMD (Prompt de Comando)"/>
+					<Item id="41027" name="PowerShell"/>
 					<Item id="41025" name="Pasta como espaço de trabalho"/>
 					<Item id="41003" name="&amp;Fechar"/>
 					<Item id="41004" name="F&amp;echar todos"/>
 					<Item id="41005" name="Fechar todos exceto o atual"/>
+					<Item id="41026" name="Fechar todos, exceto fixados"/>
 					<Item id="41009" name="Fechar todos à esquerda"/>
 					<Item id="41018" name="Fechar todos à direita"/>
 					<Item id="41024" name="Fechar todos inalterados"/>
@@ -136,6 +139,10 @@ Translation note:
 					<Item id="42060" name="Classificar em ordem decrescente"/>
 					<Item id="42080" name="Classificar em ordem crescente - ignorando maiúsculas/minúsculas"/>
 					<Item id="42081" name="Classificar em ordem decrescente - ignorando maiúsculas/minúsculas"/>
+					<Item id="42100" name="Classificar linhas em ordem ascendente local"/>
+					<Item id="42101" name="Classificar linhas em ordem descendente local"/>
+					<Item id="42104" name="Classificar Linhas por Ordem Ascendente Tamanho"/>
+					<Item id="42105" name="Classificar Linhas por Ordem Descendente Tamanho"/>
 					<Item id="42061" name="Classificar como números inteiros - ordem crescente"/>
 					<Item id="42062" name="Classificar como números inteiros - ordem decrescente"/>
 					<Item id="42063" name="Classificar como números decimais (vírgula) - ordem crescente"/>
@@ -154,6 +161,7 @@ Translation note:
 					<Item id="42072" name="mAiúsculas/mInÚscuLAs ALeatóriAs"/>
 					<Item id="42073" name="Abrir arquivo"/>
 					<Item id="42074" name="Abrir pasta que os contém no Explorer"/>
+					<Item id="42106" name="Redigir Seleção █ (Shift: ●)"/>
 					<Item id="42075" name="Pesquisar na Internet"/>
 					<Item id="42076" name="Alterar mecanismo de pesquisa..."/>
 					<Item id="42090" name="Ignorar Maiúsculas-Minúsculas &amp;&amp; Palavra Inteira"/>
@@ -193,14 +201,16 @@ Translation note:
 					<Item id="42025" name="&amp;Salvar macro atual..."/>
 					<Item id="42026" name="Alinhar texto à direita"/>
 					<Item id="42027" name="Alinhar texto à esquerda"/>
-					<Item id="42028" name="Definir como somente leitura"/>
+					<Item id="42028" name="Apenas-Leitura para o Documento Atual"/>
+					<Item id="42102" name="Apenas-Leitura para todos os Documentos"/>
+					<Item id="42103" name="Remover Apenas-Leitura para todos os Documentos"/>
 					<Item id="42029" name="Copiar caminho completo do arquivo"/>
 					<Item id="42030" name="Copiar nome do arquivo"/>
 					<Item id="42031" name="Copiar caminho da pasta atual"/>
 					<Item id="42087" name="Copiar todos os nomes de arquivos"/>
 					<Item id="42088" name="Copiar todos os caminhos de arquivos"/>
 					<Item id="42032" name="Executar macro múltiplas vezes..."/>
-					<Item id="42033" name="Desmarcar como somente leitura"/>
+					<Item id="42033" name="Atributo Apenas-Leitura no Windows"/>
 					<Item id="42035" name="Comentar linha única"/>
 					<Item id="42036" name="Remover comentário de linha única"/>
 					<Item id="42055" name="Remover linhas vazias"/>
@@ -287,6 +297,7 @@ Translation note:
 					<Item id="44024" name="Reduzir (Ctrl+Roda do Mouse para Baixo)"/>
 					<Item id="44025" name="Exibir espaços e tabulações"/>
 					<Item id="44026" name="Exibir final de linha"/>
+					<Item id="44027" name="&amp;Sincronizar entre Visualizações"/>
 					<Item id="44029" name="Expandir todos níveis"/>
 					<Item id="44030" name="Recolher nível atual"/>
 					<Item id="44031" name="Expandir nível atual"/>
@@ -355,6 +366,7 @@ Translation note:
 					<Item id="10005" name="Mover para o Começo"/>
 					<Item id="10006" name="Mover para o Fim"/>
 					<Item id="46001" name="Configurador de estilos..."/>
+					<Item id="46016" name="Nenhum (Texto Normal)"/>
 					<Item id="46250" name="Defina a sua linguagem..."/>
 					<Item id="46300" name="Pasta de Linguagens definidas pelo usuário..."/>
 					<Item id="46301" name="Lista de Linguagens definidas pelo usuário"/>
@@ -389,6 +401,7 @@ Translation note:
 					<Item id="48511" name="Gerar dos arquivos..."/>
 					<Item id="48512" name="Gerar a partir da seleção na área de transferência"/>
 					<Item id="49000" name="Executa&amp;r..."/>
+					<Item id="49001" name="Validar shortcuts.xml"/>
 
 					<Item id="50000" name="Completar função"/>
 					<Item id="50001" name="Completar palavra"/>
@@ -412,20 +425,25 @@ Translation note:
 					<Item id="11007" name="Tipo Z a A"/>
 					<Item id="11008" name="Tamanho, menor para maior"/>
 					<Item id="11009" name="Tamanho, maior para menor"/>
+					<Item id="11010" name="Hora da Modificação Ascendente"/>
+					<Item id="11011" name="Hora da Modificação Descendente"/>
 				</Commands>
 			</Main>
 			<TabBar>
 				<Item CMDID="41003" name="Fechar"/>
 				<Item CMDID="0" name="Fechar Múltiplas Abas"/>
 				<Item CMDID="41005" name="Fechar Todas Abas, exceto esta"/>
+				<Item CMDID="41026" name="Fechar Todas, exceto as fixadas"/>
 				<Item CMDID="41009" name="Fechar todas à esquerda"/>
 				<Item CMDID="41018" name="Fechar todas à direita"/>
 				<Item CMDID="41024" name="Fechar todas inalteradas"/>
+				<Item CMDID="44048" name="Fixar Aba" alternativeName="Desafixar Aba"/>
 				<Item CMDID="41006" name="Salvar"/>
 				<Item CMDID="41008" name="Salvar como..."/>
 				<Item CMDID="1" name="Abrir em"/>
 				<Item CMDID="41019" name="Abrir o caminho no Explorer"/>
 				<Item CMDID="41020" name="Abrir o caminho no CMD (Prompt de Comando)"/>
+				<Item CMDID="41027" name="Abrir o caminho no PowerShell"/>
 				<Item CMDID="41025" name="Abrir o caminho como espaço de trabalho"/>
 				<Item CMDID="41023" name="Abrir no visualizador padrão"/>
 				<Item CMDID="41017" name="Renomear..."/>
@@ -433,7 +451,7 @@ Translation note:
 				<Item CMDID="41014" name="Recarregar"/>
 				<Item CMDID="41010" name="Imprimir"/>
 				<Item CMDID="42028" name="Somente Leitura"/>
-				<Item CMDID="42033" name="Desmarcar Somente Leitura"/>
+				<Item CMDID="42033" name="Atributo Apenas-Leitura no Windows"/>
 				<Item CMDID="2" name="Copiar para Área de Transferência"/>
 				<Item CMDID="42029" name="Copiar Caminho Completo"/>
 				<Item CMDID="42030" name="Copiar Nome do Arquivo"/>
@@ -468,7 +486,7 @@ Translation note:
 				<Item id="1" name="Localizar próximo"/>
 				<Item id="1722" name="Direção para trás"/>
 				<Item id="2" name="Fechar"/>
-				<Item id="1620" name="Localizar :"/>
+				<Item id="1620" name="Localizar:"/>
 				<Item id="1603" name="Coincidir palavra inteira"/>
 				<Item id="1604" name="Diferen&amp;ciar maiúsculas/minúsculas"/>
 				<Item id="1605" name="&amp;Expressão regular"/>
@@ -477,7 +495,7 @@ Translation note:
 				<Item id="1615" name="Localizar todos"/>
 				<Item id="1616" name="Marcar linha"/>
 				<Item id="1618" name="Limpar marcadores"/>
-				<Item id="1611" name="Substituir por :"/>
+				<Item id="1611" name="Substituir por:"/>
 				<Item id="1608" name="Substitui&amp;r"/>
 				<Item id="1609" name="Substituir &amp;todos"/>
 				<Item id="1687" name="Ao perder o foco"/>
@@ -486,8 +504,8 @@ Translation note:
 				<Item id="1633" name="Limpar"/>
 				<Item id="1635" name="Substituir em todos os documentos abertos"/>
 				<Item id="1636" name="Localizar em todos os documentos abertos"/>
-				<Item id="1654" name="Filtros :"/>
-				<Item id="1655" name="Pasta :"/>
+				<Item id="1654" name="Filtros:"/>
+				<Item id="1655" name="Pasta:"/>
 				<Item id="1656" name="Localizar todos"/>
 				<Item id="1658" name="Incluir subpastas"/>
 				<Item id="1659" name="Incluir pastas ocultas"/>
@@ -496,7 +514,6 @@ Translation note:
 				<Item id="1626" name="Estendida  (\n, \r, \t, \0, \x...)"/>
 				<Item id="1660" name="Substituir nos arquivos"/>
 				<Item id="1665" name="Substituir nos projetos"/>
-				<Item id="1661" name="Acompanhar doc. atual"/>
 				<Item id="1662" name="Painel de Projeto 1"/>
 				<Item id="1663" name="Painel de Projeto 2"/>
 				<Item id="1664" name="Painel de Projeto 3"/>
@@ -517,12 +534,13 @@ Translation note:
 				<Item id="1681" name="Procurar:"/>
 				<Item id="1685" name="Diferenciar maiúsc/minúsc"/>
 				<Item id="1690" name="Destacar todos"/>
+				<Item id="1691" name="C&amp;ontar"/>
 			</IncrementalFind>
 
 			<FindCharsInRange title="Localizar caracteres em um intervalo...">
 				<Item id="2" name="Fechar"/>
-				<Item id="2901" name="Caracteres não ASCII (128-255)"/>
-				<Item id="2902" name="Caracteres ASCII (0-127)"/>
+				<Item id="2901" name="Caracteres não ASCII (128–255)"/>
+				<Item id="2902" name="Caracteres ASCII (0–127)"/>
 				<Item id="2903" name="Meu intervalo:"/>
 				<Item id="2906" name="&amp;Acima"/>
 				<Item id="2907" name="&amp;Abaixo"/>
@@ -533,12 +551,12 @@ Translation note:
 
 			<GoToLine title="Ir para...">
 				<Item id="2007" name="&amp;Linha"/>
-				<Item id="2008" name="&amp;Caractere"/>
+				<Item id="2008" name="&amp;Posição"/>
 				<Item id="1" name="Ir"/>
 				<Item id="2" name="Cancelar"/>
-				<Item id="2004" name="Você está aqui :"/>
-				<Item id="2005" name="Deseja ir para :"/>
-				<Item id="2006" name="Você não pode exceder :"/>
+				<Item id="2004" name="Você está aqui:"/>
+				<Item id="2005" name="Deseja ir para:"/>
+				<Item id="2006" name="Você não pode exceder:"/>
 			</GoToLine>
 
 			<Run title="Executar...">
@@ -595,7 +613,7 @@ Translation note:
 				<Item id="1934" name="Co&amp;piar"/>
 				<Item id="2" name="&amp;Fechar"/>
 			</SHA512FromTextDlg>
-			<PluginsAdminDlg title="Gerenciador de plugins" titleAvailable="Disponíveis" titleUpdates="Atualizações" titleInstalled="Instalados" titleIncompatible="Incompatíveis">
+			<PluginsAdminDlg title="Gerenciador de plugins" titleAvailable="Disponíveis" titleUpdates="Atualizações" titleInstalled="Instalados" titleIncompatible="Incompatíveis" titleDisabled="Desativados">
 				<ColumnPlugin name="Plugin"/>
 				<ColumnVersion name="Versão"/>
 				<Item id="5501" name="Pesquisar:"/>
@@ -605,6 +623,8 @@ Translation note:
 				<Item id="5508" name="Próximo"/>
 				<Item id="5509" name="Versões de lista de Plugins: "/>
 				<Item id="5511" name="Repositório de lista de Plugins"/>
+				<Item id="5512" name="D&amp;esativar"/>
+				<Item id="5513" name="&amp;Ativar"/>
 				<Item id="2" name="Fechar"/>
 			</PluginsAdminDlg>
 
@@ -629,16 +649,22 @@ Translation note:
 					<Item id="2219" name="Palavras-chave padrão"/>
 					<Item id="2221" name="Palavras-chave definidas pelo usuário"/>
 					<Item id="2225" name="Linguagem:"/>
-					<Item id="2226" name="Habilitar cor de primeiro plano global"/>
-					<Item id="2227" name="Habilitar cor de plano de fundo global"/>
-					<Item id="2228" name="Habilitar fonte global"/>
-					<Item id="2229" name="Habilitar tamanho de fonte global"/>
-					<Item id="2230" name="Habilitar fonte em negrito global"/>
-					<Item id="2231" name="Habilitar fonte em itálico global"/>
-					<Item id="2232" name="Habilitar fonte sublinhada global"/>
+					<Item id="2226" name="Forçar cor de primeiro plano para todos os estilos"/>
+					<Item id="2227" name="Forçar cor de plano de fundo para todos os estilos"/>
+					<Item id="2228" name="Forçar fonte para todos os estilos"/>
+					<Item id="2229" name="Forçar tamanho de fonte para todos os estilos"/>
+					<Item id="2230" name="Forçar fonte em negrito para todos os estilos"/>
+					<Item id="2231" name="Forçar fonte em itálico para todos os estilos"/>
+					<Item id="2232" name="Forçar fonte sublinhada para todos os estilos"/>
 					<Item id="2234" name="Ir para configuração"/>
+					<!-- Não traduzir "Global override" -->
+					<Item id="2235" name="O que é Global override?"/>
 				</SubDialog>
 			</StyleConfig>
+
+			<ColorPopup>
+				<Item id="1" name="Mais Cores..."/>
+			</ColorPopup>
 
 			<ShortcutMapper title="Mapeador de atalhos">
 				<Item id="2602" name="Modificar"/>
@@ -664,6 +690,8 @@ Translation note:
 				<MainCommandNames>
 					<Item id="41019" name="Abrir o caminho no Explorer"/>
 					<Item id="41020" name="Abrir o caminho no Prompt de Comando"/>
+					<Item id="41027" name="Abrir o caminho no PowerShell"/>
+					<Item id="41025" name="Abrir o camino como Espaço de Trabalho"/>
 					<Item id="41021" name="Restaurar último arquivo fechado"/>
 					<Item id="45001" name="Conversão EOL para Windows (CR LF)"/>
 					<Item id="45002" name="Conversão EOL para Unix (LF)"/>
@@ -817,6 +845,7 @@ Translation note:
 				<Folder title="Dobragem e padrão">
 					<Item id="21101" name="Estilo padrão"/>
 					<Item id="21102" name="Estilo"/>
+					<Item id="21103" name="Ajuda online para Linguagens definidas pelo usuário"/>
 					<Item id="21105" name="Documentação:"/>
 					<Item id="21106" name="Dobrar e compactar (dobrar linhas vazias também)"/>
 					<Item id="21220" name="Dobragem de código estilo 1:"/>
@@ -940,36 +969,57 @@ Translation note:
 			<Preference title="Preferências">
 				<Item id="6001" name="Fechar"/>
 				<Global title="Geral">
-					<Item id="6101" name="Barra de ferramentas"/>
-					<Item id="6102" name="Ocultar"/>
-					<Item id="6103" name="Fluent UI: ícones pequenos"/>
-					<Item id="6104" name="Fluent UI: ícones grandes"/>
-					<Item id="6129" name="Filled Fluent UI: ícones pequenos"/>
-					<Item id="6130" name="Filled Fluent UI: ícones grandes"/>
-					<Item id="6105" name="Padrão: ícones pequenos"/>
+					<Item id="6123" name="Localização"/>
+					<Item id="6131" name="Menu"/>
+					<Item id="6122" name="Ocultar (use teclas Alt ou F10 para alternar)"/>
+					<Item id="6132" name="Ocultar atalhos à direita ＋ ▼ ✕"/>
+					<Item id="6133" name="Barra de Status"/>
+					<Item id="6134" name="Ocultar"/>
+				</Global>
 
-					<Item id="6106" name="Barra de abas"/>
+				<Toolbar title="Ferramentas">
+					<Item id="6102" name="Ocultar"/>
+					<Item id="6103" name="Ícones contornados: pequenos"/>
+					<Item id="6104" name="Ícones contornados: grandes"/>
+					<Item id="6129" name="Ícones cheios: pequenos"/>
+					<Item id="6130" name="Ícones cheios: grandes"/>
+					<Item id="6105" name="Ícones clássicos: pequenos"/>
+					<Item id="6011" name="Colorização"/>
+					<Item id="6012" name="Completo"/>
+					<Item id="6013" name="Parcial"/>
+					<Item id="6014" name="Escolha de Cor"/>
+					<Item id="6015" name="Padrão"/>
+					<Item id="6016" name="Vermelho"/>
+					<Item id="6017" name="Verde"/>
+					<Item id="6018" name="Azul"/>
+					<Item id="6019" name="Roxo"/>
+					<Item id="6020" name="Ciano"/>
+					<Item id="6021" name="Verde Azeitona"/>
+					<Item id="6022" name="Amarelo"/>
+					<Item id="6023" name="Cor base do Sistema"/>
+					<Item id="6024" name="Particularizado"/>
+				</Toolbar>
+
+				<Tabbar title="Barra de Abas">
 					<Item id="6107" name="Reduzir"/>
 					<Item id="6108" name="Travar (sem arrastar e soltar)"/>
-					<Item id="6109" name="Esmaecer abas inativas"/>
+					<Item id="6109" name="Mudar cor de aba inativa"/>
 					<Item id="6110" name="Destacar topo da aba ativa"/>
-					<Item id="6112" name="Mostrar o botão fechar em cada aba"/>
+					<Item id="6111" name="Mostrar botões em abas inativas"/>
+					<Item id="6112" name="Mostrar o botão fechar"/>
 					<Item id="6113" name="Fechar documento com duplo clique"/>
+					<Item id="6115" name="Habilitar recurso de fixar aba"/>
+					<Item id="6135" name="Mostrar apenas botões fixados"/>
 					<Item id="6118" name="Ocultar"/>
 					<Item id="6119" name="Multilinhas"/>
 					<Item id="6120" name="Vertical"/>
 					<Item id="6121" name="Sair ao fechar a última aba"/>
 					<Item id="6128" name="Ícones alternativos"/>
+					<Item id="6125" name="Comportamento"/>
+					<Item id="6126" name="Olhar &amp;&amp; sentir"/>
+					<Item id="6136" name="Tam. máx. de nome em aba:"/>
+				</Tabbar>
 
-					<Item id="6133" name="Barra de Status"/>
-					<Item id="6134" name="Ocultar"/>
-
-					<Item id="6131" name="Menu"/>
-					<Item id="6122" name="Ocultar barra de menus (use Alt ou F10 para alternar)"/>
-					<Item id="6132" name="Esconder atalhos à direita ＋ ▼ ✕ da barra de menus (é necessário reiniciar o Notepad++)"/>
-
-					<Item id="6123" name="Localização"/>
-				</Global>
 				<Scintillas title="Edição 1">
 					<Item id="6216" name="Configurações do cursor"/>
 					<Item id="6217" name="Largura:"/>
@@ -987,12 +1037,15 @@ Translation note:
 					<Item id="6239" name="Manter a seleção ao clicar com o botão direito fora da seleção"/>
 					<Item id="6245" name="Habilitar espaço virtual"/>
 					<Item id="6214" name="Habilitar Copiar/Recortar Linha sem seleção"/>
+					<Item id="6266" name="Desabilitar arrastar e soltar de texto selecionado"/>
+					<Item id="6225" name="Aplicar cor customizada em texto selecionado"/>
 					<Item id="6651" name="Indicador de linha atual"/>
 					<Item id="6652" name="Nenhum"/>
 					<Item id="6653" name="Destacar fundo"/>
 					<Item id="6654" name="Enquadrado"/>
 					<Item id="6655" name="Largura:"/>
 				</Scintillas>
+
 				<Scintillas2 title="Edição 2">
 					<Item id="6521" name="Multi-Edição"/>
 					<Item id="6522" name="Habilitar Multi-Edição (Ctrl+Clique do Mouse/seleção)"/>
@@ -1074,10 +1127,11 @@ Translation note:
 					<Item id="6408" name="UTF-8 com BOM"/>
 					<Item id="6409" name="UTF-16 Big Endian com BOM"/>
 					<Item id="6410" name="UTF-16 Little Endian com BOM"/>
-					<Item id="6411" name="Linguagem padrão :"/>
+					<Item id="6411" name="Linguagem padrão:"/>
 					<Item id="6419" name="Novo documento"/>
 					<Item id="6420" name="Aplicar ao abrir arquivos ANSI"/>
 					<Item id="6432" name="Sempre abrir um novo documento ao iniciar"/>
+					<Item id="6433" name="Usar a primeira linha do documento como nome da aba sem título"/>
 				</NewDoc>
 
 				<DefaultDir title="Diretório padrão">
@@ -1093,17 +1147,28 @@ Translation note:
 					<Item id="4010" name="Extensões registradas:"/>
 				</FileAssoc>
 
+
 				<Language title="Linguagem">
 					<Item id="6505" name="Itens disponíveis"/>
 					<Item id="6506" name="Itens desabilitados"/>
 					<Item id="6507" name="Tornar o menu de linguagens compacto"/>
 					<Item id="6508" name="Menu de linguagens"/>
-					<Item id="6301" name="Configurações de tabulação"/>
-					<Item id="6302" name="Substituir por espaço"/>
-					<Item id="6303" name="Tamanho: "/>
-					<Item id="6510" name="Usar valor padrão"/>
 					<Item id="6335" name="Tratar a barra invertida como caractere de escape para SQL"/>
 				</Language>
+
+				<Indentation title="Indentação">
+					<Item id="7161" name="Auto-indentar"/>
+					<Item id="7162" name="Nenhuma"/>
+					<Item id="7163" name="Básica"/>
+					<Item id="7164" name="Avançada"/>
+					<Item id="6301" name="Configurações de Indentação"/>
+					<Item id="6302" name="Caracter(es) de espaço"/>
+					<Item id="6303" name="Tamanho de indentação:"/>
+					<Item id="6310" name="Indentar usando:"/>
+					<Item id="6311" name="Caracter de TAB"/>
+					<Item id="6510" name="Usar valor padrão"/>
+					<Item id="6512" name="Tecla backspace deleta indentação ao invés de remover um único caracter espaço"/>
+				</Indentation>
 
 				<Highlighting title="Destaque">
 					<Item id="6351" name="Marcar todos"/>
@@ -1124,6 +1189,7 @@ Translation note:
 
 				<Print title="Impressão">
 					<Item id="6601" name="Imprimir número da linha"/>
+					<Item id="6616" name="Imprimir avanço de formulário como quebra de página"/>
 					<Item id="6602" name="Opções de cores"/>
 					<Item id="6603" name="Colorido (com cor de fundo)"/>
 					<Item id="6604" name="Inverter"/>
@@ -1171,6 +1237,9 @@ Translation note:
 					<Item id="6908" name="Preencher o texto selecionado no campo de localização"/>
 					<Item id="6909" name="Selecionar palavra da posição atual do cursor quando nada for selecionado"/>
 					<Item id="6910" name="Tamanho Mínimo para Auto-Selecionar Opção &quot;Na seleção&quot;"/>
+					<Item id="6913" name="Preencher o campo 'Pasta' de 'Localizar nos arquivos' Baseado no Documento Ativo"/>
+					<Item id="6916" name=": Máx Caracteres para Auto-Preenchimento de Campo de Busca da Seleção"/>
+					<Item id="6917" name="Localizar em Arquivos: Preferir conteúdo gravado ao invés de alterações não salvas"/>
 				</Searching>
 
 				<RecentFilesHistory title="Histórico de arquivos recentes">
@@ -1187,7 +1256,7 @@ Translation note:
 				<Backup title="Backup">
 					<Item id="6817" name="Captura da sessão e backup periódico"/>
 					<Item id="6818" name="Habilitar captura da sessão e backup periódico"/>
-					<Item id="6819" name="Backup a cada"/>
+					<Item id="6819" name="Disparar backup em caso de modificação a cada"/>
 					<Item id="6821" name="segundos"/>
 					<Item id="6822" name="Caminho do backup:"/>
 					<Item id="6309" name="Lembrar sessão atual para a próxima inicialização"/>
@@ -1197,11 +1266,10 @@ Translation note:
 					<Item id="6316" name="Backup simples"/>
 					<Item id="6317" name="Backup completo"/>
 					<Item id="6804" name="Personalizar pasta de backup"/>
-					<Item id="6803" name="Pasta :"/>
+					<Item id="6803" name="Pasta:"/>
 				</Backup>
 
 				<AutoCompletion title="Autocompletar">
-					<Item id="6115" name="Autoindentar"/>
 					<Item id="6807" name="Autocompletar"/>
 					<Item id="6808" name="Habilitar autocompletar para cada entrada"/>
 					<Item id="6809" name="Completar função"/>
@@ -1252,15 +1320,15 @@ Translation note:
 					<Item id="6256" name="Permitir em múltiplas linhas"/>
 					<Item id="6161" name="Lista de caracteres de palavras"/>
 					<Item id="6162" name="Usar lista de caracteres de palavras sem mudanças"/>
-					<Item id="6163" name="Adicionar seus caracteres como parte da palavra
-(não o escolha a menos que saiba o que está fazendo)"/>
+					<Item id="6163" name="Adicionar seu caracter como parte da palavra
+(não ative a menos que saiba o que está fazendo)"/>
 				</Delimiter>
 
 				<Performance title="Desempenho">
 					<Item id="7141" name="Restrição para Arquivos Grandes"/>
 					<Item id="7143" name="Habilitar Restrição para Arquivos Grandes (sem destaque de sintaxe)"/>
 					<Item id="7144" name="Definir Tamanho de Arquivos Grandes:"/>
-					<Item id="7146" name="MB   (1 - 4096)"/>
+					<Item id="7146" name="MB   (1 - 2046)"/>
 					<Item id="7147" name="Permitr Chaves Correspondentes"/>
 					<Item id="7148" name="Permitir Autocompletar"/>
 					<Item id="7149" name="Permitir Destaque Inteligente"/>
@@ -1293,20 +1361,38 @@ Translation note:
 
 				<MISC title="Diversos">
 					<ComboBox id="6347">
-						<Element name="Habilitar"/>
+						<Element name="Habilitar para o arquivo atual"/>
 						<Element name="Habilitar para todos os arquivos abertos"/>
 						<Element name="Desabilitar"/>
 					</ComboBox>
-					<Item id="6308" name="Minimizar na bandeja"/>
+					<ComboBox id="6307">
+						<Element name="Sem ação para"/>
+						<Element name="Minimizar para"/>
+						<Element name="Fechar para"/>
+						<Element name="Minimizar / Fechar para"/>
+					</ComboBox>
+					<ComboBox id="6362">
+						<Element name="GDI (mais compatível)"/>
+						<Element name="DirectWrite (padrão)"/>
+						<Element name="DirectWrite (mantém estrutura)"/>
+						<Element name="DirectWrite (estendendo a GDI DC)"/>
+						<Element name="DirectWrite (DirectX 11)"/>
+					</ComboBox>
+					<ComboBox id="6364">
+						<Element name="Desabilitar"/>
+						<Element name="Habilitar ao iniciar o Notepad++"/>
+						<Element name="Habilitar ao encerrar o Notepad++"/>
+					</ComboBox>
+					<Item id="6308" name="bandeja"/>
+					<Item id="6363" name="modo renderização"/>
+					<Item id="6365" name="Auto-atualizar:"/>
 					<Item id="6312" name="Autodetectar estado de arquivos"/>
 					<Item id="6313" name="Atualizar silenciosamente"/>
 					<Item id="6325" name="Ir para a última linha depois de atualizar"/>
 					<Item id="6322" name="Extensão do arquivo de sessão:"/>
-					<Item id="6323" name="Habilitar auto-atualização do Notepad++"/>
 					<Item id="6324" name="Alternador de documentos (Ctrl+TAB)"/>
 					<Item id="6331" name="Exibir somente o nome do arquivo no título"/>
 					<Item id="6334" name="Autodetectar codificação do caractere"/>
-					<Item id="6349" name="Usar DirectWrite (Pode melhorar a renderização de caracteres especiais, é necessário reiniciar o Notepad++)"/>
 					<Item id="6337" name="Extensão do arquivo de espaço de trabalho:"/>
 					<Item id="6114" name="Habilitar"/>
 					<Item id="6117" name="Habilitar comportamento MRU"/>
@@ -1315,6 +1401,7 @@ Translation note:
 					<Item id="6346" name="Espiar no mapa do documento"/>
 					<Item id="6360" name="Silenciar todos os sons"/>
 					<Item id="6361" name="Habilitar caixa de diálogo de confirmação Salvar todos"/>
+					<Item id="6366" name="Permitir a carga de links simbólicos em Pasta como Espaço de Trabalho"/>
 				</MISC>
 			</Preference>
 			<MultiMacro title="Executar macro múltiplas vezes">
@@ -1382,6 +1469,22 @@ Você pode reativar esta janela de confirmação em Preferências depois."/>
 				<Item id="7" name="&amp;Não"/>
 				<Item id="4" name="Sem&amp;pre Sim"/>
 			</DoSaveAll><!-- HowToReproduce: Check the &quot;Enable Save All confirm dialog&quot; checkbox in Preference->MISC, now click &quot;Save all&quot; -->
+			<NetworkPathWarning title="Carregando sessão do Notepad++" title2="Arquivo clicável:// link" title3="Carregando toolbarButtonsConf.xml" title4="Carregando arquivo XML de Projeto">
+				<Item id="1771" name="Aviso de Caminho de Rede:
+
+$STR_REPLACE$
+
+Efetuar a carga deste arquivo vai fazer com que o Windows automaticamente autentique neste servidor, potencialmente expondo suas informações de login no Windows.
+Carrega assim mesmo?"/>
+				<Item id="2" name="&amp;Ignorar"/>
+				<Item id="6" name="Sempre &amp;carregar deste servidor"/>
+				<Item id="7" name="&amp;Sempre ignore caminho de rede"/>
+				<Item id="4" name="Sempre carregue caminho de &amp;rede"/>
+			</NetworkPathWarning>
+			<DebugInfo title="Informação de Depuração">
+				<Item id="1752" name="&amp;Copiar informação de depuração para a área de transferência"/>
+				<Item id="1" name="OK"/>
+			</DebugInfo>
 		</Dialog>
 		<MessageBox>
 			<!-- $INT_REPLACE$ and $STR_REPLACE$ are place holders, don't translate these place holders. -->
@@ -1408,11 +1511,14 @@ Tem certeza de que deseja abri-los?"/><!-- HowToReproduce: Check "Open all files
 			<SettingsOnCloudError title="Configurações na nuvem" message="Parece que o caminho de configurações na nuvem está definido como somente leitura
 ou está em uma pasta que necessita de privilégios para escrita.
 Suas configurações na nuvem serão canceladas. Por favor, redefina um valor coerente através da caixa de diálogo Preferências."/>
-			<FilePathNotFoundWarning title="Abrir arquivo" message="O arquivo que você está tentando abrir não existe."/> <!-- HowToReproduce: this message prevents from system failure. It's hard to reproduce. -->
+			<FilePathNotFoundWarning title="Abrir caminho" message="O caminho que você está tentando abrir não existe."/>
 			<SessionFileInvalidError title="Não foi possível carregar a sessão" message="O arquivo de sessão está corrompido ou não é válido."/><!-- HowToReproduce: Save current session via menu "File -> Save Session...", use another editor to modify the session you saved to make it an invalid xml file. Then load this invalid session via menu "File -> Load Session...". -->
 			<DroppingFolderAsProjectModeWarning title="Você só pode soltar arquivos ou pastas, mas não ambos, porque você está soltando Pasta como modo Projeto.
-Você tem que habilitar o &quot;Abrir todos os arquivos da pasta em vez de usar a pasta como espaço de trabalho&quot; na seção &quot;Diretório padrão&quot; em Preferências para fazer esta operação funcionar."/>
+É necessário habilitar &quot;Abrir todos os arquivos da pasta em vez de usar a pasta como espaço de trabalho&quot; na seção &quot;Diretório padrão&quot; da opção Preferências para que esta operação funcione."/>
 			<SortingError title="Erro de Classificação" message="Não é possível realizar a classificação numérica devido à linha $INT_REPLACE$."/><!-- HowToReproduce: this message prevents from system failure. It's hard to reproduce. -->
+			<SortLocaleMultiple title="Classificação não efetuada" message="Classificação de múltiplas seleções não é suportada."/><!-- HowToReproduce: Make a multiple selection and choose Edit | Line Operations | Sort Lines In Locale Order. -->
+			<SortLocaleUnknown title="Erro de Classificação" message="O motivo da falha de classificação não pôde ser determinado."/><!-- HowToReproduce: This condition is theoretical; it is unknown what could cause it. -->
+			<SortLocaleExcept title="Erro de Classificação" message="$STR_REPLACE$"/><!-- HowToReproduce: Open a large file, e.g. 500MB / 90k lines, in 32-bit Notepad++ and choose Edit | Line Operations | Sort Lines In Locale Order. -->
 			<ColumnModeTip title="Dica de Modo Coluna" message="
 Existem 3 maneiras de ativar o modo de seleção em colunas:
 
@@ -1445,7 +1551,6 @@ Deseja recarregá-lo e perder as alterações feitas no Notepad++?"/>
 			<PrehistoricSystemDetected title="Sistema pré-histórico detectado" message="Parece que você ainda usa um sistema pré-histórico. Esse recurso funciona apenas em um sistema moderno. Desculpe."/>
 			<XpUpdaterProblem title="Atualizador do Notepad++" message="O atualizador do Notepad++ não é compatível com o Windows XP devido à camada de segurança obsoleta dele.
 Deseja ir para a página do Notepad++ e baixar a última versão?"/>
-			<GUpProxyConfNeedAdminMode title="Configurações de Proxy" message="Reinicie o Notepad++ como Admin para configurar o proxy."/>
 			<DocTooDirtyToMonitor title="Problema de monitoramento" message="O documento está sujo. Por favor, salve a modificação antes de monitorá-lo."/>
 			<DocNoExistToMonitor title="Problema de monitoramento" message="O arquivo deve existir para ser monitorado."/>
 			<FileTooBigToOpen title="Problema no tamanho do arquivo" message="Arquivo é muito grande para ser aberto pelo Notepad++"/>
@@ -1483,8 +1588,13 @@ Deseja continuar?"/>
 			<UDLNewNameError title="Erro UDL" message="Esse nome é usado por outro idioma.
 Por favor, dê outro."/>
 			<UDLRemoveCurrentLang title="Remover a linguagem atual" message="Você tem certeza?"/>
+			<UDL_importSuccessful title="Linguagem Definida pelo Usuário" message="Importação efetuada com sucesso."/>
+			<UDL_importFails title="Linguagem Definida pelo Usuário" message="Erro na importação."/>
+			<UDL_saveBeforeImport title="Linguagem Definida pelo Usuário" message="Antes de exportar, salve sua definição de linguagem clicando no botão &quot;Salvar como...&quot;."/> <!-- HowToReproduce: Choose "User Defined Language" in User Language combobox, then click on "Export... button". -->
+			<UDL_exportSuccessful title="Linguagem Definida pelo Usuário" message="Exportação efetuada com sucesso."/>
+			<UDL_exportFails title="Linguagem Definida pelo Usuário" message="Erro na exportação."/>
 			<SCMapperDoDeleteOrNot title="Você tem certeza?" message="Tem certeza de que deseja excluir este atalho?"/>
-			<FindCharRangeValueError title="Problema do Valor do intervalo" message="Você deve digitar entre 0 e 255."/>
+			<FindCharRangeValueError title="Problema do Valor do intervalo" message="Você deve escolher entre 0 e 255."/> <!-- Como Reproduzir: No menu 'Localizar', depois 'Localizar caracteres em um intervalo', selecione 'Meu intervalo', digite 999 nas duas caixas de edição, e clique em 'Localizar'. -->
 			<OpenInAdminMode title="Falha ao salvar" message="O arquivo não pode ser salvo e pode estar protegido.
 Deseja iniciar o Notepad++ no modo Administrador?"/>
 			<OpenInAdminModeWithoutCloseCurrent title="Falha ao salvar" message="O arquivo não pode ser salvo e pode estar protegido.
@@ -1500,13 +1610,9 @@ Deseja continuar?"/>
 			<LanguageMenuCompactWarning title="Menu Compacto de Linguagem" message="Esta opção será alterada na próxima vez que o programa for aberto."/><!-- HowToReproduce: toggle "Make language menu compact" via Preferences dialog "Language/Language Menu. -->
 			<SwitchUnsavedThemeWarning title="$STR_REPLACE$" message="Alterações não salvas estão prestes a serem perdidas!
 Deseja salvar suas alterações antes de alterar os temas?"/><!-- HowToReproduce: In the Style Configurator dialog change some theme and switch to other theme without saving. -->
-			<MacroAndRunCmdlWarning title="Compatibilidade de comandos Macro e Executar" message="Seus comandos Macro e Executar salvos no Notepad++ v.8.5.2 (ou anteriores) podem não ser compatíveis com a versão atual do Notepad++.
-Por favor, teste estes comandos e, se necessário, altere-os.
-
-Como alternativa, você pode voltar à versão v8.5.2 do Notepad++ e restaurar os dados anteriores.
-O Notepad++ irá efetuar backup do seu arquivo &quot;shortcuts.xml&quot; anterior e salvá-lo como &quot;shortcuts.xml.v8.5.2.backup&quot;.
-Ao renomear &quot;shortcuts.xml.v8.5.2.backup&quot; -&gt; &quot;shortcuts.xml&quot;, seus comandos devem ser restaurados e devem funcionar a contento."/><!-- HowToReproduce: Close Notepad++, remove shortcuts.xml.v8.5.2.backup & v852ShortcutsCompatibilityWarning.xml if present, relaunch Notepad++, delete or modify a shortcuts via Shortcut Mapper, close Notepad++, then the message will show up -->
-			<NotEnoughRoom4Saving title="Falha ao salvar" message="Não foi possível salvar o arquivo.
+			<FullReadOnlySavingForbidden title="Erro ao Salvar" message="Não foi possível salvar o arquivo.
+O modo proibição de salvar em apenas-leitura total do Notepad++ impediu que o arquivo fosse salvo."/>
+			<NotEnoughRoom4Saving title="Erro ao salvar" message="Não foi possível salvar o arquivo.
 É possível que não haja espaço em disco suficiente para salvar o arquivo. Seu arquivo não foi salvo."/>
 			<FileInaccessibleUserSession title="Arquivo inacessível" message="Alguns arquivos da sua sessão salva &quot;$STR_REPLACE$&quot; não podem ser acessados. Eles podem ser abertos como arquivos vazios e apenas leitura para que permaneçam na lista de documentos.
 
@@ -1519,6 +1625,28 @@ Deseja criar estes substitutos?
 
 OBSERVAÇÃO: Ao escolher não criar os substitutos ou ao fechá-los depois, sua sessão SERÁ MODIFICADA QUANDO SAIR! É recomendável que você faça backup do seu arquivo &quot;session.xml&quot; agora."/>
 			<RTLvsDirectWrite title="Impossível executar o RTL" message="O RTL (Orientação de texto da Direita para a Esquerda) não é compatível com o modo DirectWrite. Por favor, desabilite a opção &quot;Usar DirectWrite&quot; na seção &quot;Diversos&quot; da opção &quot;Preferências&quot; do menu &quot;Configurações&quot;, e reinicie o Notepad++."/>
+			<FileMemoryAllocationFailed title="Exceção: A Alocação de memória para arquivo falhou" message="Pravavelmente não há memória livre contígua para que o arquivo possa ser carregado pelo Notepad++."/><!-- HowToReproduce: Try to open multiple files with total size > ~700MB in the x86 Notepad++ (it will depend on the PC memory configuration and the current system memory usage...). -->
+			<FindRegexBackwardDisabled title="Busca tipo Regex para trás está desabilitada" message="Por padrão, as buscas Regex para trás são desabilitadas devido a erros que levam a resultados potencialmente inesperados. Para executar uma busca para trás, abra a caixa de diálogo Localizar e selecione busca normal ou estendida ao invés de expressão regular.
+Pressione o botão OK para abrir a caixa de diálogo Localizar ou alterne o foco para ela.
+			
+Se for necessário executar uma busca regex para trás, consulte o manual de usuário para instruções sobre como habilitar este recurso."/>
+			<PrintError title="0" message="Não foi posssível iniciar a impressão do documento."/><!-- Use title="0" para usar o título do "Erro" padrão do Windows. -->
+			<FindAutoChangeOfInSelectionWarning title="Aviso da Localização" message="O estado da caixa de seleção &quot;Na seleção&quot; foi modificado automaticamente.
+Por favor verifique a condição de localização antes de continuar."/> <!-- Como Reproduzir: https://github.com/notepad-plus-plus/notepad-plus-plus/issues/14897#issuecomment-2564316224 -->
+		<Need2Restart2ShowMenuShortcuts title="O Notepad++ precisa ser reiniciado" message="O Notepad++ precisa ser reiniciado para mostrar os atalhos de botão direito."/>
+		<NoAdminRight2ChangeReadOnlyFileAttribute title="Falha na mudança de atributo de apenas leitura do arquivo" message="Por favor execute o Notepad++ como administrador para mudar os atributos de arquivo."/>
+		<ReadOnlyFileCannotBeSaved title="Erro ao Salvar - Arquivo é de Somente Leitura" message="&quot;$STR_REPLACE$&quot;
+O arquivo é de somente leitura e não pode ser salvo.
+Por favor, remova o atributo de somente leitura e depois salve o seu arquivo."/>
+		<ShortcutsXmlHMACMissing title="Aviso de Segurança" message="The security information for shortcuts.xml is missing in config.xml.
+
+Por motivos de segurança, a integridade do arquivo shortcuts.xml será checada. Para executar seu comando customizado, revise o arquivo aberto shortcuts.xml. Se o conteúdo do arquivo estiver OK, use &quot;Validar shortcuts.xml&quot; do menu &quot;Executar&quot; para confirmar."/>
+		<ShortcutsXmlTampered title="Aviso de Segurança" message="O arquivo shortcuts.xml parece ter sido alterado manualmente.
+
+Por motivos de segurança, revise o arquivo aberto shortcuts.xml. Se o conteúdo do arquivo estiver OK, use &quot;Validar shortcuts.xml&quot; do menu &quot;Executar&quot;para confirmar."/>
+		<SymlinkLoadingWarning title="Aviso: Carga de Link Simbólico Pode Provocar Travamento" message="A ativação de carga de links simbólicos em Pasta como Espaço de Trabalho Pode fazer o Notepad++ entrar em um loop infinito e travar.
+Isto pode acontecer quando os links simbólicos apontam para pastas pais ou formam referências circulares.
+Continue apenas se você compreender os riscos."/>
 		</MessageBox>
 		<ClipboardHistory>
 			<PanelTitle name="Histórico da área de transferência"/>
@@ -1535,6 +1663,7 @@ OBSERVAÇÃO: Ao escolher não criar os substitutos ou ao fechá-los depois, sua
 			<ColumnPath name="Caminho"/>
 			<ColumnType name="Tipo"/>
 			<ColumnSize name="Tamanho"/>
+			<ColumnDateTime name="Hora de modificação"/>
 			<NbDocsTotal name="documentos totais:"/>
 			<MenuCopyName name="Copiar nome(s)"/>
 			<MenuCopyPath name="Copiar caminho(s)"/>
@@ -1575,6 +1704,7 @@ OBSERVAÇÃO: Ao escolher não criar os substitutos ou ao fechá-los depois, sua
 				<Item id="3518" name="Explorar aqui"/>
 				<Item id="3519" name="CMD (Prompt de Comando) aqui"/>
 				<Item id="3520" name="Copiar nome do arquivo"/>
+				<Item id="3521" name="PowerShell aqui"/>
 			</Menu>
 		</FolderAsWorkspace>
 		<ProjectManager>
@@ -1653,9 +1783,10 @@ Procurar em todos os arquivos, excluindo pastas de teste, lixeira&amp;&amp; bin6
 
 Procurar em todos os arquivos, excluindo pastas de log ou logs recursivamente:
 *.* !+\log*"/><!-- HowToReproduce: Tip of mouse hovered on "Filters" label in "Find in Files" section of Find dialog. -->
-			<find-in-files-select-folder value="Selecione uma pastaorigem da busca"/><!-- HowToReproduce: Search > Find in Files > [...] -->
-			<find-status-top-reached value="Localizar: Encontrada a primeira ocorrência a partir do final. O início do documento foi alcançado."/>
-			<find-status-end-reached value="Localizar: Encontrada a primeira ocorrência a partir do início. O final do documento foi alcançado."/>
+			<find-in-files-select-folder value="Selecione uma pasta origem da busca"/><!-- HowToReproduce: Search > Find in Files > [...] -->
+			<find-in-files-dir-from-active-doc-tip value="Preencha o campo Pasta baseado no documento ativo"/><!-- HowToReproduce: Search > Find in Files > [<<] -->
+			<find-status-top-reached value="Localizar: O início do documento foi alcançado, a primeira ocorrência a partir do final foi encontrada."/>
+			<find-status-end-reached value="Localizar: O final do documento foi alcançado, a primeira ocorrência a partir do início foi encontrada."/>
 			<find-status-replaceinfiles-1-replaced value="Substituir em Arquivos: 1 ocorrência foi substituída."/>
 			<find-status-replaceinfiles-nb-replaced value="Substituir em Arquivos: $INT_REPLACE$ ocorrências foram substituídas."/>
 			<find-status-replaceinopenedfiles-1-replaced value="Substituir em Arquivos Abertos: 1 ocorrência foi substituída."/>
@@ -1669,8 +1800,8 @@ Procurar em todos os arquivos, excluindo pastas de log ou logs recursivamente:
 			<find-status-replaceall-1-replaced value="Substituir todas: 1 ocorrência foi substituída."/>
 			<find-status-replaceall-nb-replaced value="Substituir todas: $INT_REPLACE$ ocorrências foram substituídas."/>
 			<find-status-replaceall-readonly value="Substituir todas: Texto não substituído. O documento é somente leitura."/>
-			<find-status-replace-end-reached value="Substituir: Substituída a primeira ocorrência a partir do início. O final do documento foi alcançado."/>
-			<find-status-replace-top-reached value="Substituir: Substituída a primeira ocorrência a partir do final. O início do documento foi alcançado."/>
+			<find-status-replace-end-reached value="Substituir: O final do documento foi alcançado, a primeira ocorrência a partir do início foi substituída."/>
+			<find-status-replace-top-reached value="Substituir: O início do documento foi alcançado, a primeira ocorrência a partir do final foi substituída."/>			
 			<find-status-replaced-next-found value="Substituir: 1 ocorrência foi substituída. A próxima ocorrência encontrada."/>
 			<find-status-replaced-without-continuing value="Substituir: 1 ocorrência foi substituída."/>
 			<find-status-replaced-next-not-found value="Substituir: 1 ocorrência foi substituída. A próxima ocorrência não encontrada."/>
@@ -1682,19 +1813,24 @@ Procurar em todos os arquivos, excluindo pastas de log ou logs recursivamente:
 			<find-status-scope-all value="no arquivo inteiro"/>
 			<find-status-scope-backward value="do começo do arquivo ao cursor"/>
 			<find-status-scope-forward value="do cursor ao fim do arquivo"/>
+			<find-status-replace-invalid-replace-chars value="Substituir: não é possível substituir com caracteres não-ANSI em documento ANSI"/>
+			<find-status-invisible-chars-findWhat value="Caracteres invisíveis colados nos campos &quot;Localizar&quot; ou &quot;Substituir por&quot;"/>
+			<find-status-invisible-chars-findWhat-tip value="Aviso: Caracteres invisíveis no campo localizar (ou substituir por). 
+O texto colado neste campo inclui caracteres invisíveis (talvez caracter de final de linha). Se você continuar sem apagá-los, eles serão incluídos no texto de busca (ou substituição)."/>
 			<finder-find-in-finder value="Localizar nos resultados encontrados..."/>
 			<finder-close-this value="Fechar estes resultados de pesquisa"/>
 			<finder-collapse-all value="Recolher tudo"/>
 			<finder-uncollapse-all value="Expandir tudo"/>
 			<finder-copy value="Copiar linha(s) selecionada(s)"/>
-			<finder-copy-paths value="Copiar nome(s) de caminho(s)"/>
+			<finder-copy-selected-paths value="Copiar caminho(s) selecionado(s)"/>
 			<finder-clear-all value="Limpar tudo"/>
-			<finder-open-all value="Abrir tudo"/>
+			<finder-open-selected-paths value="Abrir caminho(s) selecionado(s)"/>
 			<finder-purge-for-every-search value="Limpar a cada pesquisa"/>
 			<finder-wrap-long-lines value="Quebra de linha em linhas longas"/>
 			<common-ok value="OK"/>
 			<common-cancel value="Cancelar"/>
-			<common-name value="Nome: "/>
+			<common-name value="Nome"/>
+			<common-error value="Erro"/>
 			<tabrename-title value="Renomear aba atual"/>
 			<tabrename-newname value="Novo nome: "/>
 			<splitter-rotate-left value="Girar para a esquerda"/>
@@ -1716,9 +1852,10 @@ Procurar em todos os arquivos, excluindo pastas de log ou logs recursivamente:
 			<progress-hits-title value="Ocorrências:"/>
 			<progress-cancel-info value="Cancelando operação, aguarde..."/>
 			<find-in-files-progress-title value="Progresso do Localizar nos arquivos..."/>
+			<discover-file-candidates-title value="Descobrindo arquivos candidatos..."/>
 			<replace-in-files-confirm-title value="Tem certeza?"/>
-			<replace-in-files-confirm-directory value="Tem certeza de que deseja substituir todas as ocorrências em :"/>
-			<replace-in-files-confirm-filetype value="Para o tipo de arquivo :"/>
+			<replace-in-files-confirm-directory value="Tem certeza de que deseja substituir todas as ocorrências em:"/>
+			<replace-in-files-confirm-filetype value="Para o tipo de arquivo:"/>
 			<replace-in-files-progress-title value="Progresso do Substituir nos arquivos..."/>
 			<replace-in-projects-confirm-title value="Tem certeza?"/>
 			<replace-in-projects-confirm-message value="Deseja substituir todas as ocorrências em todos os documentos no(s) Painel(éis) de Projeto selecionado(s)?"/>
@@ -1741,7 +1878,6 @@ Procurar em todos os arquivos, excluindo pastas de log ou logs recursivamente:
 			<tab-untitled-string value="novo "/>
 			<file-save-assign-type value="&amp;Acrescentar extensão"/>
 			<close-panel-tip value="Fechar"/>
-			<IncrementalFind-FSFound value="$INT_REPLACE$ ocorrências"/>
 			<IncrementalFind-FSNotFound value="Frase não encontrada"/>
 			<IncrementalFind-FSTopReached value="Chegou ao começo da página, continuando do final"/>
 			<IncrementalFind-FSEndReached value="Chegou ao final da página, continuando do começo"/>
@@ -1781,8 +1917,39 @@ Clique no botão &quot;?&quot; à direita para abrir o site com o Manual do Usu�
 			<!-- Don't translate "(&quot;Non-printing characters custom color&quot;)" -->
 			<npcCustomColor-tip value="Acesse o Configurador de Estilos para mudar a cor padrão para espaços em branco e caracteres sem representação selecionados (&quot;Cor padrão para caracteres sem representação&quot;)."/>
 			<npcIncludeCcUniEol-tip value="Aplicar as configurações de caracteres sem representação para os caracteres C0, C1 e EOL Unicode (próxima linha, separador de linha e separador de parágrafo)."/>
-			<searchingInSelThresh-tip value="Número de caracteres selecionados no modo editor para marcar automaticamente a opção &quot;Na seleção&quot; quando a caixa de diálogo Localizar for ativada. O valor máximo é 1024. Use o valor 0 para desabilitar a auto-seleção."/>
+			<searchingInSelThresh-tip value="Número mínimo de caracteres selecionados em modo editor para marcar automaticamente a caixa de seleção &quot;Na seleção&quot; quando a janela Localizar for ativada. O número máximo é $INT_REPLACE$. Ajuste o valor para 0 para desabilitar a checagem automática."/>
+			<searchingFillFindWhat-tip value="Número máximo de caracteres selecionados no modo editor para preencher automaticamente o campo &quot;Localizar&quot; quando o Ctrl-F for utilizado. O valor máximo é $INT_REPLACE$, que é o valor máximo do campo &quot;Localizar&quot;, limitado pelo sistema."/>
 			<verticalEdge-tip value="Adicione seu marcador de coluna indicando a posição com um número decimal. É possível definir vários marcadores de coluna usando um espaço em branco para separar os números diferentes."/>
+			<fileSaveAsCopySaveButton-tip value="Pressione a tecla Shift enquanto clica em &quot;Salvar uma cópia como...&quot; para abrir a cópia após salvar."/>
+			<autoIndentBasic-tip value="Garantir que a indentação da linha atual (por exemplo, a nova linha criada ao pressionar a tecla ENTER) seja igual à indentação da linha anterior."/>
+			<autoIndentAdvanced-tip value="Habilitar a indentação inteligente para linguagens com regras baseadas nas linguagens &quot;C&quot; e Python. As linguagens baseadas em &quot;C&quot; incluem:
+C, C++, Java, C#, Objective-C, PHP, JavaScript, JSP, CSS, Perl, Rust, PowerShell e JSON.
+
+Se você ativar o modo avançado mas não editar arquivos destas linguagens, a indentação continuará em modo básico."/>
+
+			<!-- Não traduzir "Global override" e "Default Style" -->
+			<global-override-tip value="Habilitar o &quot;Global override&quot; aqui vai prevalecer sobre este parâmetro em todos os estilos de linguagem. O que provavelmente é desejado é usar as configurações de &quot;Default Style&quot;"/>
+			<scintillaRenderingTechnology-tip value="Pode melhorar a renderização de caracteres especiais ou resolver alguns problemas gráficos, reinicie o Notepad++ para aplicar as mudanças."/>
+
+			<!-- Devido ao espaço limitado na barra de status, se as traduções para 'length' & 'lines' forem muito maiores do que o texto em Inglês, por favor deixe-os em Inglês ao invés de traduzi-los. -->
+ 			<statusbar-length-lines value="tamanho: $STR_REPLACE1$    linhas: $STR_REPLACE2$"/>
+
+			<!-- Devido ao espaço limitado na barra de status, se as traduções para 'Ln' & 'Col' forem muito maiores do que o texto em Inglês, por favor deixe-os em Inglês ao invés de traduzi-los. -->
+ 			<statusbar-Ln-Col value="Ln: $STR_REPLACE1$    Col: $STR_REPLACE2$"/>
+ 
+			<!-- Devido ao espaço limitado na barra de status, se as traduções para 'Pos' & 'Sel' forem muito maiores do que o texto em Inglês, por favor deixe-os em Inglês ao invés de traduzi-los. -->
+ 			<statusbar-Pos value="Pos: "/>
+ 			<statusbar-Sel value="Sel: "/>
+ 			<statusbar-Sel-number value="Sel"/>
+			<toolbar-accent-tip value="Esta opção faz com que os ícondes de sua barra de ferramentas sigam a cor principal do sistema Windows. A cor principal é a cor de destaque usada em botões, margens, e títulos no Menu Iniciar do Windows. Para alterar, acesse Configurações &gt; Preferências &gt; Cores, e então selecione seu padrão de  cores preferido."/>
+			<len-limit-exceeded-tip value="Limite de tamanho excedido: Seu texto pode exceder o limite permitido e pode ter sido truncado, e não será salvo para a próxima sessão."/>
+			<max-len-on-search-tip value="São permitidos apenas $INT_REPLACE$ caracteres para tamanho de texto de localização/substituição - o seu texto pode ser truncado, e não será salvo para a próxima sessão."/>
+			<max-len-on-save-tip value="Este texto de localização (> $INT_REPLACE$ caracteres) não será salvo para a próxima sessão."/>
+			<goto-setting-tip value="Encontre sua configuração aqui"/>
+			<tabbar-tabcompactlabellen-tip value="Limita o tamanho visível de nomes longos em abas. Use para aplicar o tamanho desejado. Faixa de valores: 1-257 caracteres (0 desabilita a limitação)."/>
+			<networkpathwarning-serverwhitelist-tip value="Colocar o servidor do arquivo atual no arquivo serverWhiteList.xml do Notepad++.
+
+Para mais informações, clique neste botão para abrir o site com o capítulo relevante do Manual do Usuário."/>
 		</MiscStrings>
 	</Native-Langue>
 </NotepadPlus>

@@ -42,51 +42,57 @@ enum eMousePos {
 #define CLOSEBTN_POS_LEFT	3
 #define CLOSEBTN_POS_TOP	3
 
+constexpr int g_dockingContCloseBtnSize = 12;
+
+constexpr int g_dockingContTabIconSize = 16;
+constexpr int g_dockingContTabIconPadding = 3;
 
 class DockingCont : public StaticDialog
 {
 public:
 	DockingCont();
-	~DockingCont();
+	~DockingCont() override;
 
 	HWND getTabWnd() {
 		return _hContTab;
-	};
-	HWND getCaptionWnd() { 
+	}
+	HWND getCaptionWnd() {
 		if (_isFloating == false)
 			return _hCaption;
 		else
 			return _hSelf;
-	};
+	}
 
-	tTbData* createToolbar(tTbData data);
-	void	 removeToolbar(tTbData data);
-	tTbData* findToolbarByWnd(HWND hClient);
-	tTbData* findToolbarByName(TCHAR* pszName);
+	DockedWidgetData* createDockedWidget(const DockedWidgetData& data);
+	void removeDockedWidget(const DockedWidgetData& data);
+	DockedWidgetData* findDockedWidgetByWnd(HWND hClient);
+	DockedWidgetData* findDockedWidgetByName(wchar_t* pszName);
 
-	void showToolbar(tTbData *pTbData, BOOL state);
+	void showDockedWidget(DockedWidgetData *pTbData, BOOL state);
 
 	BOOL updateInfo(HWND hClient) {
-		for (size_t iTb = 0; iTb < _vTbData.size(); ++iTb)
+		for (size_t iTb = 0; iTb < _dwDataVect.size(); ++iTb)
 		{
-			if (_vTbData[iTb]->hClient == hClient)
+			if (_dwDataVect[iTb]->hClient == hClient)
 			{
 				updateCaption();
 				return TRUE;
 			}
 		}
 		return FALSE;
-	};
+	}
 
-	void setActiveTb(tTbData* pTbData);
+	void setActiveTb(DockedWidgetData* pTbData);
 	void setActiveTb(int iItem);
 	int getActiveTb();
-	tTbData * getDataOfActiveTb();
-	std::vector<tTbData *> getDataOfAllTb() {
-		return _vTbData;
-	};
-	std::vector<tTbData *> getDataOfVisTb();
-	bool isTbVis(tTbData* data);
+	DockedWidgetData * getDataOfActiveTb();
+
+	std::vector<DockedWidgetData *> getDataOfAllTb() {
+		return _dwDataVect;
+	}
+
+	std::vector<DockedWidgetData *> getDataOfVisTb();
+	bool isTbVis(DockedWidgetData* data);
 
 	void doDialog(bool willBeShown = true, bool isFloating = false);
 
@@ -95,7 +101,7 @@ public:
 	}
 
 	size_t getElementCnt() {
-		return _vTbData.size();
+		return _dwDataVect.size();
 	}
 
 	// interface function for gripper
@@ -103,46 +109,44 @@ public:
 		BOOL	dragFromTabTemp = _dragFromTab;
 		_dragFromTab = FALSE;
 		return dragFromTabTemp;
-	};
+	}
 
 	void setCaptionTop(BOOL isTopCaption) {
 		_isTopCaption = (isTopCaption == CAPTION_TOP);
 		onSize();
-	};
+	}
 
 	void focusClient();
 
 	void SetActive(BOOL bState) {
 		_isActive = bState;
 		updateCaption();
-	};
+	}
 
-	void setTabStyle(const BOOL & bDrawOgLine) {
-		_bDrawOgLine = bDrawOgLine;
-		::RedrawWindow(_hContTab, nullptr, nullptr, RDW_INVALIDATE);
-	};
-
-	void destroy() override{
-		for (int iTb = static_cast<int>(_vTbData.size()); iTb > 0; iTb--)
+	void destroy() override {
+		for (auto& dwData : _dwDataVect)
 		{
-			delete _vTbData[iTb-1];
+			if (dwData->hIconTab != nullptr)
+			{
+				::DestroyIcon(dwData->hIconTab);
+				dwData->hIconTab = nullptr;
+			}
+			delete dwData;
 		}
 		::DestroyWindow(_hSelf);
-	};
+	}
 
-protected :
+	void destroyFonts();
+
+protected:
 
 	// Subclassing caption
 	LRESULT runProcCaption(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
-	static LRESULT CALLBACK wndCaptionProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam) {
-		return (((DockingCont *)(::GetWindowLongPtr(hwnd, GWLP_USERDATA)))->runProcCaption(hwnd, Message, wParam, lParam));
-	};
+	static LRESULT CALLBACK DockingCaptionSubclass(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 
 	// Subclassing tab
 	LRESULT runProcTab(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
-	static LRESULT CALLBACK wndTabProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam) {
-		return (((DockingCont *)(::GetWindowLongPtr(hwnd, GWLP_USERDATA)))->runProcTab(hwnd, Message, wParam, lParam));
-	};
+	static LRESULT CALLBACK DockingTabSubclass(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
 
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
@@ -154,18 +158,19 @@ protected :
 	// functions for caption handling and drawing
 	eMousePos isInRect(HWND hwnd, int x, int y);
 
-	// handling of toolbars
+	// handling of docked widgets
 	void doClose(BOOL closeAll);
 
 	// return new item
-	int  searchPosInTab(tTbData* pTbData);
+	int  searchPosInTab(DockedWidgetData* pTbData);
 	void selectTab(int iTab);
 
-	int  hideToolbar(tTbData* pTbData, BOOL hideClient = TRUE);
-	void viewToolbar(tTbData *pTbData);
-	int  removeTab(tTbData* pTbData) {
-		return hideToolbar(pTbData, FALSE);
-	};
+	int  hideDockedWidget(DockedWidgetData* pTbData, BOOL hideClient = TRUE);
+	void viewDockedWidget(DockedWidgetData *pTbData);
+
+	int  removeTab(DockedWidgetData* pTbData) {
+		return hideDockedWidget(pTbData, FALSE);
+	}
 
 	bool updateCaption();
 	LPARAM NotifyParent(UINT message);
@@ -173,7 +178,7 @@ protected :
 private:
 	// handles
 	BOOL _isActive = FALSE;
-	bool _isFloating = FALSE;
+	bool _isFloating = false;
 	HWND _hCaption = nullptr;
 	HWND _hContTab = nullptr;
 	HWND _hTabUpdown = nullptr;
@@ -183,25 +188,16 @@ private:
 	HFONT _hFontCaption = nullptr;
 
 	// caption params
-	BOOL _isTopCaption = FALSE;
-	generic_string _pszCaption;
+	BOOL _isTopCaption = CAPTION_TOP;
+	std::wstring _pszCaption;
 
 	BOOL _isMouseDown = FALSE;
 	BOOL _isMouseClose = FALSE;
 	BOOL _isMouseOver = FALSE;
 	RECT _rcCaption{};
-	
-	// tab style
-	BOOL _bDrawOgLine = FALSE;
 
 	// Important value for DlgMoving class
 	BOOL _dragFromTab = FALSE;
-
-	// subclassing handle for caption
-	WNDPROC _hDefaultCaptionProc = nullptr;
-
-	// subclassing handle for tab
-	WNDPROC _hDefaultTabProc = nullptr;
 
 	// for moving and reordering
 	UINT _prevItem = 0;
@@ -213,16 +209,15 @@ private:
 
 	BOOL _bCaptionTT = FALSE;
 	BOOL _bCapTTHover = FALSE;
-	eMousePos _hoverMPos = posOutside;
+	eMousePos _hoverMPos = posClose;
 
 	int _captionHeightDynamic = HIGH_CAPTION;
 	int _captionGapDynamic = CAPTION_GAP;
 	int _closeButtonPosLeftDynamic = CLOSEBTN_POS_LEFT;
 	int _closeButtonPosTopDynamic = CLOSEBTN_POS_TOP;
-	int _closeButtonWidth = 12;
-	int _closeButtonHeight = 12;
+	int _closeButtonWidth = g_dockingContCloseBtnSize;
+	int _closeButtonHeight = g_dockingContCloseBtnSize;
 
 	// data of added windows
-	std::vector<tTbData *> _vTbData;
+	std::vector<DockedWidgetData *> _dwDataVect;
 };
-

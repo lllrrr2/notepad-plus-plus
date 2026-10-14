@@ -14,19 +14,30 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include <stdio.h>
+
 #include <windows.h>
-#include "StaticDialog.h"
+
+#include <cstddef>
+#include <cstring>
+#include <cwchar>
+#include <string>
+#include <vector>
+
 #include "Common.h"
+#include "Notepad_plus_msgs.h"
 #include "NppDarkMode.h"
+#include "Parameters.h"
+#include "StaticDialog.h"
+#include "Window.h"
+#include "dpiManagerV2.h"
 
 StaticDialog::~StaticDialog()
 {
-	if (isCreated())
+	if (StaticDialog::isCreated())
 	{
 		// Prevent run_dlgProc from doing anything, since its virtual
 		::SetWindowLongPtr(_hSelf, GWLP_USERDATA, 0);
-		destroy();
+		StaticDialog::destroy();
 	}
 }
 
@@ -93,50 +104,66 @@ void StaticDialog::goToCenter(UINT swpFlags)
 	int y = center.y - (_rc.bottom - _rc.top)/2;
 
 	::SetWindowPos(_hSelf, HWND_TOP, x, y, _rc.right - _rc.left, _rc.bottom - _rc.top, swpFlags);
+	if (((swpFlags & SWP_NOMOVE) != SWP_NOMOVE) && ((swpFlags & SWP_SHOWWINDOW) == SWP_SHOWWINDOW))
+		::SendMessageW(_hSelf, DM_REPOSITION, 0, 0);
 }
 
-void StaticDialog::display(bool toShow, bool enhancedPositioningCheckWhenShowing) const
+bool StaticDialog::moveForDpiChange()
+{
+	if (_dpiManager.getDpi() != _dpiManager.getDpiForWindow(_hParent))
+	{
+		goToCenter(SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOACTIVATE);
+		return true;
+	}
+	return false;
+}
+
+void StaticDialog::display(bool toShow) const
 {
 	if (toShow)
 	{
-		if (enhancedPositioningCheckWhenShowing)
-		{
-			RECT testPositionRc{}, candidateRc{};
+		// If the user has switched from a dual monitor to a single monitor since we last
+		// displayed the dialog, then ensure that it's still visible on the single monitor.
+		RECT workAreaRect{};
+		RECT rc{};
+		::SystemParametersInfo(SPI_GETWORKAREA, 0, &workAreaRect, 0);
+		::GetWindowRect(_hSelf, &rc);
+		int newLeft = rc.left;
+		int newTop = rc.top;
+		int margin = ::GetSystemMetrics(SM_CYSMCAPTION);
 
-			getWindowRect(testPositionRc);
+		if (newLeft > ::GetSystemMetrics(SM_CXVIRTUALSCREEN) - margin)
+			newLeft -= rc.right - workAreaRect.right;
+		if (newLeft + (rc.right - rc.left) < ::GetSystemMetrics(SM_XVIRTUALSCREEN) + margin)
+			newLeft = workAreaRect.left;
+		if (newTop > ::GetSystemMetrics(SM_CYVIRTUALSCREEN) - margin)
+			newTop -= rc.bottom - workAreaRect.bottom;
+		if (newTop + (rc.bottom - rc.top) < ::GetSystemMetrics(SM_YVIRTUALSCREEN) + margin)
+			newTop = workAreaRect.top;
 
-			candidateRc = getViewablePositionRect(testPositionRc);
-
-			if ((testPositionRc.left != candidateRc.left) || (testPositionRc.top != candidateRc.top))
-			{
-				::MoveWindow(_hSelf, candidateRc.left, candidateRc.top, 
-					candidateRc.right - candidateRc.left, candidateRc.bottom - candidateRc.top, TRUE);
-			}
-		}
+		if ((newLeft != rc.left) || (newTop != rc.top)) // then the virtual screen size has shrunk
+			::SetWindowPos(_hSelf, nullptr, newLeft, newTop, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 		else
+			::SendMessageW(_hSelf, DM_REPOSITION, 0, 0);
+	}
+
+	Window::display(toShow);
+}
+
+void StaticDialog::displayEnhanced(bool toShow) const
+{
+	if (toShow)
+	{
+		RECT testPositionRc{}, candidateRc{};
+
+		getWindowRect(testPositionRc);
+
+		candidateRc = getViewablePositionRect(testPositionRc);
+
+		if ((testPositionRc.left != candidateRc.left) || (testPositionRc.top != candidateRc.top))
 		{
-			// If the user has switched from a dual monitor to a single monitor since we last
-			// displayed the dialog, then ensure that it's still visible on the single monitor.
-			RECT workAreaRect{};
-			RECT rc{};
-			::SystemParametersInfo(SPI_GETWORKAREA, 0, &workAreaRect, 0);
-			::GetWindowRect(_hSelf, &rc);
-			int newLeft = rc.left;
-			int newTop = rc.top;
-			int margin = ::GetSystemMetrics(SM_CYSMCAPTION);
-
-			if (newLeft > ::GetSystemMetrics(SM_CXVIRTUALSCREEN) - margin)
-				newLeft -= rc.right - workAreaRect.right;
-			if (newLeft + (rc.right - rc.left) < ::GetSystemMetrics(SM_XVIRTUALSCREEN) + margin)
-				newLeft = workAreaRect.left;
-			if (newTop > ::GetSystemMetrics(SM_CYVIRTUALSCREEN) - margin)
-				newTop -= rc.bottom - workAreaRect.bottom;
-			if (newTop + (rc.bottom - rc.top) < ::GetSystemMetrics(SM_YVIRTUALSCREEN) + margin)
-				newTop = workAreaRect.top;
-
-			if ((newLeft != rc.left) || (newTop != rc.top)) // then the virtual screen size has shrunk
-				// Remember that MoveWindow wants width/height.
-				::MoveWindow(_hSelf, newLeft, newTop, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+			::MoveWindow(_hSelf, candidateRc.left, candidateRc.top,
+				candidateRc.right - candidateRc.left, candidateRc.bottom - candidateRc.top, TRUE);
 		}
 	}
 
@@ -200,63 +227,313 @@ RECT StaticDialog::getViewablePositionRect(RECT testPositionRc) const
 	return returnRc;
 }
 
-HGLOBAL StaticDialog::makeRTLResource(int dialogID, DLGTEMPLATE **ppMyDlgTemplate)
+[[nodiscard]] static bool dupDlgTemplate(HINSTANCE hInst, int dialogID, std::vector<std::byte>& dlgTemplateData)
 {
 	// Get Dlg Template resource
-	HRSRC  hDialogRC = ::FindResource(_hInst, MAKEINTRESOURCE(dialogID), RT_DIALOG);
+	HRSRC hDialogRC = ::FindResourceW(hInst, MAKEINTRESOURCE(dialogID), RT_DIALOG);
 	if (!hDialogRC)
-		return NULL;
+		return false;
 
-	HGLOBAL  hDlgTemplate = ::LoadResource(_hInst, hDialogRC);
+	HGLOBAL hDlgTemplate = ::LoadResource(hInst, hDialogRC);
 	if (!hDlgTemplate)
-		return NULL;
+		return false;
 
-	DLGTEMPLATE *pDlgTemplate = static_cast<DLGTEMPLATE *>(::LockResource(hDlgTemplate));
+	const auto pDlgTemplate = static_cast<DLGTEMPLATE*>(::LockResource(hDlgTemplate));
 	if (!pDlgTemplate)
-		return NULL;
+		return false;
 
 	// Duplicate Dlg Template resource
-	unsigned long sizeDlg = ::SizeofResource(_hInst, hDialogRC);
-	HGLOBAL hMyDlgTemplate = ::GlobalAlloc(GPTR, sizeDlg);
-	if (!hMyDlgTemplate) return nullptr;
+	const size_t sizeDlg = ::SizeofResource(hInst, hDialogRC);
+	dlgTemplateData.resize(sizeDlg);
+	::memcpy(dlgTemplateData.data(), pDlgTemplate, sizeDlg);
 
-	*ppMyDlgTemplate = static_cast<DLGTEMPLATE *>(::GlobalLock(hMyDlgTemplate));
-	if (!*ppMyDlgTemplate) return nullptr;
-
-	::memcpy(*ppMyDlgTemplate, pDlgTemplate, sizeDlg);
-
-	DLGTEMPLATEEX* pMyDlgTemplateEx = reinterpret_cast<DLGTEMPLATEEX *>(*ppMyDlgTemplate);
-	if (!pMyDlgTemplateEx) return nullptr;
-
-	if (pMyDlgTemplateEx->signature == 0xFFFF)
-		pMyDlgTemplateEx->exStyle |= WS_EX_LAYOUTRTL;
-	else
-		(*ppMyDlgTemplate)->dwExtendedStyle |= WS_EX_LAYOUTRTL;
-
-	return hMyDlgTemplate;
+	return true;
 }
 
-void StaticDialog::create(int dialogID, bool isRTL, bool msgDestParent)
+[[nodiscard]] static bool setRTLResource(std::vector<std::byte>& dlgTemplateData)
 {
-	if (isRTL)
+	auto pMyDlgTemplateEx = reinterpret_cast<DLGTEMPLATEEX*>(dlgTemplateData.data());
+	if (!pMyDlgTemplateEx)
+		return false;
+
+	if (pMyDlgTemplateEx->signature == 0xFFFF && pMyDlgTemplateEx->dlgVer == 1)
 	{
-		DLGTEMPLATE *pMyDlgTemplate = NULL;
-		HGLOBAL hMyDlgTemplate = makeRTLResource(dialogID, &pMyDlgTemplate);
-		_hSelf = ::CreateDialogIndirectParam(_hInst, pMyDlgTemplate, _hParent, dlgProc, reinterpret_cast<LPARAM>(this));
-		::GlobalFree(hMyDlgTemplate);
+		pMyDlgTemplateEx->exStyle |= WS_EX_LAYOUTRTL;
 	}
 	else
-		_hSelf = ::CreateDialogParam(_hInst, MAKEINTRESOURCE(dialogID), _hParent, dlgProc, reinterpret_cast<LPARAM>(this));
+	{
+		auto pMyDlgTemplate = reinterpret_cast<DLGTEMPLATE*>(dlgTemplateData.data());
+		pMyDlgTemplate->dwExtendedStyle |= WS_EX_LAYOUTRTL;
+	}
+
+	return true;
+}
+
+// inspired by https://stackoverflow.com/questions/14370238
+[[nodiscard]] static std::byte* skipSz(std::byte* pData)
+{
+	auto str = reinterpret_cast<WCHAR*>(pData); // string
+	const size_t length = std::wcslen(str);
+	return reinterpret_cast<std::byte*>(str + length + 1);
+}
+
+[[nodiscard]] static std::byte* skipSzOrOrd(std::byte* pData)
+{
+	auto ptrElement = reinterpret_cast<WORD*>(pData);
+
+	if (*ptrElement == 0xFFFF) // ordinal
+	{
+		ptrElement += 2;
+	}
+	else // string or no element, same as skipSz
+	{
+		const auto str = reinterpret_cast<WCHAR*>(ptrElement);
+		ptrElement += (std::wcslen(str) + 1);
+	}
+
+	return reinterpret_cast<std::byte*>(ptrElement);
+}
+
+[[nodiscard]] static constexpr size_t alignToDWORD(size_t offset) noexcept
+{
+	return (offset + 3U) & ~static_cast<size_t>(3U);
+}
+
+[[nodiscard]] static std::wstring getDefaultGUIFontFaceName()
+{
+	NONCLIENTMETRICS ncm{};
+	ncm.cbSize = sizeof(NONCLIENTMETRICS);
+	if (::SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0) == TRUE)
+	{
+		return ncm.lfMessageFont.lfFaceName;
+	}
+	return L"MS Shell Dlg";
+}
+
+static int CALLBACK EnumFontProc(
+	[[maybe_unused]] const LOGFONTW* /*lpelfe*/,
+	[[maybe_unused]] const TEXTMETRICW* /*lpntme*/,
+	[[maybe_unused]] DWORD /*FontType*/,
+	LPARAM lParam
+)
+{
+	*reinterpret_cast<bool*>(lParam) = true;
+	return 0;
+}
+
+[[nodiscard]] static bool isFontValid(const std::wstring& faceName)
+{
+	if (faceName.empty() || faceName.length() >= LF_FACESIZE)
+	{
+		return false;
+	}
+
+	if (::_wcsicmp(faceName.c_str(), L"MS Shell Dlg") == 0
+		|| ::_wcsicmp(faceName.c_str(), L"MS Shell Dlg 2") == 0)
+	{
+		return true;
+	}
+
+	LOGFONTW lf{};
+	lf.lfCharSet = DEFAULT_CHARSET;
+	::wcscpy_s(lf.lfFaceName, faceName.c_str());
+
+	HDC hdc = ::GetDC(nullptr);
+
+	bool found = false;
+	::EnumFontFamiliesExW(hdc, &lf, EnumFontProc, reinterpret_cast<LPARAM>(&found), 0);
+
+	::ReleaseDC(nullptr, hdc);
+
+	return found;
+}
+
+[[nodiscard]] static bool replaceDlgFontFace(
+	std::vector<std::byte>& dlgTemplateData,
+	std::byte* pTypefaceData,
+	const std::wstring& newTypeface
+)
+{
+	const std::wstring& newFontFace = newTypeface;
+
+	auto pData = dlgTemplateData.data();
+	const auto typeface = reinterpret_cast<WCHAR*>(pTypefaceData);
+
+	// Everything before typeface
+	const size_t offset = pTypefaceData - pData;
+
+	const size_t oldLen = (std::wcslen(typeface) + 1) * sizeof(WCHAR);
+	const size_t newLen = (newFontFace.length() + 1) * sizeof(WCHAR);
+
+	const size_t oldOffset = alignToDWORD(offset + oldLen);
+	const size_t newOffset = alignToDWORD(offset + newLen);
+
+	const size_t oldSize = dlgTemplateData.size();
+
+	if (oldOffset > oldSize)
+	{
+		return false;
+	}
+
+	const size_t tmpltDataSize = oldSize - oldOffset;
+	const size_t newSize = tmpltDataSize + newOffset;
+
+	auto tmpTmpltData = std::vector<std::byte>(newSize);
+
+	const std::byte* source = dlgTemplateData.data();
+	std::byte* dest = tmpTmpltData.data();
+
+	// Copy everything before the old typeface.
+	std::memcpy(dest, source, offset);
+
+	// Copy new typeface with null terminator.
+	std::memcpy(dest + offset, newFontFace.c_str(), newLen);
+
+	// Clear DWORD boundary padding between typeface and first dialog item.
+	const size_t padding = newOffset - (offset + newLen);
+
+	if (padding != 0)
+	{
+		std::memset(dest + offset + newLen, 0, padding);
+	}
+
+	// Copy everything after typeface - dialog items data.
+	std::memcpy(dest + newOffset, source + oldOffset, tmpltDataSize);
+
+	dlgTemplateData.swap(tmpTmpltData);
+	return true;
+}
+
+[[nodiscard]] static int setFontResource(
+	std::vector<std::byte>& dlgTemplateData,
+	WORD fontSize,
+	const std::wstring& newTypeface
+)
+{
+	enum result { faceFailed = -2, failed, noFont, success };
+
+	auto pMyDlgTemplateEx = reinterpret_cast<DLGTEMPLATEEX*>(dlgTemplateData.data());
+	if (!pMyDlgTemplateEx || pMyDlgTemplateEx->signature != 0xFFFF || pMyDlgTemplateEx->dlgVer != 1)
+		return failed;
+
+	// No need to check DS_SHELLFONT, as it already includes DS_SETFONT (DS_SETFONT | DS_FIXEDSYS)
+	if ((pMyDlgTemplateEx->style & DS_SETFONT) != DS_SETFONT)
+		return noFont; // allow RTL set before
+
+	auto pData = reinterpret_cast<std::byte*>(pMyDlgTemplateEx);
+	pData += sizeof(DLGTEMPLATEEX);
+	// sz_Or_Ord menu
+	pData = skipSzOrOrd(pData);
+	// sz_Or_Ord windowClass;
+	pData = skipSzOrOrd(pData);
+	// WCHAR title[titleLen]
+	pData = skipSz(pData);
+	// WORD pointSize;
+	auto pointSize = reinterpret_cast<WORD*>(pData);
+	if (fontSize > 0)
+	{
+		*pointSize = static_cast<WORD>(DPIManagerV2::scaleFontForFactor(fontSize));
+	}
+	pData += sizeof(WORD);
+
+	// WORD weight;
+	//auto weight = *(reinterpret_cast<WORD*>(pData));
+	//weight = FW_NORMAL;
+	pData += sizeof(WORD);
+
+	// BYTE italic;
+	//auto italic = *(reinterpret_cast<BYTE*>(pData));
+	//italic = FALSE;
+	pData += sizeof(BYTE);
+
+	// BYTE charset;
+	//auto charset = *(reinterpret_cast<BYTE*>(pData));
+	//charset = DEFAULT_CHARSET;
+	pData += sizeof(BYTE);
+
+	// WCHAR typeface[stringLen];
+	//auto typeface = reinterpret_cast<WCHAR*>(pData);
+
+	if (!replaceDlgFontFace(dlgTemplateData, pData, newTypeface))
+	{
+		return faceFailed;
+	}
+
+	return success;
+}
+
+[[nodiscard]] static bool modifyResource(
+	HINSTANCE hInst,
+	int dialogID,
+	std::vector<std::byte>& dlgTemplateData,
+	bool isRTL,
+	WORD fontSize,
+	const std::wstring& newTypeface
+)
+{
+	if (!dupDlgTemplate(hInst, dialogID, dlgTemplateData))
+		return false;
+
+	if (isRTL && !setRTLResource(dlgTemplateData))
+		return false;
+
+	if (fontSize != 0 && setFontResource(dlgTemplateData, fontSize, newTypeface) < 0)
+		return false;
+
+	return true;
+}
+
+std::wstring StaticDialog::getDlgTypeface()
+{
+	static const std::wstring dlgFontName = isFontValid(NppParameters::getInstance().getDlgFontName()) ? NppParameters::getInstance().getDlgFontName() : getDefaultGUIFontFaceName();
+	return dlgFontName;
+}
+
+HWND StaticDialog::myCreateDialogIndirectParam(int dialogID, bool isRTL, WORD fontSize, DLGPROC myDlgProc)
+{
+	std::vector<std::byte> dlgTemplateData;
+
+	WORD dlgFontSize = fontSize;
+	if (fontSize == 0)
+	{
+		dlgFontSize = NppParameters::getInstance().getDlgFontSize();
+	}
+
+	if (!modifyResource(_hInst, dialogID, dlgTemplateData, isRTL, dlgFontSize, getDlgTypeface()))
+		return ::CreateDialogParam(_hInst, MAKEINTRESOURCE(dialogID), _hParent, myDlgProc, reinterpret_cast<LPARAM>(this));
+
+	return ::CreateDialogIndirectParam(_hInst, reinterpret_cast<DLGTEMPLATE*>(dlgTemplateData.data()), _hParent, myDlgProc, reinterpret_cast<LPARAM>(this));
+}
+
+INT_PTR StaticDialog::myCreateDialogBoxIndirectParam(int dialogID, bool isRTL, WORD fontSize)
+{
+	std::vector<std::byte> dlgTemplateData;
+
+	WORD dlgFontSize = fontSize;
+	if (fontSize == 0)
+	{
+		dlgFontSize = NppParameters::getInstance().getDlgFontSize();
+	}
+
+	if (!modifyResource(_hInst, dialogID, dlgTemplateData, isRTL, dlgFontSize, getDlgTypeface()))
+		return ::DialogBoxParam(_hInst, MAKEINTRESOURCE(dialogID), _hParent, dlgProc, reinterpret_cast<LPARAM>(this));
+
+	return ::DialogBoxIndirectParam(_hInst, reinterpret_cast<DLGTEMPLATE*>(dlgTemplateData.data()), _hParent, dlgProc, reinterpret_cast<LPARAM>(this));
+}
+
+void StaticDialog::create(int dialogID, bool isRTL, bool msgDestParent, WORD fontSize)
+{
+	_hSelf = StaticDialog::myCreateDialogIndirectParam(dialogID, isRTL, fontSize);
 
 	if (!_hSelf)
 	{
-		generic_string errMsg = TEXT("CreateDialogParam() return NULL.\rGetLastError(): ");
+		std::wstring errMsg = L"CreateDialogParam() return NULL.\rGetLastError(): ";
 		errMsg += GetLastErrorAsString();
-		::MessageBox(NULL, errMsg.c_str(), TEXT("In StaticDialog::create()"), MB_OK);
+		NppDarkMode::darkMessageBoxW(nullptr, errMsg.c_str(), L"In StaticDialog::create()", MB_OK);
 		return;
 	}
 
-	NppDarkMode::setDarkTitleBar(_hSelf);
+	setDpi();
 
 	// if the destination of message NPPM_MODELESSDIALOG is not its parent, then it's the grand-parent
 	::SendMessage(msgDestParent ? _hParent : (::GetParent(_hParent)), NPPM_MODELESSDIALOG, MODELESSDIALOGADD, reinterpret_cast<WPARAM>(_hSelf));
@@ -288,4 +565,3 @@ intptr_t CALLBACK StaticDialog::dlgProc(HWND hwnd, UINT message, WPARAM wParam, 
 		}
 	}
 }
-

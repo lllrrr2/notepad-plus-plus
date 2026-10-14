@@ -13,18 +13,18 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 #pragma once
 
-#ifndef _WIN32_IE
-#define _WIN32_IE	0x0600
-#endif //_WIN32_IE
+#include <windows.h>
 
-#include "Window.h"
-#include "Common.h"
+#include <uxtheme.h>
+
+#include <string>
 #include <vector>
 
-struct StatusBarSubclassInfo;
-
+#include "Window.h"
 
 class StatusBar final : public Window
 {
@@ -36,21 +36,28 @@ public:
 	bool setPartWidth(int whichPart, int width);
 
 	void destroy() override;
-    virtual void reSizeTo(const RECT& rc);
 
 	int getHeight() const override;
 
-    bool setText(const TCHAR* str, int whichPart);
-	bool setOwnerDrawText(const TCHAR* str);
+	bool setText(const wchar_t* str, int whichPart);
+	bool setOwnerDrawText(const wchar_t* str);
 	void adjustParts(int clientWidth);
 
+	void setFontAndHeight() noexcept;
 
 private:
-	void init(HINSTANCE hInst, HWND hPere) override;
+	std::vector<int> _partWidthArray;
+	std::vector<int> _parts;
+	std::wstring _lastSetText;
+	HTHEME _hTheme = nullptr;
+	HFONT _hFont = nullptr;
 
-private:
-    std::vector<int> _partWidthArray;
-	int *_lpParts = nullptr;
-	generic_string _lastSetText;
-	StatusBarSubclassInfo* _pStatusBarInfo = nullptr;
+	using Window::init;
+
+	static LRESULT CALLBACK StatusBarSubclass(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+
+	bool ensureTheme() noexcept;
+	void closeTheme() noexcept;
+	void resetFont(UINT dpi) noexcept;
+	void destroyFont() noexcept;
 };

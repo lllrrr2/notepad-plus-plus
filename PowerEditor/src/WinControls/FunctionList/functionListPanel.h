@@ -21,8 +21,8 @@
 #include "functionParser.h"
 #include "TreeView.h"
 
-#define FL_PANELTITLE     TEXT("Function List")
-#define FL_FUCTIONLISTROOTNODE "FunctionList"
+#define FL_PANELTITLE     L"Function List"
+#define FL_FUNCTIONLISTROOTNODE "FunctionList"
 
 #define FL_SORTLOCALNODENAME        "SortTip"
 #define FL_RELOADLOCALNODENAME      "ReloadTip"
@@ -55,12 +55,12 @@ root
 */
 
 struct SearchParameters {
-	generic_string _text2Find;
+	std::wstring _text2Find;
 	bool _doSort = false;
 
-	bool hasParams()const{
-		return (_text2Find != TEXT("") || _doSort);
-	};
+	bool hasParams() const {
+		return (_text2Find != L"" || _doSort);
+	}
 };
 
 struct TreeParams {
@@ -70,36 +70,32 @@ struct TreeParams {
 
 class FunctionListPanel : public DockingDlgInterface {
 public:
-	FunctionListPanel(): DockingDlgInterface(IDD_FUNCLIST_PANEL), _pTreeView(&_treeView) {};
-	~FunctionListPanel();
+	FunctionListPanel(): DockingDlgInterface(IDD_FUNCLIST_PANEL), _pTreeView(&_treeView) {}
+	~FunctionListPanel() override;
 
 	void init(HINSTANCE hInst, HWND hPere, ScintillaEditView **ppEditView);
-
-	void display(bool toShow = true) const override {
-		DockingDlgInterface::display(toShow);
-	};
 
 	void setBackgroundColor(COLORREF bgColour) override {
 		TreeView_SetBkColor(_treeView.getHSelf(), bgColour);
 		TreeView_SetBkColor(_treeViewSearchResult.getHSelf(), bgColour);
-	};
+	}
 
 	void setForegroundColor(COLORREF fgColour) override {
 		TreeView_SetTextColor(_treeView.getHSelf(), fgColour);
 		TreeView_SetTextColor(_treeViewSearchResult.getHSelf(), fgColour);
-	};
+	}
 
-    void setParent(HWND parent2set){
-        _hParent = parent2set;
-    };
+	void setParent(HWND parent2set){
+		_hParent = parent2set;
+	}
 	
 	// functionalities
 	static int CALLBACK categorySortFunc(LPARAM lParam1, LPARAM lParam2, LPARAM /*lParamSort*/);
 	void sortOrUnsort();
 	void reload();
 	void markEntry();
-	bool serialize(const generic_string & outputFilename = TEXT(""));
-	void addEntry(const TCHAR *node, const TCHAR *displayText, size_t pos);
+	bool serialize(const std::wstring & outputFilename = L"");
+	void addEntry(const wchar_t* nodeName, const wchar_t* displayText, size_t pos);
 	void removeAllEntries();
 	void searchFuncAndSwitchView();
 
@@ -111,6 +107,7 @@ private:
 	HWND _hToolbarMenu = nullptr;
 	HWND _hSearchEdit = nullptr;
 	HFONT _hFontSearchEdit = nullptr;
+	std::vector<HIMAGELIST> _iconListVector;
 
 	TreeView *_pTreeView = nullptr;
 	TreeView _treeView;
@@ -121,24 +118,24 @@ private:
 	long _findEndLine = -1;
 	HTREEITEM _findItem = nullptr;
 
-	generic_string _sortTipStr = TEXT("Sort");
-	generic_string _reloadTipStr = TEXT("Reload");
-	generic_string _preferenceTipStr = TEXT("Preferences");
+	std::wstring _sortTipStr = L"Sort";
+	std::wstring _reloadTipStr = L"Reload";
+	std::wstring _preferenceTipStr = L"Preferences";
 
 	std::vector<foundInfo> _foundFuncInfos;
 
-	std::vector<generic_string*> _posStrs;
+	std::vector<std::wstring*> _posStrs;
 
 	ScintillaEditView **_ppEditView = nullptr;
 	FunctionParsersManager _funcParserMgr;
 	std::vector< std::pair<int, int> > _skipZones;
 	std::vector<TreeParams> _treeParams;
 
-	generic_string parseSubLevel(size_t begin, size_t end, std::vector< generic_string > dataToSearch, intptr_t& foundPos);
-	size_t getBodyClosePos(size_t begin, const TCHAR *bodyOpenSymbol, const TCHAR *bodyCloseSymbol);
+	using DockingDlgInterface::init;
+
 	void notified(LPNMHDR notification);
-	void addInStateArray(TreeStateNode tree2Update, const TCHAR *searchText, bool isSorted);
-	TreeParams* getFromStateArray(generic_string fullFilePath);
+	void addInStateArray(TreeStateNode tree2Update, const wchar_t *searchText, bool isSorted);
+	TreeParams* getFromStateArray(const std::wstring& fullFilePath);
 	bool openSelection(const TreeView &treeView);
 	bool shouldSort();
 	void setSort(bool isEnabled);

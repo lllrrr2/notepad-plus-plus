@@ -17,64 +17,47 @@
 
 #pragma once
 
+#include <windows.h>
+
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "ColourPicker.h"
 #include "URLCtrl.h"
-#include "WordStyleDlgRes.h"
 #include "Parameters.h"
+#include "StaticDialog.h"
+#include "resource.h"
 
-
-#define WM_UPDATESCINTILLAS      (WORDSTYLE_USER + 1) //GlobalStyleDlg's msg 2 send 2 its parent
+#define WM_UPDATESCINTILLAS      (WORDSTYLE_USER + 1) // WM_UPDATESCINTILLAS (BOOL doChangePanel, 0)
 #define WM_UPDATEMAINMENUBITMAPS (WORDSTYLE_USER + 2)
 
 enum fontStyleType {BOLD_STATUS, ITALIC_STATUS, UNDERLINE_STATUS};
-
-const bool C_FOREGROUND = false;
-const bool C_BACKGROUND = true;
-
-
-class ColourStaticTextHooker {
-public :
-	ColourStaticTextHooker() : _colour(RGB(0x00, 0x00, 0x00)) {};
-
-	COLORREF setColour(COLORREF colour2Set) {
-		COLORREF oldColour = _colour;
-		_colour = colour2Set;
-		return oldColour;
-	};
-	void hookOn(HWND staticHandle) {
-		::SetWindowLongPtr(staticHandle, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-		_oldProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtr(staticHandle, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(staticProc)));
-	};
-private :
-	COLORREF _colour = RGB(0xFF, 0xFF, 0xFF);
-	WNDPROC _oldProc = nullptr;
-
-	static LRESULT CALLBACK staticProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam){
-		ColourStaticTextHooker *pColourStaticTextHooker = reinterpret_cast<ColourStaticTextHooker *>(::GetWindowLongPtr(hwnd, GWLP_USERDATA));
-		return pColourStaticTextHooker->colourStaticProc(hwnd, message, wParam, lParam);
-	}; 
-	LRESULT CALLBACK colourStaticProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam);
-};
 
 class WordStyleDlg : public StaticDialog
 {
 public :
 	WordStyleDlg() = default;
+	~WordStyleDlg() override {
+		if (_globalOverrideTip)
+			::DestroyWindow(_globalOverrideTip);
+	}
 
-	void create(int dialogID, bool isRTL = false, bool msgDestParent = true) override;
-    void doDialog(bool isRTL = false);
+	void create(int dialogID, bool isRTL = false, bool msgDestParent = true, WORD fontSize = 0) override;
+	void doDialog(bool isRTL = false);
+	void destroy() override;
 	void prepare2Cancel();
 	void redraw(bool forceUpdate = false) const override;
-	void restoreGlobalOverrideValues();
-	void apply(bool needVisualApply = true);
-	void addLastThemeEntry();
-	bool selectThemeByName(const TCHAR* themeName);
-	bool goToSection(const TCHAR* sectionNames); // sectionNames is formed as following: "Language name:Style name"
-	                                             // ex: "Global Styles:EOL custom color" will set Language on "Global Styles", then set Style on "EOL custom color" if both are found.
+	void restoreGlobalOverrideValues() const;
+	void addLastThemeEntry() const;
+	bool selectThemeByName(const wchar_t* themeName);
+	void syncWithSelFgSingleColorCtrl();
+	bool goToSection(const wchar_t* sectionNames); // sectionNames is formed as following: "Language name:Style name"
+	                                               // ex: "Global Styles:EOL custom color" will set Language on "Global Styles", then set Style on "EOL custom color" if both are found.
 
 private :
-    ColourPicker *_pFgColour = nullptr;
-    ColourPicker *_pBgColour = nullptr;
+	std::unique_ptr<ColourPicker> _pFgColour = nullptr;
+	std::unique_ptr<ColourPicker> _pBgColour = nullptr;
 
     int _currentLexerIndex = 0;
 	int _currentThemeIndex = 0;
@@ -93,21 +76,22 @@ private :
 	HWND _hStyleInfoStaticText = nullptr;
 
 	URLCtrl _goToSettings;
+	URLCtrl _globalOverrideLinkTip;
+	HWND _globalOverrideTip = nullptr;
 
 	LexerStylerArray _lsArray;
     StyleArray _globalStyles;
-	generic_string _themeName;
+	std::wstring _themeName;
 
 	LexerStylerArray _styles2restored;
 	StyleArray _gstyles2restored;
 	GlobalOverride _gOverride2restored;
 	bool _restoreInvalid = false;
 
-	ColourStaticTextHooker _colourHooker;
-
 	bool _isDirty = false;
 	bool _isThemeDirty = false;
 	bool _isShownGOCtrls = false;
+	bool _isThemeChanged = false;
 
 	std::pair<intptr_t, intptr_t> goToPreferencesSettings();
 
@@ -115,9 +99,13 @@ private :
 
 	Style& getCurrentStyler();
 
-	bool getStyleName(TCHAR *styleName, const size_t styleNameLen);
+	bool getStyleName(std::wstring& styleName, const size_t styleNameLenLimit = 128) const;
 
-	int whichTabColourIndex();
+	int whichTabColourIndex() const;
+	int whichIndividualTabColourId();
+	int whichFindDlgStatusMsgColourIndex();
+	void apply(int applicationInfo);
+	int getApplicationInfo() const;
 	bool isDocumentMapStyle();
 	void move2CtrlRight(int ctrlID, HWND handle2Move, int handle2MoveWidth, int handle2MoveHeight);
 	void updateColour(bool which);
@@ -127,9 +115,9 @@ private :
 	void updateFontSize();
 	void updateUserKeywords();
 	void switchToTheme();
-	void updateThemeName(const generic_string& themeName);
+	static void updateThemeName(const std::wstring& themeName);
 	void loadLangListFromNppParam();
-	void enableFontStyle(bool isEnable);
+	void enableFontStyle(bool isEnable) const;
 	long notifyDataModified();
 	void setStyleListFromLexer(int index);
     void setVisualFromStyleList();

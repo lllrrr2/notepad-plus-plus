@@ -17,12 +17,16 @@
 
 #pragma once
 
+#include <windows.h>
+
+#include <string>
+
 #include "URLCtrl.h"
-#include "resource.h"
 #include "StaticDialog.h"
+#include "Window.h"
 
 #define LICENCE_TXT \
-TEXT("This program is free software; you can redistribute it and/or \
+L"This program is free software; you can redistribute it and/or \
 modify it under the terms of the GNU General Public License \
 as published by the Free Software Foundation; either \
 version 3 of the License, or at your option any later version.\r\n\
@@ -33,7 +37,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the \
 GNU General Public License for more details. \r\n\
 \r\n\
 You should have received a copy of the GNU General Public License \
-along with this program. If not, see <https://www.gnu.org/licenses/>.")
+along with this program. If not, see <https://www.gnu.org/licenses/>."
 
 
 class AboutDlg : public StaticDialog
@@ -45,8 +49,12 @@ public :
 
 	void destroy() override {
 		//_emailLink.destroy();
-		_pageLink.destroy();
-	};
+		if (_hIcon != nullptr)
+		{
+			::DestroyIcon(_hIcon);
+			_hIcon = nullptr;
+		}
+	}
 
 protected :
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
@@ -54,6 +62,7 @@ protected :
 private :
 	//URLCtrl _emailLink;
 	URLCtrl _pageLink;
+	HICON _hIcon = nullptr;
 };
 
 
@@ -62,28 +71,48 @@ class DebugInfoDlg : public StaticDialog
 public:
 	DebugInfoDlg() = default;
 
-	void init(HINSTANCE hInst, HWND parent, bool isAdmin, const generic_string& loadedPlugins) {
+	void init(HINSTANCE hInst, HWND parent, bool isAdmin, const std::wstring& loadedPlugins) {
 		_isAdmin = isAdmin;
 		_loadedPlugins = loadedPlugins;
 		Window::init(hInst, parent);
-	};
+	}
 
 	void doDialog();
 
 	void refreshDebugInfo();
 
-	void destroy() override {};
+	void destroy() override {}
 
 protected:
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
 private:
 	typedef const CHAR * (__cdecl * PWINEGETVERSION)();
-	generic_string _debugInfoStr;
-	generic_string _debugInfoDisplay;
-	const generic_string _cmdLinePlaceHolder { L"$COMMAND_LINE_PLACEHOLDER$" };
+	std::wstring _debugInfoStr;
+	std::wstring _debugInfoDisplay;
+	const std::wstring _cmdLinePlaceHolder { L"$COMMAND_LINE_PLACEHOLDER$" };
 	bool _isAdmin = false;
-	generic_string _loadedPlugins;
+	std::wstring _loadedPlugins;
+
+	using Window::init;
+};
+
+
+class CmdLineArgsDlg : public StaticDialog
+{
+public:
+	CmdLineArgsDlg() = default;
+
+	void doDialog();
+	void destroy() override {}
+
+protected:
+	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
+
+	HFONT _hCmdLineEditFont = nullptr;
+
+	void setFont();
+	void destroyFont() noexcept;
 };
 
 class DoSaveOrNotBox : public StaticDialog
@@ -91,21 +120,21 @@ class DoSaveOrNotBox : public StaticDialog
 public:
 	DoSaveOrNotBox() = default;
 
-	void init(HINSTANCE hInst, HWND parent, const TCHAR* fn, bool isMulti) {
+	void init(HINSTANCE hInst, HWND parent, const wchar_t* fn, bool isMulti) {
 		Window::init(hInst, parent);
 		if (fn)
 			_fn = fn;
 
 		_isMulti = isMulti;
-	};
+	}
 
 	void doDialog(bool isRTL = false);
 
-	void destroy() override {};
+	void destroy() override {}
 
 	int getClickedButtonId() const {
-		return clickedButtonId;
-	};
+		return _clickedButtonId;
+	}
 
 	void changeLang();
 
@@ -113,9 +142,11 @@ protected:
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
 private:
-	int clickedButtonId = -1;
-	generic_string _fn;
+	int _clickedButtonId = -1;
+	std::wstring _fn;
 	bool _isMulti = false;
+
+	using Window::init;
 };
 
 class DoSaveAllBox : public StaticDialog
@@ -125,11 +156,11 @@ public:
 
 	void doDialog(bool isRTL = false);
 
-	void destroy() override {};
+	void destroy() override {}
 
 	int getClickedButtonId() const {
-		return clickedButtonId;
-	};
+		return _clickedButtonId;
+	}
 
 	void changeLang();
 
@@ -137,5 +168,39 @@ protected:
 	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
 
 private:
-	int clickedButtonId = -1;
+	int _clickedButtonId = -1;
+};
+
+class NetworkPathWarningBox : public StaticDialog
+{
+public:
+	NetworkPathWarningBox() = default;
+
+	void init(HINSTANCE hInst, HWND parent, const std::wstring& path, const char* titleTag = nullptr) {
+		Window::init(hInst, parent);
+		_networkPath = path;
+		if (titleTag)
+			_titleTag = titleTag;
+	}
+
+	void doDialog(bool isRTL = false);
+
+	void destroy() override {}
+
+	int getClickedButtonId() const {
+		return _clickedButtonId;
+	}
+
+	void changeLang();
+
+protected:
+	intptr_t CALLBACK run_dlgProc(UINT message, WPARAM wParam, LPARAM lParam) override;
+
+private:
+	int _clickedButtonId = -1;
+	std::wstring _networkPath;
+	std::string _titleTag;
+	HWND _hwndServerWhiteListTip = nullptr;
+
+	using Window::init;
 };

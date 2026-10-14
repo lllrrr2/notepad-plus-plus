@@ -31,15 +31,15 @@ private:
 protected:
 	bool isDescending() const {
 		return _isDescending;
-	};
+	}
 
-	generic_string getSortKey(const generic_string& input) {
+	std::wstring getSortKey(const std::wstring& input) {
 		if (isSortingSpecificColumns())
 		{
 			if (input.length() < _fromColumn)
 			{
 				// prevent an std::out_of_range exception
-				return TEXT("");
+				return L"";
 			}
 			else if (_fromColumn == _toColumn)
 			{
@@ -56,33 +56,33 @@ protected:
 		{
 			return input;
 		}
-	};
+	}
 
 	bool isSortingSpecificColumns() {
 		return _toColumn != 0;
-	};
+	}
 
 public:
 	ISorter(bool isDescending, size_t fromColumn, size_t toColumn) : _isDescending(isDescending), _fromColumn(fromColumn), _toColumn(toColumn) {
 		assert(_fromColumn <= _toColumn);
-	};
-	virtual ~ISorter() { };
-	virtual void sort(std::vector<generic_string>& lines) = 0;
+	}
+	virtual ~ISorter() {}
+	virtual void sort(std::vector<std::wstring>& lines) = 0;
 };
 
 // Implementation of lexicographic sorting of lines.
 class LexicographicSorter : public ISorter
 {
 public:
-	LexicographicSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) { };
+	LexicographicSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {}
 	
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		// Note that both branches here are equivalent in the sense that they always give the same answer.
 		// However, if we are *not* sorting specific columns, then we get a 40% speed improvement by not calling
 		// getSortKey() so many times.
 		if (isSortingSpecificColumns())
 		{
-			std::stable_sort(lines.begin(), lines.end(), [this](generic_string a, generic_string b)
+			std::stable_sort(lines.begin(), lines.end(), [this](const std::wstring& a, const std::wstring& b)
 			{
 				if (isDescending())
 				{
@@ -97,7 +97,7 @@ public:
 		}
 		else
 		{
-			std::sort(lines.begin(), lines.end(), [this](generic_string a, generic_string b)
+			std::sort(lines.begin(), lines.end(), [this](const std::wstring& a, const std::wstring& b)
 			{
 				if (isDescending())
 				{
@@ -109,62 +109,62 @@ public:
 				}
 			});
 		}
-	};
+	}
 };
 
 // Implementation of lexicographic sorting of lines, ignoring character casing
 class LexicographicCaseInsensitiveSorter : public ISorter
 {
 public:
-	LexicographicCaseInsensitiveSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) { };
+	LexicographicCaseInsensitiveSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {}
 
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		// Note that both branches here are equivalent in the sense that they always give the same answer.
 		// However, if we are *not* sorting specific columns, then we get a 40% speed improvement by not calling
 		// getSortKey() so many times.
 		if (isSortingSpecificColumns())
 		{
-			std::stable_sort(lines.begin(), lines.end(), [this](generic_string a, generic_string b)
+			std::stable_sort(lines.begin(), lines.end(), [this](const std::wstring& a, const std::wstring& b)
 				{
 					if (isDescending())
 					{
-						return OrdinalIgnoreCaseCompareStrings(getSortKey(a).c_str(), getSortKey(b).c_str()) > 0;
+						return _wcsicmp(getSortKey(a).c_str(), getSortKey(b).c_str()) > 0;
 					}
 					else
 					{
-						return OrdinalIgnoreCaseCompareStrings(getSortKey(a).c_str(), getSortKey(b).c_str()) < 0;
+						return _wcsicmp(getSortKey(a).c_str(), getSortKey(b).c_str()) < 0;
 					}
 				});
 		}
 		else
 		{
-			std::sort(lines.begin(), lines.end(), [this](generic_string a, generic_string b)
+			std::sort(lines.begin(), lines.end(), [this](const std::wstring& a, const std::wstring& b)
 				{
 					if (isDescending())
 					{
-						return OrdinalIgnoreCaseCompareStrings(a.c_str(), b.c_str()) > 0;
+						return _wcsicmp(a.c_str(), b.c_str()) > 0;
 					}
 					else
 					{
-						return OrdinalIgnoreCaseCompareStrings(a.c_str(), b.c_str()) < 0;
+						return _wcsicmp(a.c_str(), b.c_str()) < 0;
 					}
 				});
 		}
-	};
+	}
 };
 
 class IntegerSorter : public ISorter
 {
 public:
-	IntegerSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) { };
+	IntegerSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {}
 
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		if (isSortingSpecificColumns())
 		{
-			std::stable_sort(lines.begin(), lines.end(), [this](generic_string aIn, generic_string bIn)
+			std::stable_sort(lines.begin(), lines.end(), [this](std::wstring aIn, std::wstring bIn)
 			{
-				generic_string a = getSortKey(aIn);
-				generic_string b = getSortKey(bIn);
+				std::wstring a = getSortKey(aIn);
+				std::wstring b = getSortKey(bIn);
 
 				long long compareResult = 0;
 				size_t aNumIndex = 0;
@@ -173,7 +173,7 @@ public:
 				{
 					if (aNumIndex >= a.length() || bNumIndex >= b.length())
 					{
-						compareResult = a.compare(std::min<size_t>(aNumIndex, a.length()), generic_string::npos, b, std::min<size_t>(bNumIndex, b.length()), generic_string::npos);
+						compareResult = a.compare(std::min<size_t>(aNumIndex, a.length()), std::wstring::npos, b, std::min<size_t>(bNumIndex, b.length()), std::wstring::npos);
 						break;
 					}
 
@@ -232,13 +232,13 @@ public:
 							}
 
 							size_t aNumEnd = a.find_first_not_of(L"1234567890", aNumIndex);
-							if (aNumEnd == generic_string::npos)
+							if (aNumEnd == std::wstring::npos)
 							{
 								aNumEnd = a.length();
 							}
 
 							size_t bNumEnd = b.find_first_not_of(L"1234567890", bNumIndex);
-							if (bNumEnd == generic_string::npos)
+							if (bNumEnd == std::wstring::npos)
 							{
 								bNumEnd = b.length();
 							}
@@ -275,7 +275,7 @@ public:
 							else
 							{
 								// the lengths of the numbers are equal
-								// compare the two number. However, we can not use std::stoll
+								// compare the two number. However, we cannot use std::stoll
 								// because the number strings can be every large, well over the maximum long long value
 								// thus, we compare each digit one by one
 								while (compareResult == 0
@@ -303,6 +303,7 @@ public:
 						{
 							aNumIndex++;
 						}
+
 						if (b[bNumIndex] == L'-')
 						{
 							bNumIndex++;
@@ -328,10 +329,10 @@ public:
 		}
 		else
 		{
-			std::sort(lines.begin(), lines.end(), [this](generic_string aIn, generic_string bIn)
+			std::sort(lines.begin(), lines.end(), [this](std::wstring aIn, std::wstring bIn)
 			{
-				generic_string a = aIn;
-				generic_string b = bIn;
+				std::wstring a = aIn;
+				std::wstring b = bIn;
 
 				long long compareResult = 0;
 				size_t aNumIndex = 0;
@@ -340,7 +341,7 @@ public:
 				{
 					if (aNumIndex >= a.length() || bNumIndex >= b.length())
 					{
-						compareResult = a.compare(std::min<size_t>(aNumIndex, a.length()), generic_string::npos, b, std::min<size_t>(bNumIndex, b.length()), generic_string::npos);
+						compareResult = a.compare(std::min<size_t>(aNumIndex, a.length()), std::wstring::npos, b, std::min<size_t>(bNumIndex, b.length()), std::wstring::npos);
 						break;
 					}
 
@@ -400,13 +401,13 @@ public:
 							}
 
 							size_t aNumEnd = a.find_first_not_of(L"1234567890", aNumIndex);
-							if (aNumEnd == generic_string::npos)
+							if (aNumEnd == std::wstring::npos)
 							{
 								aNumEnd = a.length();
 							}
 
 							size_t bNumEnd = b.find_first_not_of(L"1234567890", bNumIndex);
-							if (bNumEnd == generic_string::npos)
+							if (bNumEnd == std::wstring::npos)
 							{
 								bNumEnd = b.length();
 							}
@@ -443,7 +444,7 @@ public:
 							else
 							{
 								// the lengths of the numbers are equal
-								// compare the two number. However, we can not use std::stoll
+								// compare the two number. However, we cannot use std::stoll
 								// because the number strings can be every large, well over the maximum long long value
 								// thus, we compare each digit one by one
 								while (compareResult == 0
@@ -471,6 +472,7 @@ public:
 						{
 							aNumIndex++;
 						}
+
 						if (b[bNumIndex] == L'-')
 						{
 							bNumIndex++;
@@ -494,7 +496,7 @@ public:
 				}
 			});
 		}
-	};
+	}
 };
 
 // Convert each line to a number and then sort.
@@ -510,32 +512,31 @@ public:
 #else
 		_usLocale = ::_create_locale(LC_NUMERIC, "en-US");
 #endif
-	};
+	}
 
-	~NumericSorter()
+	~NumericSorter() override
 	{
 #ifndef __MINGW32__
 		::_free_locale(_usLocale);
 #endif
 	}
 	
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		// Note that empty lines are filtered out and added back manually to the output at the end.
 		std::vector<std::pair<size_t, T_Num>> nonEmptyInputAsNumbers;
-		std::vector<generic_string> empties;
+		std::vector<std::wstring> empties;
 		nonEmptyInputAsNumbers.reserve(lines.size());
 		for (size_t lineIndex = 0; lineIndex < lines.size(); ++lineIndex)
 		{
-			const generic_string originalLine = lines[lineIndex];
-			const generic_string preparedLine = prepareStringForConversion(originalLine);
+			const std::wstring originalLine = lines[lineIndex];
+			const std::wstring preparedLine = prepareStringForConversion(originalLine);
 			if (considerStringEmpty(preparedLine))
 			{
 				empties.push_back(originalLine);
 			}
 			else
 			{
-				try
-				{
+				try {
 					nonEmptyInputAsNumbers.push_back(std::make_pair(lineIndex, convertStringToNumber(preparedLine)));
 				}
 				catch (...)
@@ -559,7 +560,7 @@ public:
 				}
 			});
 
-		std::vector<generic_string> output;
+		std::vector<std::wstring> output;
 		output.reserve(lines.size());
 		if (!isDescending())
 		{
@@ -578,20 +579,20 @@ public:
 
 		assert(output.size() == lines.size());
 		lines = output;
-	};
+	}
 
 protected:
-	bool considerStringEmpty(const generic_string& input) {
+	bool considerStringEmpty(const std::wstring& input) {
 		// String has something else than just whitespace.
-		return input.find_first_not_of(TEXT(" \t\r\n")) == std::string::npos;
+		return input.find_first_not_of(L" \t\r\n") == std::string::npos;
 	}
 
 	// Prepare the string for conversion to number.
-	virtual generic_string prepareStringForConversion(const generic_string& input) = 0;
+	virtual std::wstring prepareStringForConversion(const std::wstring& input) = 0;
 
 	// Should convert the input string to a number of the correct type.
 	// If unable to convert, throw either std::invalid_argument or std::out_of_range.
-	virtual T_Num convertStringToNumber(const generic_string& input) = 0;
+	virtual T_Num convertStringToNumber(const std::wstring& input) = 0;
 
 	// We need a fixed locale so we get the same string-to-double behavior across all computers.
 	// This is the "enUS" locale.
@@ -602,43 +603,43 @@ protected:
 class DecimalCommaSorter : public NumericSorter<double>
 {
 public:
-	DecimalCommaSorter(bool isDescending, size_t fromColumn, size_t toColumn) : NumericSorter<double>(isDescending, fromColumn, toColumn) { };
+	DecimalCommaSorter(bool isDescending, size_t fromColumn, size_t toColumn) : NumericSorter<double>(isDescending, fromColumn, toColumn) {}
 
 protected:
-	generic_string prepareStringForConversion(const generic_string& input) override {
-		generic_string admissablePart = stringTakeWhileAdmissable(getSortKey(input), TEXT(" \t\r\n0123456789,-"));
-		return stringReplace(admissablePart, TEXT(","), TEXT("."));
-	};
+	std::wstring prepareStringForConversion(const std::wstring& input) override {
+		std::wstring admissablePart = stringTakeWhileAdmissable(getSortKey(input), L" \t\r\n0123456789,-");
+		return stringReplace(admissablePart, L",", L".");
+	}
 
-	double convertStringToNumber(const generic_string& input) override {
+	double convertStringToNumber(const std::wstring& input) override {
 		return stodLocale(input, _usLocale);
-	};
+	}
 };
 
 // Converts lines to double before sorting (assumes decimal dot).
 class DecimalDotSorter : public NumericSorter<double>
 {
 public:
-	DecimalDotSorter(bool isDescending, size_t fromColumn, size_t toColumn) : NumericSorter<double>(isDescending, fromColumn, toColumn) { };
+	DecimalDotSorter(bool isDescending, size_t fromColumn, size_t toColumn) : NumericSorter<double>(isDescending, fromColumn, toColumn) {}
 
 protected:
-	generic_string prepareStringForConversion(const generic_string& input) override {
-		return stringTakeWhileAdmissable(getSortKey(input), TEXT(" \t\r\n0123456789.-"));
-	};
+	std::wstring prepareStringForConversion(const std::wstring& input) override {
+		return stringTakeWhileAdmissable(getSortKey(input), L" \t\r\n0123456789.-");
+	}
 
-	double convertStringToNumber(const generic_string& input) override {
+	double convertStringToNumber(const std::wstring& input) override {
 		return stodLocale(input, _usLocale);
-	};
+	}
 };
 
 class ReverseSorter : public ISorter
 {
 public:
-	ReverseSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) { };
+	ReverseSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {}
 
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		std::reverse(lines.begin(), lines.end());
-	};
+	}
 };
 
 class RandomSorter : public ISorter
@@ -648,10 +649,53 @@ public:
 
 	RandomSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {
 		seed = static_cast<unsigned>(time(NULL));
-	};
+	}
 
-	void sort(std::vector<generic_string>& lines) override {
+	void sort(std::vector<std::wstring>& lines) override {
 		std::shuffle(lines.begin(), lines.end(), std::default_random_engine(seed));
-	};
+	}
 };
 
+// Implementation of length wise sorting of lines.
+class LineLengthSorter : public ISorter
+{
+public:
+	LineLengthSorter(bool isDescending, size_t fromColumn, size_t toColumn) : ISorter(isDescending, fromColumn, toColumn) {}
+
+	void sort(std::vector<std::wstring>& lines) override {
+		// When sorting specific columns, the effect would be to sort the lines whose length is between
+		// fromColumn and toColumn. Any lines shorter than fromColumn would be considered length 0.
+		// Any lines longer than toColumn would be considered same length (toColumn - fromColumn) and hence their
+		// relative order would be preserved.
+		if (isSortingSpecificColumns())
+		{
+			std::stable_sort(lines.begin(), lines.end(), [this](std::wstring a, std::wstring b)
+				{
+					if (isDescending())
+					{
+						return getSortKey(a).length() > getSortKey(b).length();
+
+					}
+					else
+					{
+						return getSortKey(a).length() < getSortKey(b).length();
+					}
+				});
+		}
+		// Normal sorting by line length
+		else
+		{
+			std::sort(lines.begin(), lines.end(), [this](std::wstring a, std::wstring b)
+				{
+					if (isDescending())
+					{
+						return a.length() > b.length();
+					}
+					else
+					{
+						return a.length() < b.length();
+					}
+				});
+		}
+	}
+};

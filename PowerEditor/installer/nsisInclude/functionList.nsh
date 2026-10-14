@@ -38,6 +38,11 @@ SectionGroup "Function List Files" functionListComponent
 		File ".\functionList\cs.xml"
 	${MementoSectionEnd}
 
+	${MementoSection} "CSS" CSS_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\css.xml"
+	${MementoSectionEnd}
+
 	${MementoSection} "Assembly" Assembly_FL
 		SetOutPath "$INSTDIR\functionList"
 		File ".\functionList\asm.xml"
@@ -58,7 +63,7 @@ SectionGroup "Function List Files" functionListComponent
 		File ".\functionList\php.xml"
 	${MementoSectionEnd}
 
-	${MementoSection} "COBOL section free" COBOL-section-free
+	${MementoSection} "COBOL section free" COBOL-section-free_FL
 		SetOutPath "$INSTDIR\functionList"
 		File ".\functionList\cobol-free.xml"
 	${MementoSectionEnd}
@@ -193,16 +198,61 @@ SectionGroup "Function List Files" functionListComponent
 		File ".\functionList\gdscript.xml"
 	${MementoSectionEnd}
 
+	${MementoSection} "Raku" Raku_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\raku.xml"
+	${MementoSectionEnd}
+
 	${MementoSection} "Hollywood" Hollywood_FL
 		SetOutPath "$INSTDIR\functionList"
 		File ".\functionList\hollywood.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "Toml" Toml_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\toml.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "TeX" Tex_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\tex.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "LaTeX" Latex_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\latex.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "VisualBasic" VB_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\vb.xml"
 	${MementoSectionEnd}
 
 	${MementoSection} "NppExecScript" NppExecScript_FL
 		SetOutPath "$INSTDIR\functionList"
 		File ".\functionList\nppexec.xml"
 	${MementoSectionEnd}
-	
+
+	${MementoSection} "SAS" SAS_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\sas.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "makefile" MAKEFILE_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\makefile.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "Nim" NIM_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\nim.xml"
+	${MementoSectionEnd}
+
+	${MementoSection} "D" D_FL
+		SetOutPath "$INSTDIR\functionList"
+		File ".\functionList\d.xml"
+	${MementoSectionEnd}
+
 	SetOverwrite off
 	${MementoSection} "Override Map" OverrideMap_FL
 		SetOutPath "$INSTDIR\functionList"
@@ -251,6 +301,10 @@ SectionGroup un.functionListComponent
 
 	Section un.C#_FL
 		Delete "$INSTDIR\functionList\cs.xml"
+	SectionEnd
+
+	Section un.CSS_FL
+		Delete "$INSTDIR\functionList\css.xml"
 	SectionEnd
 
 	Section un.JavaScript_FL
@@ -356,13 +410,49 @@ SectionGroup un.functionListComponent
 	Section un.GDScript_FL
 		Delete "$INSTDIR\functionList\gdscript.xml"
 	SectionEnd
-	
+
+	Section un.Raku_FL
+		Delete "$INSTDIR\functionList\raku.xml"
+	SectionEnd
+
 	Section un.Hollywood_FL
 		Delete "$INSTDIR\functionList\hollywood.xml"
-	SectionEnd	
+	SectionEnd
+
+	Section un.Toml_FL
+		Delete "$INSTDIR\functionList\toml.xml"
+	SectionEnd
+
+	Section un.Tex_FL
+		Delete "$INSTDIR\functionList\tex.xml"
+	SectionEnd
+
+	Section un.Latex_FL
+		Delete "$INSTDIR\functionList\latex.xml"
+	SectionEnd
+
+	Section un.VB_FL
+		Delete "$INSTDIR\functionList\vb.xml"
+	SectionEnd
 
 	Section un.NppExecScript_FL
 		Delete "$INSTDIR\functionList\nppexec.xml"
+	SectionEnd
+
+	Section un.SAS_FL
+		Delete "$INSTDIR\functionList\sas.xml"
+	SectionEnd
+
+	Section un.MAKEFILE_FL
+		Delete "$INSTDIR\functionList\makefile.xml"
+	SectionEnd
+
+	Section un.NIM_FL
+		Delete "$INSTDIR\functionList\nim.xml"
+	SectionEnd
+
+	Section un.D_FL
+		Delete "$INSTDIR\functionList\d.xml"
 	SectionEnd
 
 SectionGroupEnd

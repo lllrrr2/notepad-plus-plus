@@ -28,12 +28,19 @@ class DockingSplitter : public Window
 {
 public :
 	DockingSplitter() = default;
-	~DockingSplitter() = default;
+	~DockingSplitter() override = default;
 
-	virtual void destroy() {};
+	void destroy() override {}
 
 public:
-	void init(HINSTANCE hInst, HWND hWnd, HWND hMessage, UINT flags);
+	// Stores parameters without eagerly creating the Win32 window
+	void init(HINSTANCE hInst, HWND hParent, HWND hMessage, UINT flags);
+
+	// Instantiates the actual Win32 window on demand
+	void create();
+
+	// Triggers lazy creation when the splitter is first positioned
+	void reSizeTo(RECT& rc) override;
 
 protected:
 
@@ -53,4 +60,3 @@ private:
 	// get layout direction
 	bool _isRTL = false;
 };
-

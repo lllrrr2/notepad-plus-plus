@@ -36,7 +36,9 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '18'">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '17'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '18' and exists('$(MSBuildExtensionsPath32)\Microsoft\VC\v170\Platforms\$(Platform)\PlatformToolsets\v143\Toolset.props')">v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
@@ -92,20 +94,9 @@
     <OutDir>..\binarm64\</OutDir>
     <IntDir>arm64\$(Configuration)\</IntDir>
   </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-  </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
-  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\src\DarkMode\DarkMode.cpp" />
+    <ClCompile Include="..\src\MISC\Common\SortLocale.cpp" />
     <ClCompile Include="..\src\MISC\Common\verifySignedfile.cpp" />
     <ClCompile Include="..\src\MISC\md5\md5Dlgs.cpp" />
     <ClCompile Include="..\src\MISC\sha1\calc_sha1.cpp" />
@@ -119,6 +110,7 @@
     <ClCompile Include="..\src\ScintillaComponent\AutoCompletion.cpp" />
     <ClCompile Include="..\src\WinControls\AnsiCharPanel\asciiListView.cpp" />
     <ClCompile Include="..\src\WinControls\DocumentMap\documentSnapshot.cpp" />
+    <ClCompile Include="..\src\WinControls\DoubleBuffer\DoubleBuffer.cpp" />
     <ClCompile Include="..\src\WinControls\Grid\BabyGrid.cpp" />
     <ClCompile Include="..\src\WinControls\Grid\BabyGridWrapper.cpp" />
     <ClCompile Include="..\src\ScintillaComponent\Buffer.cpp" />
@@ -180,14 +172,7 @@
     <ClCompile Include="..\src\WinControls\TabBar\TabBar.cpp" />
     <ClCompile Include="..\src\WinControls\TaskList\TaskList.cpp" />
     <ClCompile Include="..\src\WinControls\TaskList\TaskListDlg.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinystr.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyXmlA\tinystrA.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyxml.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyXmlA\tinyxmlA.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyxmlerror.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyXmlA\tinyxmlerrorA.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyxmlparser.cpp" />
-    <ClCompile Include="..\src\TinyXml\tinyXmlA\tinyxmlparserA.cpp" />
+    <ClCompile Include="..\src\pugixml\pugixml.cpp" />
     <ClCompile Include="..\src\WinControls\ToolBar\ToolBar.cpp" />
     <ClCompile Include="..\src\WinControls\ToolTip\ToolTip.cpp" />
     <ClCompile Include="..\src\WinControls\TrayIcon\trayIconControler.cpp" />
@@ -241,11 +226,13 @@
     <ClInclude Include="..\src\DarkMode\DarkMode.h" />
     <ClInclude Include="..\src\DarkMode\IatHook.h" />
     <ClInclude Include="..\src\DarkMode\UAHMenuBar.h" />
-    <ClInclude Include="..\src\dpiManager.h" />
     <ClInclude Include="..\src\dpiManagerV2.h" />
+    <ClInclude Include="..\src\NppXml.h" />
     <ClInclude Include="..\src\keys.h" />
     <ClInclude Include="..\src\localizationString.h" />
+    <ClInclude Include="..\src\MISC\Common\NppConstants.h" />
     <ClInclude Include="..\src\MISC\Common\Sorters.h" />
+    <ClInclude Include="..\src\MISC\Common\SortLocale.h" />
     <ClInclude Include="..\src\MISC\Common\verifySignedfile.h" />
     <ClInclude Include="..\src\MISC\md5\md5.h" />
     <ClInclude Include="..\src\MISC\md5\md5Dlgs.h" />
@@ -257,7 +244,6 @@
     <ClInclude Include="..\src\NppDarkMode.h" />
     <ClInclude Include="..\src\ScintillaComponent\columnEditor_rc.h" />
     <ClInclude Include="..\src\ScintillaComponent\FindReplaceDlg_rc.h" />
-    <ClInclude Include="..\src\ScintillaComponent\ScintillaRef.h" />
     <ClInclude Include="..\src\Utf8.h" />
     <ClInclude Include="..\src\WinControls\AboutDlg\AboutDlg.h" />
     <ClInclude Include="..\src\WinControls\AnsiCharPanel\ansiCharPanel.h" />
@@ -298,6 +284,7 @@
     <ClInclude Include="..\src\WinControls\DockingWnd\DockingSplitter.h" />
     <ClInclude Include="..\src\ScintillaComponent\DocTabView.h" />
     <ClInclude Include="..\src\WinControls\DocumentMap\documentMap.h" />
+    <ClInclude Include="..\src\WinControls\DoubleBuffer\DoubleBuffer.h" />
     <ClInclude Include="..\src\EncodingMapper.h" />
     <ClInclude Include="..\src\MISC\FileNameStringSplitter.h" />
     <ClInclude Include="..\src\WinControls\FindCharsInRange\FindCharsInRange.h" />
@@ -349,16 +336,13 @@
     <ClInclude Include="..\src\WinControls\TaskList\TaskList.h" />
     <ClInclude Include="..\src\WinControls\TaskList\TaskListDlg.h" />
     <ClInclude Include="..\src\WinControls\TaskList\TaskListDlg_rc.h" />
-    <ClInclude Include="..\src\TinyXml\tinystr.h" />
-    <ClInclude Include="..\src\TinyXml\tinyXmlA\tinystrA.h" />
-    <ClInclude Include="..\src\TinyXml\tinyxml.h" />
-    <ClInclude Include="..\src\TinyXml\tinyXmlA\tinyxmlA.h" />
+    <ClInclude Include="..\src\pugixml\pugiconfig.hpp" />
+    <ClInclude Include="..\src\pugixml\pugixml.hpp" />
     <ClInclude Include="..\src\WinControls\ToolBar\ToolBar.h" />
     <ClInclude Include="..\src\WinControls\ToolTip\ToolTip.h" />
     <ClInclude Include="..\src\WinControls\TrayIcon\trayIconControler.h" />
     <ClInclude Include="..\src\WinControls\AboutDlg\URLCtrl.h" />
     <ClInclude Include="..\src\ScintillaComponent\UserDefineDialog.h" />
-    <ClInclude Include="..\src\ScintillaComponent\UserDefineLangReference.h" />
     <ClInclude Include="..\src\ScintillaComponent\UserDefineResource.h" />
     <ClInclude Include="..\src\Utf8_16.h" />
     <ClInclude Include="..\src\WinControls\VerticalFileSwitcher\VerticalFileSwitcher.h" />
@@ -382,7 +366,6 @@
   <ItemGroup>
     <Manifest Include="..\src\notepad++.exe.manifest" />
   </ItemGroup>
-  <Import Project="notepadPlus.Resource.targets" />
   <Import Project="notepadPlus.uchardet.targets" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

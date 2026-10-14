@@ -7,10 +7,15 @@
 # For debug versions define DEBUG on the command line:
 #     nmake DEBUG=1 -f lexilla.mak
 # To build with GCC or Clang, run makefile
+#
+# Command line options
+#     DEBUG Debug build.
+#     QUIET Avoid most compiler invocation output and copyright info.
+#     SUPPORT_XP Build for Windows XP.
 
 .SUFFIXES: .cxx
 
-DIR_O=.
+DIR_O=obj
 DIR_BIN=..\bin
 
 LEXILLA=$(DIR_BIN)\lexilla.dll
@@ -18,20 +23,25 @@ LIBLEXILLA=$(DIR_BIN)\liblexilla.lib
 
 LD=link
 
+!IF "$(PLATFORM:64=)" == "arm"
+ARM64=1
+!ENDIF
+
 !IFDEF SUPPORT_XP
 ADD_DEFINE=-D_USING_V110_SDK71_
 # Different subsystems for 32-bit and 64-bit Windows XP so detect based on Platform
-# environment vairable set by vcvars*.bat to be either x86 or x64
+# environment variable set by vcvars*.bat to be either x86 or x64
 !IF "$(PLATFORM)" == "x64"
 SUBSYSTEM=-SUBSYSTEM:WINDOWS,5.02
 !ELSE
 SUBSYSTEM=-SUBSYSTEM:WINDOWS,5.01
 !ENDIF
 !ELSE
-CETCOMPAT=-CETCOMPAT
 !IFDEF ARM64
 ADD_DEFINE=-D_ARM64_WINAPI_PARTITION_DESKTOP_SDK_AVAILABLE=1
 SUBSYSTEM=-SUBSYSTEM:WINDOWS,10.00
+!ELSE
+CETCOMPAT=-CETCOMPAT
 !ENDIF
 !ENDIF
 
@@ -63,7 +73,10 @@ SCINTILLA_INCLUDE = ../../scintilla/include
 INCLUDEDIRS=-I../include -I$(SCINTILLA_INCLUDE) -I../lexlib
 CXXFLAGS=$(CXXFLAGS) $(INCLUDEDIRS)
 
-all:	$(SCINTILLA_INCLUDE) $(LEXILLA) $(LIBLEXILLA)
+all:	$(SCINTILLA_INCLUDE) $(DIR_O) $(LEXILLA) $(LIBLEXILLA)
+
+$(DIR_O):
+	mkdir "$(DIR_O)" 2>NUL || cd .
 
 clean:
 	-del /q $(DIR_O)\*.obj $(DIR_O)\*.o $(DIR_O)\*.pdb \
@@ -108,6 +121,7 @@ LEX_OBJS=\
 	$(DIR_O)\LexCsound.obj \
 	$(DIR_O)\LexCSS.obj \
 	$(DIR_O)\LexD.obj \
+	$(DIR_O)\LexDart.obj \
 	$(DIR_O)\LexDataflex.obj \
 	$(DIR_O)\LexDiff.obj \
 	$(DIR_O)\LexDMAP.obj \
@@ -118,6 +132,7 @@ LEX_OBJS=\
 	$(DIR_O)\LexErlang.obj \
 	$(DIR_O)\LexErrorList.obj \
 	$(DIR_O)\LexEScript.obj \
+	$(DIR_O)\LexEscSeq.obj \
 	$(DIR_O)\LexFlagship.obj \
 	$(DIR_O)\LexForth.obj \
 	$(DIR_O)\LexFortran.obj \
@@ -152,6 +167,7 @@ LEX_OBJS=\
 	$(DIR_O)\LexMySQL.obj \
 	$(DIR_O)\LexNim.obj \
 	$(DIR_O)\LexNimrod.obj \
+	$(DIR_O)\LexNix.obj \
 	$(DIR_O)\LexNsis.obj \
 	$(DIR_O)\LexNull.obj \
 	$(DIR_O)\LexOpal.obj \
@@ -176,6 +192,7 @@ LEX_OBJS=\
 	$(DIR_O)\LexRust.obj \
 	$(DIR_O)\LexSAS.obj \
 	$(DIR_O)\LexScriptol.obj \
+	$(DIR_O)\LexSINEX.obj \
 	$(DIR_O)\LexSmalltalk.obj \
 	$(DIR_O)\LexSML.obj \
 	$(DIR_O)\LexSorcus.obj \
@@ -190,6 +207,8 @@ LEX_OBJS=\
 	$(DIR_O)\LexTCL.obj \
 	$(DIR_O)\LexTCMD.obj \
 	$(DIR_O)\LexTeX.obj \
+	$(DIR_O)\LexTOML.obj \
+	$(DIR_O)\LexTroff.obj \
 	$(DIR_O)\LexTxt2tags.obj \
 	$(DIR_O)\LexVB.obj \
 	$(DIR_O)\LexVerilog.obj \
@@ -197,6 +216,7 @@ LEX_OBJS=\
 	$(DIR_O)\LexVisualProlog.obj \
 	$(DIR_O)\LexX12.obj \
 	$(DIR_O)\LexYAML.obj \
+	$(DIR_O)\LexZig.obj \
 	$(DIR_O)\LexObjC.obj \
 	$(DIR_O)\LexSearchResult.obj \
 	$(DIR_O)\LexUser.obj
@@ -224,7 +244,7 @@ LEXILLA_OBJS=\
 	$(LEXLIB_OBJS) \
 	$(LEX_OBJS)
 
-$(LEXILLA): $(LEXILLA_OBJS) LexillaVersion.res
+$(LEXILLA): $(LEXILLA_OBJS) $(DIR_O)\LexillaVersion.res
 	$(LD) $(LDFLAGS) -DEF:Lexilla.def -DLL -OUT:$@ $** $(LIBS)
 
 $(LIBLEXILLA): $(LEXILLA_OBJS)
@@ -239,7 +259,7 @@ $(LIBLEXILLA): $(LEXILLA_OBJS)
 {.}.cxx{$(DIR_O)}.obj::
 	$(CXX) $(CXXFLAGS) -c $(NAME)$(DIR_O)\ $<
 
-.rc.res:
+.rc{$(DIR_O)}.res:
 	$(RC) -fo$@ $**
 
 # Dependencies

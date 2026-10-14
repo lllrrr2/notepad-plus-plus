@@ -12,16 +12,23 @@
 
 namespace Lexilla {
 
+struct OptionSetInterface;	// Forward declaration
+
 // A simple lexer with no state
 class DefaultLexer : public Scintilla::ILexer5 {
 	const char *languageName;
 	int language;
 	const LexicalClass *lexClasses;
 	size_t nClasses;
+	OptionSetInterface *osi = nullptr;
 public:
 	DefaultLexer(const char *languageName_, int language_,
 		const LexicalClass *lexClasses_ = nullptr, size_t nClasses_ = 0);
 	virtual ~DefaultLexer();
+	void SetOptionSet(OptionSetInterface *osi_) noexcept {
+		this->osi = osi_;
+	}
+
 	void SCI_METHOD Release() override;
 	int SCI_METHOD Version() const override;
 	const char * SCI_METHOD PropertyNames() override;
@@ -50,6 +57,7 @@ public:
 	// ILexer5 methods
 	const char * SCI_METHOD GetName() override;
 	int SCI_METHOD GetIdentifier() override;
+	const char *SCI_METHOD PropertyGet(const char *key) override;
 };
 
 }

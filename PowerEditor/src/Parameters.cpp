@@ -14,22 +14,71 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include <time.h>
-#include <shlwapi.h>
-#include <shlobj.h>
+
 #include "Parameters.h"
+
+#include <windows.h>
+
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <strsafe.h>
+
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <cwchar>
+#include <exception>
+#include <locale>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include <SciLexer.h>
+#include <Scintilla.h>
+
+#include "AboutDlg.h"
+#include "Common.h"
+#include "ContextMenu.h"
+#include "Notepad_plus.h"
+#include "Notepad_plus_Window.h"
+#include "Notepad_plus_msgs.h"
+#include "NppConstants.h"
+#include "NppDarkMode.h"
+#include "NppXml.h"
 #include "ScintillaEditView.h"
+#include "ToolBar.h"
+#include "UserDefineDialog.h"
+#include "hmac.h"
 #include "keys.h"
 #include "localization.h"
 #include "localizationString.h"
-#include "UserDefineDialog.h"
-#include "WindowsDlgRc.h"
+#include "menuCmdID.h"
+#include "resource.h"
+#include "shortcut.h"
+#include "verifySignedfile.h"
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4996) // for GetVersionEx()
 #endif
 
-using namespace std;
+static constexpr const wchar_t localConfFile[] = L"doLocalConf.xml";
+static constexpr const wchar_t notepadStyleFile[] = L"asNotepad.xml";
+
+static constexpr int NB_MAX_FINDHISTORY_FIND = 30;
+static constexpr int NB_MAX_FINDHISTORY_REPLACE = 30;
+static constexpr int NB_MAX_FINDHISTORY_PATH = 30;
+static constexpr int NB_MAX_FINDHISTORY_FILTER = 20;
 
 namespace // anonymous namespace
 {
@@ -42,7 +91,7 @@ struct WinMenuKeyDefinition // more or less matches accelerator table definition
 	bool isCtrl = false;
 	bool isAlt = false;
 	bool isShift = false;
-	const TCHAR * specialName = nullptr; // Used when no real menu name exists (in case of toggle for example)
+	const wchar_t * specialName = nullptr; // Used when no real menu name exists (in case of toggle for example)
 };
 
 
@@ -51,17 +100,18 @@ struct WinMenuKeyDefinition // more or less matches accelerator table definition
 **
 ** values can be 0 for vKey, which means its unused
 */
-static const WinMenuKeyDefinition winKeyDefs[] =
+static constexpr WinMenuKeyDefinition winKeyDefs[]
 {
 	// V_KEY,    COMMAND_ID,                                    Ctrl,  Alt,   Shift, cmdName
 	// -------------------------------------------------------------------------------------
 	//
 	{ VK_N,       IDM_FILE_NEW,                                 true,  false, false, nullptr },
 	{ VK_O,       IDM_FILE_OPEN,                                true,  false, false, nullptr },
-	{ VK_NULL,    IDM_FILE_OPEN_FOLDER,                         false, false, false, TEXT("Open containing folder in Explorer") },
-	{ VK_NULL,    IDM_FILE_OPEN_CMD,                            false, false, false, TEXT("Open containing folder in Command Prompt") },
+	{ VK_NULL,    IDM_FILE_OPEN_FOLDER,                         false, false, false, L"Open containing folder in Explorer" },
+	{ VK_NULL,    IDM_FILE_OPEN_CMD,                            false, false, false, L"Open containing folder in Command Prompt" },
+	{ VK_NULL,    IDM_FILE_OPEN_POWERSHELL,                     false, false, false, L"Open containing folder in PowerShell" },
 	{ VK_NULL,    IDM_FILE_OPEN_DEFAULT_VIEWER,                 false, false, false, nullptr },
-	{ VK_NULL,    IDM_FILE_OPENFOLDERASWORSPACE,                false, false, false, nullptr },
+	{ VK_NULL,    IDM_FILE_OPENFOLDERASWORKSPACE,                false, false, false, nullptr },
 	{ VK_R,       IDM_FILE_RELOAD,                              true,  false, false, nullptr },
 	{ VK_S,       IDM_FILE_SAVE,                                true,  false, false, nullptr },
 	{ VK_S,       IDM_FILE_SAVEAS,                              true,  true,  false, nullptr },
@@ -71,6 +121,7 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_W,       IDM_FILE_CLOSE,                               true,  false, false, nullptr },
 	{ VK_W,       IDM_FILE_CLOSEALL,                            true,  false, true,  nullptr },
 	{ VK_NULL,    IDM_FILE_CLOSEALL_BUT_CURRENT,                false, false, false, nullptr },
+	{ VK_NULL,    IDM_FILE_CLOSEALL_BUT_PINNED,                 false, false, false, nullptr },
 	{ VK_NULL,    IDM_FILE_CLOSEALL_TOLEFT,                     false, false, false, nullptr },
 	{ VK_NULL,    IDM_FILE_CLOSEALL_TORIGHT,                    false, false, false, nullptr },
 	{ VK_NULL,    IDM_FILE_CLOSEALL_UNCHANGED,                  false, false, false, nullptr },
@@ -79,7 +130,7 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_FILE_SAVESESSION,                         false, false, false, nullptr },
 	{ VK_P,       IDM_FILE_PRINT,                               true,  false, false, nullptr },
 	{ VK_NULL,    IDM_FILE_PRINTNOW,                            false, false, false, nullptr },
-	{ VK_T,       IDM_FILE_RESTORELASTCLOSEDFILE,               true,  false, true,  TEXT("Restore Recent Closed File")},
+	{ VK_T,       IDM_FILE_RESTORELASTCLOSEDFILE,               true,  false, true,  L"Restore Recent Closed File" },
 	{ VK_F4,      IDM_FILE_EXIT,                                false, true,  false, nullptr },
 
 //	{ VK_NULL,    IDM_EDIT_UNDO,                                false, false, false, nullptr },
@@ -125,10 +176,14 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_EDIT_REMOVEEMPTYLINESWITHBLANK,           false, false, false, nullptr },
 	{ VK_RETURN,  IDM_EDIT_BLANKLINEABOVECURRENT,               true,  true,  false, nullptr },
 	{ VK_RETURN,  IDM_EDIT_BLANKLINEBELOWCURRENT,               true,  true,  true,  nullptr },
+	{ VK_NULL,    IDM_EDIT_SORTLINES_LENGTH_ASCENDING,          false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_SORTLINES_LENGTH_DESCENDING,         false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_LEXICOGRAPHIC_ASCENDING,   false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_LEXICOGRAPHIC_DESCENDING,  false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_LEXICO_CASE_INSENS_ASCENDING,   false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_LEXICO_CASE_INSENS_DESCENDING,  false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_SORTLINES_LOCALE_ASCENDING,          false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_SORTLINES_LOCALE_DESCENDING,         false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_INTEGER_ASCENDING,         false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_INTEGER_DESCENDING,        false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SORTLINES_DECIMALCOMMA_ASCENDING,    false, false, false, nullptr },
@@ -151,9 +206,9 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_EDIT_INSERT_DATETIME_SHORT,               false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_INSERT_DATETIME_LONG,                false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_INSERT_DATETIME_CUSTOMIZED,          false, false, false, nullptr },
-	{ VK_NULL,    IDM_FORMAT_TODOS,                             false, false, false, TEXT("EOL Conversion to Windows (CR LF)") },
-	{ VK_NULL,    IDM_FORMAT_TOUNIX,                            false, false, false, TEXT("EOL Conversion to Unix (LF)") },
-	{ VK_NULL,    IDM_FORMAT_TOMAC,                             false, false, false, TEXT("EOL Conversion to Macintosh (CR)") },
+	{ VK_NULL,    IDM_FORMAT_TODOS,                             false, false, false, L"EOL Conversion to Windows (CR LF)" },
+	{ VK_NULL,    IDM_FORMAT_TOUNIX,                            false, false, false, L"EOL Conversion to Unix (LF)" },
+	{ VK_NULL,    IDM_FORMAT_TOMAC,                             false, false, false, L"EOL Conversion to Macintosh (CR)" },
 	{ VK_NULL,    IDM_EDIT_TRIMTRAILING,                        false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_TRIMLINEHEAD,                        false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_TRIM_BOTH,                           false, false, false, nullptr },
@@ -167,26 +222,28 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_EDIT_COPY_BINARY,                         false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_CUT_BINARY,                          false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_PASTE_BINARY,                        false, false, false, nullptr },
-	{ VK_NULL,    IDM_EDIT_OPENASFILE,                          false, false, false, nullptr },
-	{ VK_NULL,    IDM_EDIT_OPENINFOLDER,                        false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_OPENSELECTEDFILETOEDIT,              false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_OPENSELECTEDFILEFOLDERINEXPLORER,    false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_SEARCHONINTERNET,                    false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_CHANGESEARCHENGINE,                  false, false, false, nullptr },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTALL,                      false, false, false, TEXT("Multi-select All: Ignore Case and Whole Word") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTALLMATCHCASE,             false, false, false, TEXT("Multi-select All: Match Case Only") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTALLWHOLEWORD,             false, false, false, TEXT("Multi-select All: Match Whole Word Only") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTALLMATCHCASEWHOLEWORD,    false, false, false, TEXT("Multi-select All: Match Case and Whole Word") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXT,                     false, false, false, TEXT("Multi-select Next: Ignore Case and Whole Word") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTMATCHCASE,            false, false, false, TEXT("Multi-select Next: Match Case Only") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTWHOLEWORD,            false, false, false, TEXT("Multi-select Next: Match Whole Word Only") },
-	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTMATCHCASEWHOLEWORD,   false, false, false, TEXT("Multi-select Next: Match Case and Whole Word") },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTALL,                      false, false, false, L"Multi-select All: Ignore Case and Whole Word" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTALLMATCHCASE,             false, false, false, L"Multi-select All: Match Case Only" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTALLWHOLEWORD,             false, false, false, L"Multi-select All: Match Whole Word Only" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTALLMATCHCASEWHOLEWORD,    false, false, false, L"Multi-select All: Match Case and Whole Word" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXT,                     false, false, false, L"Multi-select Next: Ignore Case and Whole Word" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTMATCHCASE,            false, false, false, L"Multi-select Next: Match Case Only" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTWHOLEWORD,            false, false, false, L"Multi-select Next: Match Whole Word Only" },
+	{ VK_NULL,    IDM_EDIT_MULTISELECTNEXTMATCHCASEWHOLEWORD,   false, false, false, L"Multi-select Next: Match Case and Whole Word" },
 	{ VK_NULL,    IDM_EDIT_MULTISELECTUNDO,                     false, false, false, nullptr },
 	{ VK_NULL,    IDM_EDIT_MULTISELECTSSKIP,                    false, false, false, nullptr },
 //  { VK_NULL,    IDM_EDIT_COLUMNMODETIP,                       false, false, false, nullptr },
 	{ VK_C,       IDM_EDIT_COLUMNMODE,                          false, true,  false, nullptr },
-	{ VK_NULL,    IDM_EDIT_CHAR_PANEL,                          false, false, false, TEXT("Toggle Character Panel") },
-	{ VK_NULL,    IDM_EDIT_CLIPBOARDHISTORY_PANEL,              false, false, false, TEXT("Toggle Clipboard History") },
-	{ VK_NULL,    IDM_EDIT_SETREADONLY,                         false, false, false, nullptr },
-	{ VK_NULL,    IDM_EDIT_CLEARREADONLY,                       false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_CHAR_PANEL,                          false, false, false, L"Toggle Character Panel" },
+	{ VK_NULL,    IDM_EDIT_CLIPBOARDHISTORY_PANEL,              false, false, false, L"Toggle Clipboard History" },
+	{ VK_NULL,    IDM_EDIT_TOGGLEREADONLY,                      false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_SETREADONLYFORALLDOCS,               false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_CLEARREADONLYFORALLDOCS,             false, false, false, nullptr },
+	{ VK_NULL,    IDM_EDIT_TOGGLESYSTEMREADONLY,                false, false, false, nullptr },
 	{ VK_F,       IDM_SEARCH_FIND,                              true,  false, false, nullptr },
 	{ VK_F,       IDM_SEARCH_FINDINFILES,                       true,  false, true,  nullptr },
 	{ VK_F3,      IDM_SEARCH_FINDNEXT,                          false, false, false, nullptr },
@@ -207,41 +264,41 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_SEARCH_CHANGED_NEXT,                      false, false, false, nullptr },
 	{ VK_NULL,    IDM_SEARCH_CLEAR_CHANGE_HISTORY,              false, false, false, nullptr },
 	{ VK_M,       IDM_SEARCH_MARK,                              true,  false, false, nullptr },
-	{ VK_NULL,    IDM_SEARCH_MARKALLEXT1,                       false, false, false, TEXT("Style all using 1st style") },
-	{ VK_NULL,    IDM_SEARCH_MARKALLEXT2,                       false, false, false, TEXT("Style all using 2nd style") },
-	{ VK_NULL,    IDM_SEARCH_MARKALLEXT3,                       false, false, false, TEXT("Style all using 3rd style") },
-	{ VK_NULL,    IDM_SEARCH_MARKALLEXT4,                       false, false, false, TEXT("Style all using 4th style") },
-	{ VK_NULL,    IDM_SEARCH_MARKALLEXT5,                       false, false, false, TEXT("Style all using 5th style") },
-	{ VK_NULL,    IDM_SEARCH_MARKONEEXT1,                       false, false, false, TEXT("Style one using 1st style") },
-	{ VK_NULL,    IDM_SEARCH_MARKONEEXT2,                       false, false, false, TEXT("Style one using 2nd style") },
-	{ VK_NULL,    IDM_SEARCH_MARKONEEXT3,                       false, false, false, TEXT("Style one using 3rd style") },
-	{ VK_NULL,    IDM_SEARCH_MARKONEEXT4,                       false, false, false, TEXT("Style one using 4th style") },
-	{ VK_NULL,    IDM_SEARCH_MARKONEEXT5,                       false, false, false, TEXT("Style one using 5th style") },
-	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT1,                     false, false, false, TEXT("Clear 1st style") },
-	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT2,                     false, false, false, TEXT("Clear 2nd style") },
-	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT3,                     false, false, false, TEXT("Clear 3rd style") },
-	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT4,                     false, false, false, TEXT("Clear 4th style") },
-	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT5,                     false, false, false, TEXT("Clear 5th style") },
-	{ VK_NULL,    IDM_SEARCH_CLEARALLMARKS,                     false, false, false, TEXT("Clear all styles") },
-	{ VK_1,       IDM_SEARCH_GOPREVMARKER1,                     true,  false, true,  TEXT("Previous style of 1st style") },
-	{ VK_2,       IDM_SEARCH_GOPREVMARKER2,                     true,  false, true,  TEXT("Previous style of 2nd style") },
-	{ VK_3,       IDM_SEARCH_GOPREVMARKER3,                     true,  false, true,  TEXT("Previous style of 3rd style") },
-	{ VK_4,       IDM_SEARCH_GOPREVMARKER4,                     true,  false, true,  TEXT("Previous style of 4th style") },
-	{ VK_5,       IDM_SEARCH_GOPREVMARKER5,                     true,  false, true,  TEXT("Previous style of 5th style") },
-	{ VK_0,       IDM_SEARCH_GOPREVMARKER_DEF,                  true,  false, true,  TEXT("Previous style of Find Mark style") },
-	{ VK_1,       IDM_SEARCH_GONEXTMARKER1,                     true,  false, false, TEXT("Next style of 1st style") },
-	{ VK_2,       IDM_SEARCH_GONEXTMARKER2,                     true,  false, false, TEXT("Next style of 2nd style") },
-	{ VK_3,       IDM_SEARCH_GONEXTMARKER3,                     true,  false, false, TEXT("Next style of 3rd style") },
-	{ VK_4,       IDM_SEARCH_GONEXTMARKER4,                     true,  false, false, TEXT("Next style of 4th style") },
-	{ VK_5,       IDM_SEARCH_GONEXTMARKER5,                     true,  false, false, TEXT("Next style of 5th style") },
-	{ VK_0,       IDM_SEARCH_GONEXTMARKER_DEF,                  true,  false, false, TEXT("Next style of Find Mark style") },
-	{ VK_NULL,    IDM_SEARCH_STYLE1TOCLIP,                      false, false, false, TEXT("Copy Styled Text of 1st Style") },
-	{ VK_NULL,    IDM_SEARCH_STYLE2TOCLIP,                      false, false, false, TEXT("Copy Styled Text of 2nd Style") },
-	{ VK_NULL,    IDM_SEARCH_STYLE3TOCLIP,                      false, false, false, TEXT("Copy Styled Text of 3rd Style") },
-	{ VK_NULL,    IDM_SEARCH_STYLE4TOCLIP,                      false, false, false, TEXT("Copy Styled Text of 4th Style") },
-	{ VK_NULL,    IDM_SEARCH_STYLE5TOCLIP,                      false, false, false, TEXT("Copy Styled Text of 5th Style") },
-	{ VK_NULL,    IDM_SEARCH_ALLSTYLESTOCLIP,                   false, false, false, TEXT("Copy Styled Text of All Styles") },
-	{ VK_NULL,    IDM_SEARCH_MARKEDTOCLIP,                      false, false, false, TEXT("Copy Styled Text of Find Mark style") },
+	{ VK_NULL,    IDM_SEARCH_MARKALLEXT1,                       false, false, false, L"Style all using 1st style" },
+	{ VK_NULL,    IDM_SEARCH_MARKALLEXT2,                       false, false, false, L"Style all using 2nd style" },
+	{ VK_NULL,    IDM_SEARCH_MARKALLEXT3,                       false, false, false, L"Style all using 3rd style" },
+	{ VK_NULL,    IDM_SEARCH_MARKALLEXT4,                       false, false, false, L"Style all using 4th style" },
+	{ VK_NULL,    IDM_SEARCH_MARKALLEXT5,                       false, false, false, L"Style all using 5th style" },
+	{ VK_NULL,    IDM_SEARCH_MARKONEEXT1,                       false, false, false, L"Style one using 1st style" },
+	{ VK_NULL,    IDM_SEARCH_MARKONEEXT2,                       false, false, false, L"Style one using 2nd style" },
+	{ VK_NULL,    IDM_SEARCH_MARKONEEXT3,                       false, false, false, L"Style one using 3rd style" },
+	{ VK_NULL,    IDM_SEARCH_MARKONEEXT4,                       false, false, false, L"Style one using 4th style" },
+	{ VK_NULL,    IDM_SEARCH_MARKONEEXT5,                       false, false, false, L"Style one using 5th style" },
+	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT1,                     false, false, false, L"Clear 1st style" },
+	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT2,                     false, false, false, L"Clear 2nd style" },
+	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT3,                     false, false, false, L"Clear 3rd style" },
+	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT4,                     false, false, false, L"Clear 4th style" },
+	{ VK_NULL,    IDM_SEARCH_UNMARKALLEXT5,                     false, false, false, L"Clear 5th style" },
+	{ VK_NULL,    IDM_SEARCH_CLEARALLMARKS,                     false, false, false, L"Clear all styles" },
+	{ VK_1,       IDM_SEARCH_GOPREVMARKER1,                     true,  false, true,  L"Previous style of 1st style" },
+	{ VK_2,       IDM_SEARCH_GOPREVMARKER2,                     true,  false, true,  L"Previous style of 2nd style" },
+	{ VK_3,       IDM_SEARCH_GOPREVMARKER3,                     true,  false, true,  L"Previous style of 3rd style" },
+	{ VK_4,       IDM_SEARCH_GOPREVMARKER4,                     true,  false, true,  L"Previous style of 4th style" },
+	{ VK_5,       IDM_SEARCH_GOPREVMARKER5,                     true,  false, true,  L"Previous style of 5th style" },
+	{ VK_0,       IDM_SEARCH_GOPREVMARKER_DEF,                  true,  false, true,  L"Previous style of Find Mark style" },
+	{ VK_1,       IDM_SEARCH_GONEXTMARKER1,                     true,  false, false, L"Next style of 1st style" },
+	{ VK_2,       IDM_SEARCH_GONEXTMARKER2,                     true,  false, false, L"Next style of 2nd style" },
+	{ VK_3,       IDM_SEARCH_GONEXTMARKER3,                     true,  false, false, L"Next style of 3rd style" },
+	{ VK_4,       IDM_SEARCH_GONEXTMARKER4,                     true,  false, false, L"Next style of 4th style" },
+	{ VK_5,       IDM_SEARCH_GONEXTMARKER5,                     true,  false, false, L"Next style of 5th style" },
+	{ VK_0,       IDM_SEARCH_GONEXTMARKER_DEF,                  true,  false, false, L"Next style of Find Mark style" },
+	{ VK_NULL,    IDM_SEARCH_STYLE1TOCLIP,                      false, false, false, L"Copy Styled Text of 1st Style" },
+	{ VK_NULL,    IDM_SEARCH_STYLE2TOCLIP,                      false, false, false, L"Copy Styled Text of 2nd Style" },
+	{ VK_NULL,    IDM_SEARCH_STYLE3TOCLIP,                      false, false, false, L"Copy Styled Text of 3rd Style" },
+	{ VK_NULL,    IDM_SEARCH_STYLE4TOCLIP,                      false, false, false, L"Copy Styled Text of 4th Style" },
+	{ VK_NULL,    IDM_SEARCH_STYLE5TOCLIP,                      false, false, false, L"Copy Styled Text of 5th Style" },
+	{ VK_NULL,    IDM_SEARCH_ALLSTYLESTOCLIP,                   false, false, false, L"Copy Styled Text of All Styles" },
+	{ VK_NULL,    IDM_SEARCH_MARKEDTOCLIP,                      false, false, false, L"Copy Styled Text of Find Mark style" },
 	{ VK_F2,      IDM_SEARCH_TOGGLE_BOOKMARK,                   true,  false, false, nullptr },
 	{ VK_F2,      IDM_SEARCH_NEXT_BOOKMARK,                     false, false, false, nullptr },
 	{ VK_F2,      IDM_SEARCH_PREV_BOOKMARK,                     false, false, true, nullptr  },
@@ -253,16 +310,16 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_SEARCH_DELETEUNMARKEDLINES,               false, false, false, nullptr },
 	{ VK_NULL,    IDM_SEARCH_INVERSEMARKS,                      false, false, false, nullptr },
 	{ VK_NULL,    IDM_SEARCH_FINDCHARINRANGE,                   false, false, false, nullptr },
-				 
+
 	{ VK_NULL,    IDM_VIEW_ALWAYSONTOP,                         false, false, false, nullptr },
 	{ VK_F11,     IDM_VIEW_FULLSCREENTOGGLE,                    false, false, false, nullptr },
 	{ VK_F12,     IDM_VIEW_POSTIT,                              false, false, false, nullptr },
 	{ VK_NULL,    IDM_VIEW_DISTRACTIONFREE,                     false, false, false, nullptr },
 
-	{ VK_NULL,    IDM_VIEW_IN_FIREFOX,                          false, false, false, TEXT("View current file in Firefox") },
-	{ VK_NULL,    IDM_VIEW_IN_CHROME,                           false, false, false, TEXT("View current file in Chrome") },
-	{ VK_NULL,    IDM_VIEW_IN_IE,                               false, false, false, TEXT("View current file in IE") },
-	{ VK_NULL,    IDM_VIEW_IN_EDGE,                             false, false, false, TEXT("View current file in Edge")  },
+	{ VK_NULL,    IDM_VIEW_IN_FIREFOX,                          false, false, false, L"View current file in Firefox" },
+	{ VK_NULL,    IDM_VIEW_IN_CHROME,                           false, false, false, L"View current file in Chrome" },
+	{ VK_NULL,    IDM_VIEW_IN_IE,                               false, false, false, L"View current file in IE" },
+	{ VK_NULL,    IDM_VIEW_IN_EDGE,                             false, false, false, L"View current file in Edge" },
 
 	{ VK_NULL,    IDM_VIEW_TAB_SPACE,                           false, false, false, nullptr },
 	{ VK_NULL,    IDM_VIEW_EOL,                                 false, false, false, nullptr },
@@ -296,8 +353,8 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_PRIOR,   IDM_VIEW_TAB_PREV,                            true,  false, false, nullptr },
 	{ VK_NEXT,    IDM_VIEW_TAB_MOVEFORWARD,                     true,  false, true,  nullptr },
 	{ VK_PRIOR,   IDM_VIEW_TAB_MOVEBACKWARD,                    true,  false, true,  nullptr },
-	{ VK_TAB,     IDC_PREV_DOC,                                 true,  false, true,  TEXT("Switch to previous document") },
-	{ VK_TAB,     IDC_NEXT_DOC,                                 true,  false, false, TEXT("Switch to next document") },
+	{ VK_TAB,     IDC_PREV_DOC,                                 true,  false, true,  L"Switch to previous document" },
+	{ VK_TAB,     IDC_NEXT_DOC,                                 true,  false, false, L"Switch to next document" },
 	{ VK_NULL,    IDM_VIEW_WRAP,                                false, false, false, nullptr },
 	{ VK_H,       IDM_VIEW_HIDELINES,                           false, true,  false, nullptr },
 	{ VK_F8,      IDM_VIEW_SWITCHTO_OTHER_VIEW,                 false, false, false, nullptr },
@@ -306,43 +363,43 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_0,       IDM_VIEW_UNFOLDALL,                           false, true,  true,  nullptr },
 	{ VK_F,       IDM_VIEW_FOLD_CURRENT,                        true,  true,  false, nullptr },
 	{ VK_F,       IDM_VIEW_UNFOLD_CURRENT,                      true,  true,  true,  nullptr },
-	{ VK_1,       IDM_VIEW_FOLD_1,                              false, true,  false, TEXT("Fold Level 1") },
-	{ VK_2,       IDM_VIEW_FOLD_2,                              false, true,  false, TEXT("Fold Level 2") },
-	{ VK_3,       IDM_VIEW_FOLD_3,                              false, true,  false, TEXT("Fold Level 3") },
-	{ VK_4,       IDM_VIEW_FOLD_4,                              false, true,  false, TEXT("Fold Level 4") },
-	{ VK_5,       IDM_VIEW_FOLD_5,                              false, true,  false, TEXT("Fold Level 5") },
-	{ VK_6,       IDM_VIEW_FOLD_6,                              false, true,  false, TEXT("Fold Level 6") },
-	{ VK_7,       IDM_VIEW_FOLD_7,                              false, true,  false, TEXT("Fold Level 7") },
-	{ VK_8,       IDM_VIEW_FOLD_8,                              false, true,  false, TEXT("Fold Level 8") },
+	{ VK_1,       IDM_VIEW_FOLD_1,                              false, true,  false, L"Fold Level 1" },
+	{ VK_2,       IDM_VIEW_FOLD_2,                              false, true,  false, L"Fold Level 2" },
+	{ VK_3,       IDM_VIEW_FOLD_3,                              false, true,  false, L"Fold Level 3" },
+	{ VK_4,       IDM_VIEW_FOLD_4,                              false, true,  false, L"Fold Level 4" },
+	{ VK_5,       IDM_VIEW_FOLD_5,                              false, true,  false, L"Fold Level 5" },
+	{ VK_6,       IDM_VIEW_FOLD_6,                              false, true,  false, L"Fold Level 6" },
+	{ VK_7,       IDM_VIEW_FOLD_7,                              false, true,  false, L"Fold Level 7" },
+	{ VK_8,       IDM_VIEW_FOLD_8,                              false, true,  false, L"Fold Level 8" },
 
-	{ VK_1,       IDM_VIEW_UNFOLD_1,                            false, true,  true,  TEXT("Unfold Level 1") },
-	{ VK_2,       IDM_VIEW_UNFOLD_2,                            false, true,  true,  TEXT("Unfold Level 2") },
-	{ VK_3,       IDM_VIEW_UNFOLD_3,                            false, true,  true,  TEXT("Unfold Level 3") },
-	{ VK_4,       IDM_VIEW_UNFOLD_4,                            false, true,  true,  TEXT("Unfold Level 4") },
-	{ VK_5,       IDM_VIEW_UNFOLD_5,                            false, true,  true,  TEXT("Unfold Level 5") },
-	{ VK_6,       IDM_VIEW_UNFOLD_6,                            false, true,  true,  TEXT("Unfold Level 6") },
-	{ VK_7,       IDM_VIEW_UNFOLD_7,                            false, true,  true,  TEXT("Unfold Level 7") },
-	{ VK_8,       IDM_VIEW_UNFOLD_8,                            false, true,  true,  TEXT("Unfold Level 8") },
+	{ VK_1,       IDM_VIEW_UNFOLD_1,                            false, true,  true,  L"Unfold Level 1" },
+	{ VK_2,       IDM_VIEW_UNFOLD_2,                            false, true,  true,  L"Unfold Level 2" },
+	{ VK_3,       IDM_VIEW_UNFOLD_3,                            false, true,  true,  L"Unfold Level 3" },
+	{ VK_4,       IDM_VIEW_UNFOLD_4,                            false, true,  true,  L"Unfold Level 4" },
+	{ VK_5,       IDM_VIEW_UNFOLD_5,                            false, true,  true,  L"Unfold Level 5" },
+	{ VK_6,       IDM_VIEW_UNFOLD_6,                            false, true,  true,  L"Unfold Level 6" },
+	{ VK_7,       IDM_VIEW_UNFOLD_7,                            false, true,  true,  L"Unfold Level 7" },
+	{ VK_8,       IDM_VIEW_UNFOLD_8,                            false, true,  true,  L"Unfold Level 8" },
 	{ VK_NULL,    IDM_VIEW_SUMMARY,                             false, false, false, nullptr },
-	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_1,                     false, false, false, TEXT("Toggle Project Panel 1") },
-	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_2,                     false, false, false, TEXT("Toggle Project Panel 2") },
-	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_3,                     false, false, false, TEXT("Toggle Project Panel 3") },
-	{ VK_NULL,    IDM_VIEW_FILEBROWSER,                         false, false, false, TEXT("Toggle Folder as Workspace") },
-	{ VK_NULL,    IDM_VIEW_DOC_MAP,                             false, false, false, TEXT("Toggle Document Map") },
-	{ VK_NULL,    IDM_VIEW_DOCLIST,                             false, false, false, TEXT("Toggle Document List") },
-	{ VK_NULL,    IDM_VIEW_FUNC_LIST,                           false, false, false, TEXT("Toggle Function List") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_1,            false, false, false, TEXT("Switch to Project Panel 1") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_2,            false, false, false, TEXT("Switch to Project Panel 2") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_3,            false, false, false, TEXT("Switch to Project Panel 3") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_FILEBROWSER,                false, false, false, TEXT("Switch to Folder as Workspace") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_FUNC_LIST,                  false, false, false, TEXT("Switch to Function List") },
-	{ VK_NULL,    IDM_VIEW_SWITCHTO_DOCLIST,                    false, false, false, TEXT("Switch to Document List") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_NONE,                     false, false, false, TEXT("Remove Tab Colour") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_1,                        false, false, false, TEXT("Apply Tab Colour 1") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_2,                        false, false, false, TEXT("Apply Tab Colour 2") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_3,                        false, false, false, TEXT("Apply Tab Colour 3") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_4,                        false, false, false, TEXT("Apply Tab Colour 4") },
-	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_5,                        false, false, false, TEXT("Apply Tab Colour 5") },
+	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_1,                     false, false, false, L"Toggle Project Panel 1" },
+	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_2,                     false, false, false, L"Toggle Project Panel 2" },
+	{ VK_NULL,    IDM_VIEW_PROJECT_PANEL_3,                     false, false, false, L"Toggle Project Panel 3" },
+	{ VK_NULL,    IDM_VIEW_FILEBROWSER,                         false, false, false, L"Toggle Folder as Workspace" },
+	{ VK_NULL,    IDM_VIEW_DOC_MAP,                             false, false, false, L"Toggle Document Map" },
+	{ VK_NULL,    IDM_VIEW_DOCLIST,                             false, false, false, L"Toggle Document List" },
+	{ VK_NULL,    IDM_VIEW_FUNC_LIST,                           false, false, false, L"Toggle Function List" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_1,            false, false, false, L"Switch to Project Panel 1" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_2,            false, false, false, L"Switch to Project Panel 2" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_PROJECT_PANEL_3,            false, false, false, L"Switch to Project Panel 3" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_FILEBROWSER,                false, false, false, L"Switch to Folder as Workspace" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_FUNC_LIST,                  false, false, false, L"Switch to Function List" },
+	{ VK_NULL,    IDM_VIEW_SWITCHTO_DOCLIST,                    false, false, false, L"Switch to Document List" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_NONE,                     false, false, false, L"Remove Tab Colour" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_1,                        false, false, false, L"Apply Tab Colour 1" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_2,                        false, false, false, L"Apply Tab Colour 2" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_3,                        false, false, false, L"Apply Tab Colour 3" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_4,                        false, false, false, L"Apply Tab Colour 4" },
+	{ VK_NULL,    IDM_VIEW_TAB_COLOUR_5,                        false, false, false, L"Apply Tab Colour 5" },
 	{ VK_NULL,    IDM_VIEW_SYNSCROLLV,                          false, false, false, nullptr },
 	{ VK_NULL,    IDM_VIEW_SYNSCROLLH,                          false, false, false, nullptr },
 	{ VK_R,       IDM_EDIT_RTL,                                 true,  true,  false, nullptr },
@@ -420,7 +477,7 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_SETTING_IMPORTSTYLETHEMES,                false, false, false, nullptr },
 	{ VK_NULL,    IDM_SETTING_EDITCONTEXTMENU,                  false, false, false, nullptr },
 
-	{ VK_R,       IDC_EDIT_TOGGLEMACRORECORDING,                true,  false, true,  TEXT("Toggle macro recording")},
+	{ VK_R,       IDC_EDIT_TOGGLEMACRORECORDING,                true,  false, true,  L"Toggle macro recording" },
 	{ VK_NULL,    IDM_MACRO_STARTRECORDINGMACRO,                false, false, false, nullptr },
 	{ VK_NULL,    IDM_MACRO_STOPRECORDINGMACRO,                 false, false, false, nullptr },
 	{ VK_P,       IDM_MACRO_PLAYBACKRECORDEDMACRO,              true,  false, true,  nullptr },
@@ -428,16 +485,17 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	{ VK_NULL,    IDM_MACRO_RUNMULTIMACRODLG,                   false, false, false, nullptr },
 
 	{ VK_F5,      IDM_EXECUTE,                                  false, false, false, nullptr },
+	{ VK_NULL,    IDM_EXECUTE_VALIDATE_SHORTCUTSXML,            false, false, false, nullptr },
 
 	{ VK_NULL,    IDM_WINDOW_WINDOWS,                           false, false, false, nullptr },
-	{ VK_NULL,    IDM_WINDOW_SORT_FN_ASC,                       false, false, false, TEXT("Sort By Name A to Z") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FN_DSC,                       false, false, false, TEXT("Sort By Name Z to A") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FP_ASC,                       false, false, false, TEXT("Sort By Path A to Z") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FP_DSC,                       false, false, false, TEXT("Sort By Path Z to A") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FT_ASC,                       false, false, false, TEXT("Sort By Type A to Z") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FT_DSC,                       false, false, false, TEXT("Sort By Type Z to A") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FS_ASC,                       false, false, false, TEXT("Sort By Size Smaller to Larger") },
-	{ VK_NULL,    IDM_WINDOW_SORT_FS_DSC,                       false, false, false, TEXT("Sort By Size Larger to Smaller") },
+	{ VK_NULL,    IDM_WINDOW_SORT_FN_ASC,                       false, false, false, L"Sort by Name A to Z" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FN_DSC,                       false, false, false, L"Sort by Name Z to A" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FP_ASC,                       false, false, false, L"Sort by Path A to Z" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FP_DSC,                       false, false, false, L"Sort by Path Z to A" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FT_ASC,                       false, false, false, L"Sort by Type A to Z" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FT_DSC,                       false, false, false, L"Sort by Type Z to A" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FS_ASC,                       false, false, false, L"Sort by Content Length Ascending" },
+	{ VK_NULL,    IDM_WINDOW_SORT_FS_DSC,                       false, false, false, L"Sort by Content Length Descending" },
 
 	{ VK_NULL,    IDM_CMDLINEARGUMENTS,                         false, false, false, nullptr },
 	{ VK_NULL,    IDM_HOMESWEETHOME,                            false, false, false, nullptr },
@@ -450,8 +508,8 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 	// The following two commands are not in menu if (nppGUI._doesExistUpdater == 0).
 	// They cannot be derived from menu then, only for this reason the text is specified here.
 	// In localized environments, the text comes preferably from xml Menu/Main/Commands.
-	{ VK_NULL,    IDM_UPDATE_NPP,                               false, false, false, TEXT("Update Notepad++") },
-	{ VK_NULL,    IDM_CONFUPDATERPROXY,                         false, false, false, TEXT("Set Updater Proxy...") },
+	{ VK_NULL,    IDM_UPDATE_NPP,                               false, false, false, L"Update Notepad++" },
+	{ VK_NULL,    IDM_CONFUPDATERPROXY,                         false, false, false, L"Set Updater Proxy..." },
 	{ VK_NULL,    IDM_DEBUGINFO,                                false, false, false, nullptr },
 	{ VK_F1,      IDM_ABOUT,                                    false, false, false, nullptr }
 };
@@ -460,13 +518,13 @@ static const WinMenuKeyDefinition winKeyDefs[] =
 
 struct ScintillaKeyDefinition
 {
-	const TCHAR* name = nullptr;
+	const wchar_t* name = nullptr;
 	int functionId = 0;
 	bool isCtrl = false;
 	bool isAlt = false;
 	bool isShift = false;
 	int vKey = 0;
-	int redirFunctionId = 0; // this gets set when a function is being redirected through Notepad++ if Scintilla doesnt do it properly :)
+	int redirFunctionId = 0; // this gets set when a function is being redirected through Notepad++ if Scintilla doesn't do it properly :)
 };
 
 /*!
@@ -474,160 +532,166 @@ struct ScintillaKeyDefinition
 **
 ** values can be 0 for vKey, which means its unused
 */
-static const ScintillaKeyDefinition scintKeyDefs[] =
+static constexpr ScintillaKeyDefinition scintKeyDefs[]
 {
-    //Scintilla command name,             SCINTILLA_CMD_ID,            Ctrl,  Alt,   Shift, V_KEY,       NOTEPAD++_CMD_ID
+	//Scintilla command name,             SCINTILLA_CMD_ID,            Ctrl,  Alt,   Shift, V_KEY,       NOTEPAD++_CMD_ID
 	// -------------------------------------------------------------------------------------------------------------------
 	//
-	//{TEXT("SCI_CUT"),                     SCI_CUT,                     true,  false, false, VK_X,        IDM_EDIT_CUT},
-	//{TEXT(""),                            SCI_CUT,                     false, false, true,  VK_DELETE,   0},
-	//{TEXT("SCI_COPY"),                    SCI_COPY,                    true,  false, false, VK_C,        IDM_EDIT_COPY},
-	//{TEXT(""),                            SCI_COPY,                    true,  false, false, VK_INSERT,   0},
-	//{TEXT("SCI_PASTE"),                   SCI_PASTE,                   true,  false, false, VK_V,        IDM_EDIT_PASTE},
-	//{TEXT("SCI_PASTE"),                   SCI_PASTE,                   false, false, true,  VK_INSERT,   IDM_EDIT_PASTE},
-	{TEXT("SCI_SELECTALL"),               SCI_SELECTALL,               true,  false, false, VK_A,        IDM_EDIT_SELECTALL},
-	{TEXT("SCI_CLEAR"),                   SCI_CLEAR,                   false, false, false, VK_DELETE,   IDM_EDIT_DELETE},
-	{TEXT("SCI_CLEARALL"),                SCI_CLEARALL,                false, false, false, 0,           0},
-	{TEXT("SCI_UNDO"),                    SCI_UNDO,                    true,  false, false, VK_Z,        IDM_EDIT_UNDO},
-	{TEXT(""),                            SCI_UNDO,                    false, true,  false, VK_BACK,     0},
-	{TEXT("SCI_REDO"),                    SCI_REDO,                    true,  false, false, VK_Y,        IDM_EDIT_REDO},
-	{TEXT(""),                            SCI_REDO,                    true,  false, true,  VK_Z,        0},
-	{TEXT("SCI_NEWLINE"),                 SCI_NEWLINE,                 false, false, false, VK_RETURN,   0},
-	{TEXT(""),                            SCI_NEWLINE,                 false, false, true,  VK_RETURN,   0},
-	{TEXT("SCI_TAB"),                     SCI_TAB,                     false, false, false, VK_TAB,      0},
-	{TEXT("SCI_BACKTAB"),                 SCI_BACKTAB,                 false, false, true,  VK_TAB,      0},
-	{TEXT("SCI_FORMFEED"),                SCI_FORMFEED,                false, false, false, 0,           0},
-	{TEXT("SCI_ZOOMIN"),                  SCI_ZOOMIN,                  true,  false, false, VK_ADD,      IDM_VIEW_ZOOMIN},
-	{TEXT("SCI_ZOOMOUT"),                 SCI_ZOOMOUT,                 true,  false, false, VK_SUBTRACT, IDM_VIEW_ZOOMOUT},
-	{TEXT("SCI_SETZOOM"),                 SCI_SETZOOM,                 true,  false, false, VK_DIVIDE,   IDM_VIEW_ZOOMRESTORE},
-	{TEXT("SCI_SELECTIONDUPLICATE"),      SCI_SELECTIONDUPLICATE,      true,  false, false, VK_D,        0},
-	{TEXT("SCI_LINESJOIN"),               SCI_LINESJOIN,               false, false, false, 0,           0},
-	{TEXT("SCI_SCROLLCARET"),             SCI_SCROLLCARET,             false, false, false, 0,           0},
-	{TEXT("SCI_EDITTOGGLEOVERTYPE"),      SCI_EDITTOGGLEOVERTYPE,      false, false, false, VK_INSERT,   0},
-	{TEXT("SCI_MOVECARETINSIDEVIEW"),     SCI_MOVECARETINSIDEVIEW,     false, false, false, 0,           0},
-	{TEXT("SCI_LINEDOWN"),                SCI_LINEDOWN,                false, false, false, VK_DOWN,     0},
-	{TEXT("SCI_LINEDOWNEXTEND"),          SCI_LINEDOWNEXTEND,          false, false, true,  VK_DOWN,     0},
-	{TEXT("SCI_LINEDOWNRECTEXTEND"),      SCI_LINEDOWNRECTEXTEND,      false, true,  true,  VK_DOWN,     0},
-	{TEXT("SCI_LINESCROLLDOWN"),          SCI_LINESCROLLDOWN,          true,  false, false, VK_DOWN,     0},
-	{TEXT("SCI_LINEUP"),                  SCI_LINEUP,                  false, false, false, VK_UP,       0},
-	{TEXT("SCI_LINEUPEXTEND"),            SCI_LINEUPEXTEND,            false, false, true,  VK_UP,       0},
-	{TEXT("SCI_LINEUPRECTEXTEND"),        SCI_LINEUPRECTEXTEND,        false, true,  true,  VK_UP,       0},
-	{TEXT("SCI_LINESCROLLUP"),            SCI_LINESCROLLUP,            true,  false, false, VK_UP,       0},
-	{TEXT("SCI_PARADOWN"),                SCI_PARADOWN,                true,  false, false, VK_OEM_6,    0},
-	{TEXT("SCI_PARADOWNEXTEND"),          SCI_PARADOWNEXTEND,          true,  false, true,  VK_OEM_6,    0},
-	{TEXT("SCI_PARAUP"),                  SCI_PARAUP,                  true,  false, false, VK_OEM_4,    0},
-	{TEXT("SCI_PARAUPEXTEND"),            SCI_PARAUPEXTEND,            true,  false, true,  VK_OEM_4,    0},
-	{TEXT("SCI_CHARLEFT"),                SCI_CHARLEFT,                false, false, false, VK_LEFT,     0},
-	{TEXT("SCI_CHARLEFTEXTEND"),          SCI_CHARLEFTEXTEND,          false, false, true,  VK_LEFT,     0},
-	{TEXT("SCI_CHARLEFTRECTEXTEND"),      SCI_CHARLEFTRECTEXTEND,      false, true,  true,  VK_LEFT,     0},
-	{TEXT("SCI_CHARRIGHT"),               SCI_CHARRIGHT,               false, false, false, VK_RIGHT,    0},
-	{TEXT("SCI_CHARRIGHTEXTEND"),         SCI_CHARRIGHTEXTEND,         false, false, true,  VK_RIGHT,    0},
-	{TEXT("SCI_CHARRIGHTRECTEXTEND"),     SCI_CHARRIGHTRECTEXTEND,     false, true,  true,  VK_RIGHT,    0},
-	{TEXT("SCI_WORDLEFT"),                SCI_WORDLEFT,                true,  false, false, VK_LEFT,     0},
-	{TEXT("SCI_WORDLEFTEXTEND"),          SCI_WORDLEFTEXTEND,          true,  false, true,  VK_LEFT,     0},
-	{TEXT("SCI_WORDRIGHT"),               SCI_WORDRIGHT,               true,  false, false, VK_RIGHT,    0},
-	{TEXT("SCI_WORDRIGHTEXTEND"),         SCI_WORDRIGHTEXTEND,         false, false, false, 0,           0},
-	{TEXT("SCI_WORDLEFTEND"),             SCI_WORDLEFTEND,             false, false, false, 0,           0},
-	{TEXT("SCI_WORDLEFTENDEXTEND"),       SCI_WORDLEFTENDEXTEND,       false, false, false, 0,           0},
-	{TEXT("SCI_WORDRIGHTEND"),            SCI_WORDRIGHTEND,            false, false, false, 0,           0},
-	{TEXT("SCI_WORDRIGHTENDEXTEND"),      SCI_WORDRIGHTENDEXTEND,      true,  false, true,  VK_RIGHT,    0},
-	{TEXT("SCI_WORDPARTLEFT"),            SCI_WORDPARTLEFT,            true,  false, false, VK_OEM_2,    0},
-	{TEXT("SCI_WORDPARTLEFTEXTEND"),      SCI_WORDPARTLEFTEXTEND,      true,  false, true,  VK_OEM_2,    0},
-	{TEXT("SCI_WORDPARTRIGHT"),           SCI_WORDPARTRIGHT,           true,  false, false, VK_OEM_5,    0},
-	{TEXT("SCI_WORDPARTRIGHTEXTEND"),     SCI_WORDPARTRIGHTEXTEND,     true,  false, true,  VK_OEM_5,    0},
-	{TEXT("SCI_HOME"),                    SCI_HOME,                    false, false, false, 0,           0},
-	{TEXT("SCI_HOMEEXTEND"),              SCI_HOMEEXTEND,              false, false, false, 0,           0},
-	{TEXT("SCI_HOMERECTEXTEND"),          SCI_HOMERECTEXTEND,          false, false, false, 0,           0},
-	{TEXT("SCI_HOMEDISPLAY"),             SCI_HOMEDISPLAY,             false, true,  false, VK_HOME,     0},
-	{TEXT("SCI_HOMEDISPLAYEXTEND"),       SCI_HOMEDISPLAYEXTEND,       false, false, false, 0,           0},
-	{TEXT("SCI_HOMEWRAP"),                SCI_HOMEWRAP,                false, false, false, 0,           0},
-	{TEXT("SCI_HOMEWRAPEXTEND"),          SCI_HOMEWRAPEXTEND,          false, false, false, 0,           0},
-	{TEXT("SCI_VCHOME"),                  SCI_VCHOME,                  false, false, false, 0,           0},
-	{TEXT("SCI_VCHOMEEXTEND"),            SCI_VCHOMEEXTEND,            false, false, false, 0,           0},
-	{TEXT("SCI_VCHOMERECTEXTEND"),        SCI_VCHOMERECTEXTEND,        false, true,  true,  VK_HOME,     0},
-	{TEXT("SCI_VCHOMEDISPLAY"),           SCI_VCHOMEDISPLAY,           false, false, false, 0,           0},
-	{TEXT("SCI_VCHOMEDISPLAYEXTEND"),     SCI_VCHOMEDISPLAYEXTEND,     false, false, false, 0,           0},
-	{TEXT("SCI_VCHOMEWRAP"),              SCI_VCHOMEWRAP,              false, false, false, VK_HOME,     0},
-	{TEXT("SCI_VCHOMEWRAPEXTEND"),        SCI_VCHOMEWRAPEXTEND,        false, false, true,  VK_HOME,     0},
-	{TEXT("SCI_LINEEND"),                 SCI_LINEEND,                 false, false, false, 0,           0},
-	{TEXT("SCI_LINEENDWRAPEXTEND"),       SCI_LINEENDWRAPEXTEND,       false, false, true,  VK_END,      0},
-	{TEXT("SCI_LINEENDRECTEXTEND"),       SCI_LINEENDRECTEXTEND,       false, true,  true,  VK_END,      0},
-	{TEXT("SCI_LINEENDDISPLAY"),          SCI_LINEENDDISPLAY,          false, true,  false, VK_END,      0},
-	{TEXT("SCI_LINEENDDISPLAYEXTEND"),    SCI_LINEENDDISPLAYEXTEND,    false, false, false, 0,           0},
-	{TEXT("SCI_LINEENDWRAP"),             SCI_LINEENDWRAP,             false, false, false, VK_END,      0},
-	{TEXT("SCI_LINEENDEXTEND"),           SCI_LINEENDEXTEND,           false, false, false, 0,           0},
-	{TEXT("SCI_DOCUMENTSTART"),           SCI_DOCUMENTSTART,           true,  false, false, VK_HOME,     0},
-	{TEXT("SCI_DOCUMENTSTARTEXTEND"),     SCI_DOCUMENTSTARTEXTEND,     true,  false, true,  VK_HOME,     0},
-	{TEXT("SCI_DOCUMENTEND"),             SCI_DOCUMENTEND,             true,  false, false, VK_END,      0},
-	{TEXT("SCI_DOCUMENTENDEXTEND"),       SCI_DOCUMENTENDEXTEND,       true,  false, true,  VK_END,      0},
-	{TEXT("SCI_PAGEUP"),                  SCI_PAGEUP,                  false, false, false, VK_PRIOR,    0},
-	{TEXT("SCI_PAGEUPEXTEND"),            SCI_PAGEUPEXTEND,            false, false, true,  VK_PRIOR,    0},
-	{TEXT("SCI_PAGEUPRECTEXTEND"),        SCI_PAGEUPRECTEXTEND,        false, true,  true,  VK_PRIOR,    0},
-	{TEXT("SCI_PAGEDOWN"),                SCI_PAGEDOWN,                false, false, false, VK_NEXT,     0},
-	{TEXT("SCI_PAGEDOWNEXTEND"),          SCI_PAGEDOWNEXTEND,          false, false, true,  VK_NEXT,     0},
-	{TEXT("SCI_PAGEDOWNRECTEXTEND"),      SCI_PAGEDOWNRECTEXTEND,      false, true,  true,  VK_NEXT,     0},
-	{TEXT("SCI_STUTTEREDPAGEUP"),         SCI_STUTTEREDPAGEUP,         false, false, false, 0,           0},
-	{TEXT("SCI_STUTTEREDPAGEUPEXTEND"),   SCI_STUTTEREDPAGEUPEXTEND,   false, false, false, 0,           0},
-	{TEXT("SCI_STUTTEREDPAGEDOWN"),       SCI_STUTTEREDPAGEDOWN,       false, false, false, 0,           0},
-	{TEXT("SCI_STUTTEREDPAGEDOWNEXTEND"), SCI_STUTTEREDPAGEDOWNEXTEND, false, false, false, 0,           0},
-	{TEXT("SCI_DELETEBACK"),              SCI_DELETEBACK,              false, false, false, VK_BACK,     0},
-	{TEXT(""),                            SCI_DELETEBACK,              false, false, true,  VK_BACK,     0},
-	{TEXT("SCI_DELETEBACKNOTLINE"),       SCI_DELETEBACKNOTLINE,       false, false, false, 0,           0},
-	{TEXT("SCI_DELWORDLEFT"),             SCI_DELWORDLEFT,             true,  false, false, VK_BACK,     0},
-	{TEXT("SCI_DELWORDRIGHT"),            SCI_DELWORDRIGHT,            true,  false, false, VK_DELETE,   0},
-	{TEXT("SCI_DELLINELEFT"),             SCI_DELLINELEFT,             true,  false, true,  VK_BACK,     0},
-	{TEXT("SCI_DELLINERIGHT"),            SCI_DELLINERIGHT,            true,  false, true,  VK_DELETE,   0},
-	{TEXT("SCI_LINEDELETE"),              SCI_LINEDELETE,              true,  false, true,  VK_L,        0},
-	{TEXT("SCI_LINECUT"),                 SCI_LINECUT,                 true,  false, false, VK_L,        0},
-	{TEXT("SCI_LINECOPY"),                SCI_LINECOPY,                true,  false, true,  VK_X,        0},
-	{TEXT("SCI_LINETRANSPOSE"),           SCI_LINETRANSPOSE,           true,  false, false, VK_T,        0},
-	{TEXT("SCI_LINEDUPLICATE"),           SCI_LINEDUPLICATE,           false, false, false, 0,           IDM_EDIT_DUP_LINE},
-	{TEXT("SCI_CANCEL"),                  SCI_CANCEL,                  false, false, false, VK_ESCAPE,   0},
-	{TEXT("SCI_SWAPMAINANCHORCARET"),     SCI_SWAPMAINANCHORCARET,     false, false, false, 0,           0},
-	{TEXT("SCI_ROTATESELECTION"),         SCI_ROTATESELECTION,         false, false, false, 0,           0}
+	//{L"SCI_CUT",                     SCI_CUT,                     true,  false, false, VK_X,        IDM_EDIT_CUT},
+	//{L"",                            SCI_CUT,                     false, false, true,  VK_DELETE,   0},
+	//{L"SCI_COPY",                    SCI_COPY,                    true,  false, false, VK_C,        IDM_EDIT_COPY},
+	//{L"",                            SCI_COPY,                    true,  false, false, VK_INSERT,   0},
+	//{L"SCI_PASTE",                   SCI_PASTE,                   true,  false, false, VK_V,        IDM_EDIT_PASTE},
+	//{L"SCI_PASTE",                   SCI_PASTE,                   false, false, true,  VK_INSERT,   IDM_EDIT_PASTE},
+	{L"SCI_SELECTALL",               SCI_SELECTALL,               true,  false, false, VK_A,        IDM_EDIT_SELECTALL},
+	{L"SCI_CLEAR",                   SCI_CLEAR,                   false, false, false, VK_DELETE,   IDM_EDIT_DELETE},
+	{L"SCI_CLEARALL",                SCI_CLEARALL,                false, false, false, 0,           0},
+	{L"SCI_UNDO",                    SCI_UNDO,                    true,  false, false, VK_Z,        IDM_EDIT_UNDO},
+	{L"",                            SCI_UNDO,                    false, true,  false, VK_BACK,     0},
+	{L"SCI_REDO",                    SCI_REDO,                    true,  false, false, VK_Y,        IDM_EDIT_REDO},
+	{L"",                            SCI_REDO,                    true,  false, true,  VK_Z,        0},
+	{L"SCI_NEWLINE",                 SCI_NEWLINE,                 false, false, false, VK_RETURN,   0},
+	{L"",                            SCI_NEWLINE,                 false, false, true,  VK_RETURN,   0},
+	{L"SCI_TAB",                     SCI_TAB,                     false, false, false, VK_TAB,      0},
+	{L"SCI_BACKTAB",                 SCI_BACKTAB,                 false, false, true,  VK_TAB,      0},
+	{L"SCI_FORMFEED",                SCI_FORMFEED,                false, false, false, 0,           0},
+	{L"SCI_ZOOMIN",                  SCI_ZOOMIN,                  true,  false, false, VK_ADD,      IDM_VIEW_ZOOMIN},
+	{L"SCI_ZOOMOUT",                 SCI_ZOOMOUT,                 true,  false, false, VK_SUBTRACT, IDM_VIEW_ZOOMOUT},
+	{L"SCI_SETZOOM",                 SCI_SETZOOM,                 true,  false, false, VK_DIVIDE,   IDM_VIEW_ZOOMRESTORE},
+	{L"SCI_SELECTIONDUPLICATE",      SCI_SELECTIONDUPLICATE,      true,  false, false, VK_D,        0},
+	{L"SCI_LINESJOIN",               SCI_LINESJOIN,               false, false, false, 0,           0},
+	{L"SCI_SCROLLCARET",             SCI_SCROLLCARET,             false, false, false, 0,           0},
+	{L"SCI_EDITTOGGLEOVERTYPE",      SCI_EDITTOGGLEOVERTYPE,      false, false, false, VK_INSERT,   0},
+	{L"SCI_MOVECARETINSIDEVIEW",     SCI_MOVECARETINSIDEVIEW,     false, false, false, 0,           0},
+	{L"SCI_LINEDOWN",                SCI_LINEDOWN,                false, false, false, VK_DOWN,     0},
+	{L"SCI_LINEDOWNEXTEND",          SCI_LINEDOWNEXTEND,          false, false, true,  VK_DOWN,     0},
+	{L"SCI_LINEDOWNRECTEXTEND",      SCI_LINEDOWNRECTEXTEND,      false, true,  true,  VK_DOWN,     0},
+	{L"SCI_LINESCROLLDOWN",          SCI_LINESCROLLDOWN,          true,  false, false, VK_DOWN,     0},
+	{L"SCI_LINEUP",                  SCI_LINEUP,                  false, false, false, VK_UP,       0},
+	{L"SCI_LINEUPEXTEND",            SCI_LINEUPEXTEND,            false, false, true,  VK_UP,       0},
+	{L"SCI_LINEUPRECTEXTEND",        SCI_LINEUPRECTEXTEND,        false, true,  true,  VK_UP,       0},
+	{L"SCI_LINESCROLLUP",            SCI_LINESCROLLUP,            true,  false, false, VK_UP,       0},
+	{L"SCI_PARADOWN",                SCI_PARADOWN,                true,  false, false, VK_OEM_6,    0},
+	{L"SCI_PARADOWNEXTEND",          SCI_PARADOWNEXTEND,          true,  false, true,  VK_OEM_6,    0},
+	{L"SCI_PARAUP",                  SCI_PARAUP,                  true,  false, false, VK_OEM_4,    0},
+	{L"SCI_PARAUPEXTEND",            SCI_PARAUPEXTEND,            true,  false, true,  VK_OEM_4,    0},
+	{L"SCI_CHARLEFT",                SCI_CHARLEFT,                false, false, false, VK_LEFT,     0},
+	{L"SCI_CHARLEFTEXTEND",          SCI_CHARLEFTEXTEND,          false, false, true,  VK_LEFT,     0},
+	{L"SCI_CHARLEFTRECTEXTEND",      SCI_CHARLEFTRECTEXTEND,      false, true,  true,  VK_LEFT,     0},
+	{L"SCI_CHARRIGHT",               SCI_CHARRIGHT,               false, false, false, VK_RIGHT,    0},
+	{L"SCI_CHARRIGHTEXTEND",         SCI_CHARRIGHTEXTEND,         false, false, true,  VK_RIGHT,    0},
+	{L"SCI_CHARRIGHTRECTEXTEND",     SCI_CHARRIGHTRECTEXTEND,     false, true,  true,  VK_RIGHT,    0},
+	{L"SCI_WORDLEFT",                SCI_WORDLEFT,                true,  false, false, VK_LEFT,     0},
+	{L"SCI_WORDLEFTEXTEND",          SCI_WORDLEFTEXTEND,          true,  false, true,  VK_LEFT,     0},
+	{L"SCI_WORDRIGHT",               SCI_WORDRIGHT,               true,  false, false, VK_RIGHT,    0},
+	{L"SCI_WORDRIGHTEXTEND",         SCI_WORDRIGHTEXTEND,         false, false, false, 0,           0},
+	{L"SCI_WORDLEFTEND",             SCI_WORDLEFTEND,             false, false, false, 0,           0},
+	{L"SCI_WORDLEFTENDEXTEND",       SCI_WORDLEFTENDEXTEND,       false, false, false, 0,           0},
+	{L"SCI_WORDRIGHTEND",            SCI_WORDRIGHTEND,            false, false, false, 0,           0},
+	{L"SCI_WORDRIGHTENDEXTEND",      SCI_WORDRIGHTENDEXTEND,      true,  false, true,  VK_RIGHT,    0},
+	{L"SCI_WORDPARTLEFT",            SCI_WORDPARTLEFT,            true,  false, false, VK_OEM_2,    0},
+	{L"SCI_WORDPARTLEFTEXTEND",      SCI_WORDPARTLEFTEXTEND,      true,  false, true,  VK_OEM_2,    0},
+	{L"SCI_WORDPARTRIGHT",           SCI_WORDPARTRIGHT,           true,  false, false, VK_OEM_5,    0},
+	{L"SCI_WORDPARTRIGHTEXTEND",     SCI_WORDPARTRIGHTEXTEND,     true,  false, true,  VK_OEM_5,    0},
+	{L"SCI_HOME",                    SCI_HOME,                    false, false, false, 0,           0},
+	{L"SCI_HOMEEXTEND",              SCI_HOMEEXTEND,              false, false, false, 0,           0},
+	{L"SCI_HOMERECTEXTEND",          SCI_HOMERECTEXTEND,          false, false, false, 0,           0},
+	{L"SCI_HOMEDISPLAY",             SCI_HOMEDISPLAY,             false, true,  false, VK_HOME,     0},
+	{L"SCI_HOMEDISPLAYEXTEND",       SCI_HOMEDISPLAYEXTEND,       false, false, false, 0,           0},
+	{L"SCI_HOMEWRAP",                SCI_HOMEWRAP,                false, false, false, 0,           0},
+	{L"SCI_HOMEWRAPEXTEND",          SCI_HOMEWRAPEXTEND,          false, false, false, 0,           0},
+	{L"SCI_VCHOME",                  SCI_VCHOME,                  false, false, false, 0,           0},
+	{L"SCI_VCHOMEEXTEND",            SCI_VCHOMEEXTEND,            false, false, false, 0,           0},
+	{L"SCI_VCHOMERECTEXTEND",        SCI_VCHOMERECTEXTEND,        false, true,  true,  VK_HOME,     0},
+	{L"SCI_VCHOMEDISPLAY",           SCI_VCHOMEDISPLAY,           false, false, false, 0,           0},
+	{L"SCI_VCHOMEDISPLAYEXTEND",     SCI_VCHOMEDISPLAYEXTEND,     false, false, false, 0,           0},
+	{L"SCI_VCHOMEWRAP",              SCI_VCHOMEWRAP,              false, false, false, VK_HOME,     0},
+	{L"SCI_VCHOMEWRAPEXTEND",        SCI_VCHOMEWRAPEXTEND,        false, false, true,  VK_HOME,     0},
+	{L"SCI_LINEEND",                 SCI_LINEEND,                 false, false, false, 0,           0},
+	{L"SCI_LINEENDWRAPEXTEND",       SCI_LINEENDWRAPEXTEND,       false, false, true,  VK_END,      0},
+	{L"SCI_LINEENDRECTEXTEND",       SCI_LINEENDRECTEXTEND,       false, true,  true,  VK_END,      0},
+	{L"SCI_LINEENDDISPLAY",          SCI_LINEENDDISPLAY,          false, true,  false, VK_END,      0},
+	{L"SCI_LINEENDDISPLAYEXTEND",    SCI_LINEENDDISPLAYEXTEND,    false, false, false, 0,           0},
+	{L"SCI_LINEENDWRAP",             SCI_LINEENDWRAP,             false, false, false, VK_END,      0},
+	{L"SCI_LINEENDEXTEND",           SCI_LINEENDEXTEND,           false, false, false, 0,           0},
+	{L"SCI_DOCUMENTSTART",           SCI_DOCUMENTSTART,           true,  false, false, VK_HOME,     0},
+	{L"SCI_DOCUMENTSTARTEXTEND",     SCI_DOCUMENTSTARTEXTEND,     true,  false, true,  VK_HOME,     0},
+	{L"SCI_DOCUMENTEND",             SCI_DOCUMENTEND,             true,  false, false, VK_END,      0},
+	{L"SCI_DOCUMENTENDEXTEND",       SCI_DOCUMENTENDEXTEND,       true,  false, true,  VK_END,      0},
+	{L"SCI_PAGEUP",                  SCI_PAGEUP,                  false, false, false, VK_PRIOR,    0},
+	{L"SCI_PAGEUPEXTEND",            SCI_PAGEUPEXTEND,            false, false, true,  VK_PRIOR,    0},
+	{L"SCI_PAGEUPRECTEXTEND",        SCI_PAGEUPRECTEXTEND,        false, true,  true,  VK_PRIOR,    0},
+	{L"SCI_PAGEDOWN",                SCI_PAGEDOWN,                false, false, false, VK_NEXT,     0},
+	{L"SCI_PAGEDOWNEXTEND",          SCI_PAGEDOWNEXTEND,          false, false, true,  VK_NEXT,     0},
+	{L"SCI_PAGEDOWNRECTEXTEND",      SCI_PAGEDOWNRECTEXTEND,      false, true,  true,  VK_NEXT,     0},
+	{L"SCI_STUTTEREDPAGEUP",         SCI_STUTTEREDPAGEUP,         false, false, false, 0,           0},
+	{L"SCI_STUTTEREDPAGEUPEXTEND",   SCI_STUTTEREDPAGEUPEXTEND,   false, false, false, 0,           0},
+	{L"SCI_STUTTEREDPAGEDOWN",       SCI_STUTTEREDPAGEDOWN,       false, false, false, 0,           0},
+	{L"SCI_STUTTEREDPAGEDOWNEXTEND", SCI_STUTTEREDPAGEDOWNEXTEND, false, false, false, 0,           0},
+	{L"SCI_DELETEBACK",              SCI_DELETEBACK,              false, false, false, VK_BACK,     0},
+	{L"",                            SCI_DELETEBACK,              false, false, true,  VK_BACK,     0},
+	{L"SCI_DELETEBACKNOTLINE",       SCI_DELETEBACKNOTLINE,       false, false, false, 0,           0},
+	{L"SCI_DELWORDLEFT",             SCI_DELWORDLEFT,             true,  false, false, VK_BACK,     0},
+	{L"SCI_DELWORDRIGHT",            SCI_DELWORDRIGHT,            true,  false, false, VK_DELETE,   0},
+	{L"SCI_DELLINELEFT",             SCI_DELLINELEFT,             true,  false, true,  VK_BACK,     0},
+	{L"SCI_DELLINERIGHT",            SCI_DELLINERIGHT,            true,  false, true,  VK_DELETE,   0},
+	{L"SCI_LINEDELETE",              SCI_LINEDELETE,              true,  false, true,  VK_L,        0},
+	{L"SCI_LINECUT",                 SCI_LINECUT,                 true,  false, false, VK_L,        0},
+	{L"SCI_LINECOPY",                SCI_LINECOPY,                true,  false, true,  VK_X,        0},
+	{L"SCI_LINETRANSPOSE",           SCI_LINETRANSPOSE,           true,  false, false, VK_T,        0},
+	{L"SCI_LINEDUPLICATE",           SCI_LINEDUPLICATE,           false, false, false, 0,           IDM_EDIT_DUP_LINE},
+	{L"SCI_CANCEL",                  SCI_CANCEL,                  false, false, false, VK_ESCAPE,   0},
+	{L"SCI_SWAPMAINANCHORCARET",     SCI_SWAPMAINANCHORCARET,     false, false, false, 0,           0},
+	{L"SCI_ROTATESELECTION",         SCI_ROTATESELECTION,         false, false, false, 0,           0}
 };
 
-#define NONEEDSHORTCUTSXMLBACKUP_FILENAME L"v852NoNeedShortcutsBackup.xml"
 #define SHORTCUTSXML_FILENAME L"shortcuts.xml"
+#define SHORTCUTSXML_MODEL_FILENAME L"shortcuts.model.xml"
+
+#define CONTEXTMENUXML_FILENAME L"contextMenu.xml"
+#define CONTEXTMENUXML_MODEL_FILENAME L"contextMenu.model.xml"
 
 #define SESSION_BACKUP_EXT L".inCaseOfCorruption.bak"
 
-typedef void (WINAPI *PGNSI)(LPSYSTEM_INFO);
+using PGNSI = void (WINAPI*)(LPSYSTEM_INFO);
 
-int strVal(const TCHAR *str, int base)
+static int strVal(const char* str, int base)
 {
 	if (!str) return -1;
 	if (!str[0]) return 0;
 
-	TCHAR *finStr;
-	int result = wcstol(str, &finStr, base);
+	char* finStr;
+	const int result = std::strtol(str, &finStr, base);
 	if (*finStr != '\0')
 		return -1;
 	return result;
 }
 
-
-int decStrVal(const TCHAR *str)
-{
-	return strVal(str, 10);
-}
-
-int hexStrVal(const TCHAR *str)
+static int hexStrVal(const char* str)
 {
 	return strVal(str, 16);
 }
 
-int getKwClassFromName(const TCHAR *str)
+static int getKwClassFromName(const char* str)
 {
-	if (!lstrcmp(TEXT("instre1"), str)) return LANG_INDEX_INSTR;
-	if (!lstrcmp(TEXT("instre2"), str)) return LANG_INDEX_INSTR2;
-	if (!lstrcmp(TEXT("type1"), str)) return LANG_INDEX_TYPE;
-	if (!lstrcmp(TEXT("type2"), str)) return LANG_INDEX_TYPE2;
-	if (!lstrcmp(TEXT("type3"), str)) return LANG_INDEX_TYPE3;
-	if (!lstrcmp(TEXT("type4"), str)) return LANG_INDEX_TYPE4;
-	if (!lstrcmp(TEXT("type5"), str)) return LANG_INDEX_TYPE5;
-	if (!lstrcmp(TEXT("type6"), str)) return LANG_INDEX_TYPE6;
-	if (!lstrcmp(TEXT("type7"), str)) return LANG_INDEX_TYPE7;
+	if(!str) return -1;
+	if (std::strcmp(str, "instre1") == 0) return LANG_INDEX_INSTR;
+	if (std::strcmp(str, "instre2") == 0) return LANG_INDEX_INSTR2;
+	if (std::strcmp(str, "type1") == 0) return LANG_INDEX_TYPE;
+	if (std::strcmp(str, "type2") == 0) return LANG_INDEX_TYPE2;
+	if (std::strcmp(str, "type3") == 0) return LANG_INDEX_TYPE3;
+	if (std::strcmp(str, "type4") == 0) return LANG_INDEX_TYPE4;
+	if (std::strcmp(str, "type5") == 0) return LANG_INDEX_TYPE5;
+	if (std::strcmp(str, "type6") == 0) return LANG_INDEX_TYPE6;
+	if (std::strcmp(str, "type7") == 0) return LANG_INDEX_TYPE7;
+	if (std::strcmp(str, "substyle1") == 0) return LANG_INDEX_SUBSTYLE1;
+	if (std::strcmp(str, "substyle2") == 0) return LANG_INDEX_SUBSTYLE2;
+	if (std::strcmp(str, "substyle3") == 0) return LANG_INDEX_SUBSTYLE3;
+	if (std::strcmp(str, "substyle4") == 0) return LANG_INDEX_SUBSTYLE4;
+	if (std::strcmp(str, "substyle5") == 0) return LANG_INDEX_SUBSTYLE5;
+	if (std::strcmp(str, "substyle6") == 0) return LANG_INDEX_SUBSTYLE6;
+	if (std::strcmp(str, "substyle7") == 0) return LANG_INDEX_SUBSTYLE7;
+	if (std::strcmp(str, "substyle8") == 0) return LANG_INDEX_SUBSTYLE8;
 
 	if ((str[1] == '\0') && (str[0] >= '0') && (str[0] <= '8')) // up to KEYWORDSET_MAX
 		return str[0] - '0';
@@ -635,25 +699,127 @@ int getKwClassFromName(const TCHAR *str)
 	return -1;
 }
 
+static constexpr DWORD RGBHEX(COLORREF color)
+{
+	return (((color & 0x0000FF) << 16) | ((color & 0x00FF00)) | ((color & 0xFF0000) >> 16));
+}
 
 } // anonymous namespace
 
+enum class XmlAttrResult
+{
+	failed = -1,
+	isFalse,
+	isTrue
+};
 
-void cutString(const TCHAR* str2cut, vector<std::wstring>& patternVect)
+static constexpr std::array<const char*, 2> STR_BOOL_YESNO{ { "yes", "no" } };
+static constexpr std::array<const char*, 2> STR_BOOL_SHOWHIDE{ { "show", "hide" } };
+
+[[nodiscard]] static bool getBoolAttribute(const NppXml::Element& elem, const char* name, bool defaultVal = false, const std::array<const char*, 2>& strs2cmp = STR_BOOL_YESNO)
+{
+	const char* str = NppXml::attribute(elem, name);
+	if (str)
+	{
+		if (std::strcmp(str, strs2cmp[0]) == 0)
+			return true;
+		if (std::strcmp(str, strs2cmp[1]) == 0)
+			return false;
+	}
+	return defaultVal;
+}
+
+[[nodiscard]] static XmlAttrResult getResultAttribute(const NppXml::Element& elem, const char* name, const std::array<const char*, 2>& strs2cmp = STR_BOOL_YESNO)
+{
+	const char* str = NppXml::attribute(elem, name);
+	if (str)
+	{
+		if (std::strcmp(str, strs2cmp[0]) == 0)
+			return XmlAttrResult::isTrue;
+		if (std::strcmp(str, strs2cmp[1]) == 0)
+			return XmlAttrResult::isFalse;
+	}
+	return XmlAttrResult::failed;
+}
+
+template <typename T>
+[[nodiscard]] static T getRangeClampAttribute(const NppXml::Element& elem, const char* name, T minVal, T maxVal, T defaultVal)
+{
+	const int val = NppXml::intAttribute(elem, name, static_cast<int>(defaultVal));
+	if (val != static_cast<int>(defaultVal))
+	{
+		return static_cast<T>(std::max<int>(static_cast<int>(minVal), std::min<int>(val, static_cast<int>(maxVal))));
+	}
+	return defaultVal;
+}
+
+template <typename T>
+[[nodiscard]] static T getRangeDefaultAttribute(const NppXml::Element& elem, const char* name, T minVal, T maxVal, T defaultVal)
+{
+	const int val = NppXml::intAttribute(elem, name, static_cast<int>(defaultVal));
+	if (val < static_cast<int>(minVal))
+		return defaultVal;
+	if (val > static_cast<int>(maxVal))
+		return defaultVal;
+	return static_cast<T>(val);
+}
+
+static void setBoolAttribute(NppXml::Element& elem, const char* name, bool isTrue, const std::array<const char*, 2>& strs2set = STR_BOOL_YESNO)
+{
+	NppXml::setAttribute(elem, name, isTrue ? strs2set[0] : strs2set[1]);
+}
+
+[[nodiscard]] static bool getBoolChildTextNode(const NppXml::Element& elemParent, bool defaultVal = false, const std::array<const char*, 2>& strs2cmp = STR_BOOL_YESNO)
+{
+	NppXml::Node n = NppXml::firstChild(elemParent);
+	if (n)
+	{
+		const char* val = NppXml::getValue(n);
+		if (val)
+		{
+			if (std::strcmp(val, strs2cmp[0]) == 0)
+				return true;
+			if (std::strcmp(val, strs2cmp[1]) == 0)
+				return false;
+		}
+	}
+	return defaultVal;
+}
+
+[[nodiscard]] static XmlAttrResult getResultChildTextNode(const NppXml::Element& elemParent, const std::array<const char*, 2>& strs2cmp = STR_BOOL_YESNO)
+{
+	NppXml::Node n = NppXml::firstChild(elemParent);
+	if (n)
+	{
+		const char* val = NppXml::getValue(n);
+		if (val)
+		{
+			if (std::strcmp(val, strs2cmp[0]) == 0)
+				return XmlAttrResult::isTrue;
+			if (std::strcmp(val, strs2cmp[1]) == 0)
+				return XmlAttrResult::isFalse;
+		}
+	}
+	return XmlAttrResult::failed;
+}
+
+void cutString(const wchar_t* str2cut, std::vector<std::wstring>& patternVect)
 {
 	if (str2cut == nullptr) return;
 
-	const TCHAR *pBegin = str2cut;
-	const TCHAR *pEnd = pBegin;
+	const wchar_t *pBegin = str2cut;
+	const wchar_t *pEnd = pBegin;
 
-	while (*pEnd != '\0')
+	static const auto& loc = std::locale::classic();
+
+	while (*pEnd != L'\0')
 	{
-		if (_istspace(*pEnd))
+		if (std::isspace(*pEnd, loc))
 		{
 			if (pBegin != pEnd)
 				patternVect.emplace_back(pBegin, pEnd);
 			pBegin = pEnd + 1;
-		
+
 		}
 		++pEnd;
 	}
@@ -662,14 +828,14 @@ void cutString(const TCHAR* str2cut, vector<std::wstring>& patternVect)
 		patternVect.emplace_back(pBegin, pEnd);
 }
 
-void cutStringBy(const TCHAR* str2cut, vector<std::wstring>& patternVect, char byChar, bool allowEmptyStr)
+void cutStringBy(const wchar_t* str2cut, std::vector<std::wstring>& patternVect, wchar_t byChar, bool allowEmptyStr)
 {
 	if (str2cut == nullptr) return;
 
-	const TCHAR* pBegin = str2cut;
-	const TCHAR* pEnd = pBegin;
+	const wchar_t* pBegin = str2cut;
+	const wchar_t* pEnd = pBegin;
 
-	while (*pEnd != '\0')
+	while (*pEnd != L'\0')
 	{
 		if (*pEnd == byChar)
 		{
@@ -688,15 +854,14 @@ void cutStringBy(const TCHAR* str2cut, vector<std::wstring>& patternVect, char b
 }
 
 
-std::wstring LocalizationSwitcher::getLangFromXmlFileName(const wchar_t *fn) const
+std::wstring LocalizationSwitcher::getLangFromXmlFileName(const wchar_t* fn)
 {
-	size_t nbItem = sizeof(localizationDefs)/sizeof(LocalizationSwitcher::LocalizationDefinition);
-	for (size_t i = 0 ; i < nbItem ; ++i)
+	for (const auto& locDef : localizationDefs)
 	{
-		if (0 == wcsicmp(fn, localizationDefs[i]._xmlFileName))
-			return localizationDefs[i]._langName;
+		if (::_wcsicmp(fn, locDef._xmlFileName) == 0)
+			return locDef._langName;
 	}
-	return std::wstring();
+	return L"";
 }
 
 
@@ -704,7 +869,7 @@ std::wstring LocalizationSwitcher::getXmlFilePathFromLangName(const wchar_t *lan
 {
 	for (size_t i = 0, len = _localizationList.size(); i < len ; ++i)
 	{
-		if (0 == wcsicmp(langName, _localizationList[i].first.c_str()))
+		if (_wcsicmp(langName, _localizationList[i].first.c_str()) == 0)
 			return _localizationList[i].second;
 	}
 	return std::wstring();
@@ -714,10 +879,10 @@ std::wstring LocalizationSwitcher::getXmlFilePathFromLangName(const wchar_t *lan
 bool LocalizationSwitcher::addLanguageFromXml(const std::wstring& xmlFullPath)
 {
 	const wchar_t * fn = ::PathFindFileNameW(xmlFullPath.c_str());
-	wstring foundLang = getLangFromXmlFileName(fn);
+	const std::wstring foundLang = getLangFromXmlFileName(fn);
 	if (!foundLang.empty())
 	{
-		_localizationList.push_back(pair<wstring, wstring>(foundLang, xmlFullPath));
+		_localizationList.emplace_back(foundLang, xmlFullPath);
 		return true;
 	}
 	return false;
@@ -726,7 +891,7 @@ bool LocalizationSwitcher::addLanguageFromXml(const std::wstring& xmlFullPath)
 
 bool LocalizationSwitcher::switchToLang(const wchar_t *lang2switch) const
 {
-	wstring langPath = getXmlFilePathFromLangName(lang2switch);
+	const std::wstring langPath = getXmlFilePathFromLangName(lang2switch);
 	if (langPath.empty())
 		return false;
 
@@ -734,12 +899,12 @@ bool LocalizationSwitcher::switchToLang(const wchar_t *lang2switch) const
 }
 
 
-std::wstring ThemeSwitcher::getThemeFromXmlFileName(const TCHAR *xmlFullPath) const
+std::wstring ThemeSwitcher::getThemeFromXmlFileName(const wchar_t* xmlFullPath)
 {
 	if (!xmlFullPath || !xmlFullPath[0])
-		return std::wstring();
+		return L"";
 	std::wstring fn(::PathFindFileName(xmlFullPath));
-	PathRemoveExtension(const_cast<TCHAR *>(fn.c_str()));
+	::PathRemoveExtension(fn.data());
 	return fn;
 }
 
@@ -769,7 +934,7 @@ int DynamicMenu::getTopLevelItemNumber() const
 				}
 				else if (previousFolderName == i._parentFolderName)
 				{
-					// maintain the number and do nothinh
+					// maintain the number and do nothing
 				}
 				else
 				{
@@ -802,7 +967,7 @@ bool DynamicMenu::clearMenu() const
 	int nbTopItem = getTopLevelItemNumber();
 	for (int i = nbTopItem + 1; i >= 0 ; --i)
 	{
-		::DeleteMenu(_hMenu, static_cast<int32_t>(_posBase) + i, MF_BYPOSITION);
+		::DeleteMenu(_hMenu, _posBase + i, MF_BYPOSITION);
 	}
 
 	return true;
@@ -836,7 +1001,7 @@ bool DynamicMenu::createMenu() const
 				hParentFolder = ::CreateMenu();
 				j = 0;
 
-				::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i), MF_BYPOSITION | MF_POPUP, (UINT_PTR)hParentFolder, currentParentFolderStr.c_str());
+				::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i), MF_BYPOSITION | MF_POPUP, reinterpret_cast<UINT_PTR>(hParentFolder), currentParentFolderStr.c_str());
 			}
 		}
 
@@ -855,9 +1020,9 @@ bool DynamicMenu::createMenu() const
 			::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i), flag, item._cmdID, item._itemName.c_str());
 			lastIsSep = false;
 		}
-		else if (item._cmdID == 0 && !lastIsSep)
+		else if (!lastIsSep)
 		{
-			::InsertMenu(_hMenu, static_cast<int32_t>(_posBase + i), flag, item._cmdID, item._itemName.c_str());
+			::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i), flag, item._cmdID, item._itemName.c_str());
 			lastIsSep = true;
 		}
 		else // last item is separator and current item is separator
@@ -868,7 +1033,7 @@ bool DynamicMenu::createMenu() const
 
 	if (nb > 0)
 	{
-		::InsertMenu(_hMenu, static_cast<int32_t>(_posBase + i), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
+		::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i), MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
 		::InsertMenu(_hMenu, static_cast<UINT>(_posBase + i + 2), MF_BYCOMMAND, _lastCmd, _lastCmdLabel.c_str());
 	}
 
@@ -885,16 +1050,16 @@ winVer NppParameters::getWindowsVersion()
 	ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
 
 	osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-	BOOL bOsVersionInfoEx = GetVersionEx ((OSVERSIONINFO *)&osvi);
+	const BOOL bOsVersionInfoEx = ::GetVersionExW(reinterpret_cast<OSVERSIONINFO*>(&osvi));
 	if (!bOsVersionInfoEx)
 	{
 		osvi.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-		if (! GetVersionEx ( (OSVERSIONINFO *) &osvi) )
+		if (!::GetVersionExW(reinterpret_cast<OSVERSIONINFO*>(&osvi)))
 			return WV_UNKNOWN;
 	}
 
-	pGNSI = (PGNSI) GetProcAddress(GetModuleHandle(TEXT("kernel32.dll")), "GetNativeSystemInfo");
-	if (pGNSI != NULL)
+	pGNSI = reinterpret_cast<PGNSI>(::GetProcAddress(GetModuleHandle(L"kernel32.dll"), "GetNativeSystemInfo"));
+	if (pGNSI != nullptr)
 		pGNSI(&si);
 	else
 		GetSystemInfo(&si);
@@ -988,18 +1153,21 @@ winVer NppParameters::getWindowsVersion()
 
 NppParameters::NppParameters()
 {
-	//Get windows version
+	// Get windows version
 	_winVersion = getWindowsVersion();
 
+	// Get current system code page
+	_currentSystemCodepage = GetACP();
+
 	// Prepare for default path
-	TCHAR nppPath[MAX_PATH];
+	wchar_t nppPath[MAX_PATH];
 	::GetModuleFileName(NULL, nppPath, MAX_PATH);
 
 	PathRemoveFileSpec(nppPath);
 	_nppPath = nppPath;
 
 	//Initialize current directory to startup directory
-	TCHAR curDir[MAX_PATH];
+	wchar_t curDir[MAX_PATH];
 	::GetCurrentDirectory(MAX_PATH, curDir);
 	_currentDirectory = curDir;
 
@@ -1007,7 +1175,7 @@ NppParameters::NppParameters()
 	std::wstring notepadStylePath(_nppPath);
 	pathAppend(notepadStylePath, notepadStyleFile);
 
-	_asNotepadStyle = (PathFileExists(notepadStylePath.c_str()) == TRUE);
+	_asNotepadStyle = (doesFileExist(notepadStylePath.c_str()) == TRUE);
 
 	//Load initial accelerator key definitions
 	initMenuKeys();
@@ -1017,46 +1185,42 @@ NppParameters::NppParameters()
 
 NppParameters::~NppParameters()
 {
-	for (int i = 0 ; i < _nbLang ; ++i)
-		delete _langList[i];
-	for (int i = 0 ; i < _nbRecentFile ; ++i)
-		delete _LRFileList[i];
-	for (int i = 0 ; i < _nbUserLang ; ++i)
-		delete _userLangArray[i];
-
-	for (std::vector<TiXmlDocument *>::iterator it = _pXmlExternalLexerDoc.begin(), end = _pXmlExternalLexerDoc.end(); it != end; ++it )
-		delete (*it);
+	for (auto& docPath : _pXmlExternalLexerDoc)
+	{
+		delete docPath._doc;
+		docPath._doc = nullptr;
+	}
 
 	_pXmlExternalLexerDoc.clear();
 }
 
 
-bool NppParameters::reloadStylers(const TCHAR* stylePath)
+bool NppParameters::reloadStylers(const wchar_t* stylePath)
 {
-	delete _pXmlUserStylerDoc;
+	delete _pXmlUserStylerDoc._doc;
 
-	const TCHAR* stylePathToLoad = stylePath != nullptr ? stylePath : _stylerPath.c_str();
-	_pXmlUserStylerDoc = new TiXmlDocument(stylePathToLoad);
+	_pXmlUserStylerDoc._path = stylePath ? stylePath : _stylerPath.c_str();
+	_pXmlUserStylerDoc._doc = new NppXml::NewDocument();
 
-	bool loadOkay = _pXmlUserStylerDoc->LoadFile();
+	const bool loadOkay = NppXml::loadFile(_pXmlUserStylerDoc._doc, _pXmlUserStylerDoc._path.c_str());
 	if (!loadOkay)
 	{
 		if (!_pNativeLangSpeaker)
 		{
-			::MessageBox(NULL, stylePathToLoad, TEXT("Load stylers.xml failed"), MB_OK);
+			NppDarkMode::darkMessageBoxW(nullptr, _pXmlUserStylerDoc._path.c_str(), L"Load stylers.xml failed", MB_OK);
 		}
 		else
 		{
 			_pNativeLangSpeaker->messageBox("LoadStylersFailed",
-				NULL,
-				TEXT("Load \"$STR_REPLACE$\" failed!"),
-				TEXT("Load stylers.xml failed"),
+				nullptr,
+				L"Load \"$STR_REPLACE$\" failed!",
+				L"Load stylers.xml failed",
 				MB_OK,
 				0,
-				stylePathToLoad);
+				_pXmlUserStylerDoc._path.c_str());
 		}
-		delete _pXmlUserStylerDoc;
-		_pXmlUserStylerDoc = NULL;
+		delete _pXmlUserStylerDoc._doc;
+		_pXmlUserStylerDoc._doc = nullptr;
 		return false;
 	}
 	_lexerStylerVect.clear();
@@ -1065,9 +1229,12 @@ bool NppParameters::reloadStylers(const TCHAR* stylePath)
 	getUserStylersFromXmlTree();
 
 	//  Reload plugin styles.
-	for ( size_t i = 0; i < getExternalLexerDoc()->size(); ++i)
+	for (size_t i = 0; i < getExternalLexerDoc()->size(); ++i)
 	{
-		getExternalLexerFromXmlTree( getExternalLexerDoc()->at(i) );
+		NppXml::Document externalLexerDoc = getExternalLexerDoc()->at(i)._doc;
+		NppXml::Element root = NppXml::firstChildElement(externalLexerDoc, "NotepadPlus");
+		if (root)
+			feedStylerArray(root);
 	}
 	return true;
 }
@@ -1078,23 +1245,22 @@ bool NppParameters::reloadLang()
 	std::wstring nativeLangPath(_localizationSwitcher._nativeLangPath);
 
 	// if "nativeLang.xml" does not exist, use npp path
-	if (!PathFileExists(nativeLangPath.c_str()))
+	if (!doesFileExist(nativeLangPath.c_str()))
 	{
 		nativeLangPath = _nppPath;
-		pathAppend(nativeLangPath, std::wstring(TEXT("nativeLang.xml")));
-		if (!PathFileExists(nativeLangPath.c_str()))
+		pathAppend(nativeLangPath, std::wstring(L"nativeLang.xml"));
+		if (!doesFileExist(nativeLangPath.c_str()))
 			return false;
 	}
 
-	delete _pXmlNativeLangDocA;
+	delete _pXmlNativeLangDoc;
 
-	_pXmlNativeLangDocA = new TiXmlDocumentA();
-
-	bool loadOkay = _pXmlNativeLangDocA->LoadUnicodeFilePath(nativeLangPath.c_str());
+	_pXmlNativeLangDoc = new NppXml::NewDocument();
+	const bool loadOkay = NppXml::loadFileNativeLang(_pXmlNativeLangDoc, nativeLangPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlNativeLangDocA;
-		_pXmlNativeLangDocA = nullptr;
+		delete _pXmlNativeLangDoc;
+		_pXmlNativeLangDoc = nullptr;
 		return false;
 	}
 	return loadOkay;
@@ -1102,7 +1268,7 @@ bool NppParameters::reloadLang()
 
 std::wstring NppParameters::getSpecialFolderLocation(int folderKind)
 {
-	TCHAR path[MAX_PATH];
+	wchar_t path[MAX_PATH];
 	const HRESULT specialLocationResult = SHGetFolderPath(nullptr, folderKind, nullptr, SHGFP_TYPE_CURRENT, path);
 
 	std::wstring result;
@@ -1114,7 +1280,7 @@ std::wstring NppParameters::getSpecialFolderLocation(int folderKind)
 }
 
 
-std::wstring NppParameters::getSettingsFolder()
+std::wstring NppParameters::getSettingsFolder() const
 {
 	if (_isLocal)
 		return _nppPath;
@@ -1124,7 +1290,7 @@ std::wstring NppParameters::getSettingsFolder()
 	if (settingsFolderPath.empty())
 		return _nppPath;
 
-	pathAppend(settingsFolderPath, TEXT("Notepad++"));
+	pathAppend(settingsFolderPath, L"Notepad++");
 	return settingsFolderPath;
 }
 
@@ -1140,8 +1306,8 @@ bool NppParameters::load()
 	std::wstring localConfPath(_nppPath);
 	pathAppend(localConfPath, localConfFile);
 
-	// Test if localConf.xml exist
-	_isLocal = (PathFileExists(localConfPath.c_str()) == TRUE);
+	// Test if doLocalConf.xml exists
+	_isLocal = (doesFileExist(localConfPath.c_str()) == TRUE);
 
 	// Under vista and windows 7, the usage of doLocalConf.xml is not allowed
 	// if Notepad++ is installed in "program files" directory, because of UAC
@@ -1151,7 +1317,7 @@ bool NppParameters::load()
 		if (_winVersion >= WV_VISTA)
 		{
 			std::wstring progPath = getSpecialFolderLocation(CSIDL_PROGRAM_FILES);
-			TCHAR nppDirLocation[MAX_PATH];
+			wchar_t nppDirLocation[MAX_PATH];
 			wcscpy_s(nppDirLocation, _nppPath.c_str());
 			::PathRemoveFileSpec(nppDirLocation);
 
@@ -1161,7 +1327,7 @@ bool NppParameters::load()
 	}
 
 	_pluginRootDir = _nppPath;
-	pathAppend(_pluginRootDir, TEXT("plugins"));
+	pathAppend(_pluginRootDir, L"plugins");
 
 	//
 	// the 3rd priority: general default configuration
@@ -1171,22 +1337,24 @@ bool NppParameters::load()
 	{
 		_userPath = nppPluginRootParent = _nppPath;
 		_userPluginConfDir = _pluginRootDir;
-		pathAppend(_userPluginConfDir, TEXT("Config"));
+		pathAppend(_userPluginConfDir, L"Config");
 	}
 	else
 	{
 		_userPath = getSpecialFolderLocation(CSIDL_APPDATA);
 
-		pathAppend(_userPath, TEXT("Notepad++"));
-		if (!PathFileExists(_userPath.c_str()))
+		pathAppend(_userPath, L"Notepad++");
+		if (!doesDirectoryExist(_userPath.c_str()))
 			::CreateDirectory(_userPath.c_str(), NULL);
 
 		_appdataNppDir = _userPluginConfDir = _userPath;
-		pathAppend(_userPluginConfDir, TEXT("plugins"));
-		if (!PathFileExists(_userPluginConfDir.c_str()))
+
+		pathAppend(_userPluginConfDir, L"plugins");
+		if (!doesDirectoryExist(_userPluginConfDir.c_str()))
 			::CreateDirectory(_userPluginConfDir.c_str(), NULL);
-		pathAppend(_userPluginConfDir, TEXT("Config"));
-		if (!PathFileExists(_userPluginConfDir.c_str()))
+
+		pathAppend(_userPluginConfDir, L"Config");
+		if (!doesDirectoryExist(_userPluginConfDir.c_str()))
 			::CreateDirectory(_userPluginConfDir.c_str(), NULL);
 
 		// For PluginAdmin to launch the wingup with UAC
@@ -1194,31 +1362,35 @@ bool NppParameters::load()
 	}
 
 	_pluginConfDir = _pluginRootDir; // for plugin list home
-	pathAppend(_pluginConfDir, TEXT("Config"));
+	pathAppend(_pluginConfDir, L"Config");
 
-	if (!PathFileExists(nppPluginRootParent.c_str()))
+	if (!doesDirectoryExist(nppPluginRootParent.c_str()))
 		::CreateDirectory(nppPluginRootParent.c_str(), NULL);
-	if (!PathFileExists(_pluginRootDir.c_str()))
+	if (!doesDirectoryExist(_pluginRootDir.c_str()))
 		::CreateDirectory(_pluginRootDir.c_str(), NULL);
 
-	_sessionPath = _userPath; // Session stock the absolute file path, it should never be on cloud
+	_sessionPath = _userPath; // Session stores the absolute file path, it should never be on cloud
 
 	// Detection cloud settings
 	std::wstring cloudChoicePath{_userPath};
-	cloudChoicePath += TEXT("\\cloud\\choice");
+	cloudChoicePath += L"\\cloud\\choice";
 
 	//
-	// the 2nd priority: cloud Choice Path
+	// the 2nd priority: Cloud Choice Path
 	//
-	_isCloud = (::PathFileExists(cloudChoicePath.c_str()) == TRUE);
+	_isCloud = doesFileExist(cloudChoicePath.c_str());
 	if (_isCloud)
 	{
 		// Read cloud choice
-		std::string cloudChoiceStr = getFileContent(cloudChoicePath.c_str());
-		WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
-		std::wstring cloudChoiceStrW = wmc.char2wchar(cloudChoiceStr.c_str(), SC_CP_UTF8);
-
-		if (!cloudChoiceStrW.empty() && ::PathFileExists(cloudChoiceStrW.c_str()))
+		std::wstring cloudChoiceStrW = L"";
+		bool bLoadingFailed = false;
+		std::string cloudChoiceStr = getFileContent(cloudChoicePath.c_str(), &bLoadingFailed);
+		if (!bLoadingFailed)
+		{
+			WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
+			cloudChoiceStrW = wmc.char2wchar(cloudChoiceStr.c_str(), SC_CP_UTF8);
+		}
+		if (!cloudChoiceStrW.empty() && doesDirectoryExist(cloudChoiceStrW.c_str()))
 		{
 			_userPath = cloudChoiceStrW;
 			_nppGUI._cloudPath = cloudChoiceStrW;
@@ -1235,14 +1407,14 @@ bool NppParameters::load()
 	//
 	if (!_cmdSettingsDir.empty())
 	{
-		if (!::PathIsDirectory(_cmdSettingsDir.c_str()))
+		if (!doesDirectoryExist(_cmdSettingsDir.c_str()))
 		{
 			// The following text is not translatable.
-			// _pNativeLangSpeaker is initialized AFTER _userPath being dterminated because nativeLang.xml is from from _userPath.
-			std::wstring errMsg = TEXT("The given path\r");
+			// _pNativeLangSpeaker is initialized AFTER _userPath being determined because nativeLang.xml is from _userPath.
+			std::wstring errMsg = L"The given path\r";
 			errMsg += _cmdSettingsDir;
-			errMsg += TEXT("\nvia command line \"-settingsDir=\" is not a valid directory.\rThis argument will be ignored.");
-			::MessageBox(NULL, errMsg.c_str(), TEXT("Invalid directory"), MB_OK);
+			errMsg += L"\nvia command line \"-settingsDir=\" is not a valid directory.\rThis argument will be ignored.";
+			NppDarkMode::darkMessageBoxW(nullptr, errMsg.c_str(), L"Invalid directory", MB_OK);
 		}
 		else
 		{
@@ -1252,16 +1424,19 @@ bool NppParameters::load()
 	}
 
 	//--------------------------//
-	// langs.xml : for per user //
+	// langs.xml : for per-user //
 	//--------------------------//
 	std::wstring langs_xml_path(_userPath);
-	pathAppend(langs_xml_path, TEXT("langs.xml"));
+	pathAppend(langs_xml_path, L"langs.xml");
+
+	std::wstring modelLangsPath(_nppPath);
+	pathAppend(modelLangsPath, L"langs.model.xml");
 
 	BOOL doRecover = FALSE;
-	if (::PathFileExists(langs_xml_path.c_str()))
+	if (doesFileExist(langs_xml_path.c_str()))
 	{
 		WIN32_FILE_ATTRIBUTE_DATA attributes{};
-
+		attributes.dwFileAttributes = INVALID_FILE_ATTRIBUTES;
 		if (GetFileAttributesEx(langs_xml_path.c_str(), GetFileExInfoStandard, &attributes) != 0)
 		{
 			if (attributes.nFileSizeLow == 0 && attributes.nFileSizeHigh == 0)
@@ -1270,13 +1445,13 @@ bool NppParameters::load()
 				{
 					doRecover = _pNativeLangSpeaker->messageBox("LoadLangsFailed",
 						NULL,
-						TEXT("Load langs.xml failed!\rDo you want to recover your langs.xml?"),
-						TEXT("Configurator"),
+						L"Load langs.xml failed!\rDo you want to recover your langs.xml?",
+						L"Configurator",
 						MB_YESNO);
 				}
 				else
 				{
-					doRecover = ::MessageBox(NULL, TEXT("Load langs.xml failed!\rDo you want to recover your langs.xml?"), TEXT("Configurator"), MB_YESNO);
+					doRecover = NppDarkMode::darkMessageBoxW(nullptr, L"Load langs.xml failed!\rDo you want to recover your langs.xml?", L"Configurator", MB_YESNO);
 				}
 			}
 		}
@@ -1286,56 +1461,55 @@ bool NppParameters::load()
 
 	if (doRecover)
 	{
-		std::wstring srcLangsPath(_nppPath);
-		pathAppend(srcLangsPath, TEXT("langs.model.xml"));
-		::CopyFile(srcLangsPath.c_str(), langs_xml_path.c_str(), FALSE);
+		::CopyFile(modelLangsPath.c_str(), langs_xml_path.c_str(), FALSE);
 	}
 
-	_pXmlDoc = new TiXmlDocument(langs_xml_path);
+	_pXmlDoc._path = langs_xml_path;
+	_pXmlDoc._doc = new NppXml::NewDocument();
 
-
-	bool loadOkay = _pXmlDoc->LoadFile();
+	bool loadOkay = NppXml::loadFile(_pXmlDoc._doc, _pXmlDoc._path.c_str());
 	if (!loadOkay)
 	{
 		if (_pNativeLangSpeaker)
 		{
 			_pNativeLangSpeaker->messageBox("LoadLangsFailedFinal",
 				NULL,
-				TEXT("Load langs.xml failed!"),
-				TEXT("Configurator"),
+				L"Load langs.xml failed!",
+				L"Configurator",
 				MB_OK);
 		}
 		else
 		{
-			::MessageBox(NULL, TEXT("Load langs.xml failed!"), TEXT("Configurator"), MB_OK);
+			NppDarkMode::darkMessageBoxW(nullptr, L"Load langs.xml failed!", L"Configurator", MB_OK);
 		}
 
-		delete _pXmlDoc;
-		_pXmlDoc = nullptr;
+		delete _pXmlDoc._doc;
+		_pXmlDoc._doc = nullptr;
 		isAllLoaded = false;
 	}
 	else
 		getLangKeywordsFromXmlTree();
 
+
 	//---------------------------//
-	// config.xml : for per user //
+	// config.xml : for per-user //
 	//---------------------------//
 	std::wstring configPath(_userPath);
-	pathAppend(configPath, TEXT("config.xml"));
+	pathAppend(configPath, L"config.xml");
 
 	std::wstring srcConfigPath(_nppPath);
-	pathAppend(srcConfigPath, TEXT("config.model.xml"));
+	pathAppend(srcConfigPath, L"config.model.xml");
 
-	if (!::PathFileExists(configPath.c_str()))
+	if (!doesFileExist(configPath.c_str()))
 		::CopyFile(srcConfigPath.c_str(), configPath.c_str(), FALSE);
 
-	_pXmlUserDoc = new TiXmlDocument(configPath);
-	loadOkay = _pXmlUserDoc->LoadFile();
-	
+	_xmlUserDoc._path = configPath;
+	_xmlUserDoc._doc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFile(_xmlUserDoc._doc, _xmlUserDoc._path.c_str());
+
 	if (!loadOkay)
 	{
-		TiXmlDeclaration* decl = new TiXmlDeclaration(TEXT("1.0"), TEXT("UTF-8"), TEXT(""));
-		_pXmlUserDoc->LinkEndChild(decl);
+		NppXml::createNewDeclaration(_xmlUserDoc._doc);
 	}
 	else
 	{
@@ -1343,44 +1517,44 @@ bool NppParameters::load()
 	}
 
 	//----------------------------//
-	// stylers.xml : for per user //
+	// stylers.xml : for per-user //
 	//----------------------------//
 
 	_stylerPath = _userPath;
-	pathAppend(_stylerPath, TEXT("stylers.xml"));
+	pathAppend(_stylerPath, L"stylers.xml");
 
-	if (!PathFileExists(_stylerPath.c_str()))
+	if (!doesFileExist(_stylerPath.c_str()))
 	{
 		std::wstring srcStylersPath(_nppPath);
-		pathAppend(srcStylersPath, TEXT("stylers.model.xml"));
-
+		pathAppend(srcStylersPath, L"stylers.model.xml");
 		::CopyFile(srcStylersPath.c_str(), _stylerPath.c_str(), TRUE);
 	}
 
-	if (_nppGUI._themeName.empty() || (!PathFileExists(_nppGUI._themeName.c_str())))
+	if (_nppGUI._themeName.empty() || (!doesFileExist(_nppGUI._themeName.c_str())))
 		_nppGUI._themeName.assign(_stylerPath);
 
-	_pXmlUserStylerDoc = new TiXmlDocument(_nppGUI._themeName.c_str());
+	_pXmlUserStylerDoc._path = _nppGUI._themeName;
+	_pXmlUserStylerDoc._doc = new NppXml::NewDocument();
 
-	loadOkay = _pXmlUserStylerDoc->LoadFile();
+	loadOkay = NppXml::loadFile(_pXmlUserStylerDoc._doc, _pXmlUserStylerDoc._path.c_str());
 	if (!loadOkay)
 	{
 		if (_pNativeLangSpeaker)
 		{
 			_pNativeLangSpeaker->messageBox("LoadStylersFailed",
 				NULL,
-				TEXT("Load \"$STR_REPLACE$\" failed!"),
-				TEXT("Load stylers.xml failed"),
+				L"Load \"$STR_REPLACE$\" failed!",
+				L"Load stylers.xml failed",
 				MB_OK,
 				0,
 				_stylerPath.c_str());
 		}
 		else
 		{
-			::MessageBox(NULL, _stylerPath.c_str(), TEXT("Load stylers.xml failed"), MB_OK);
+			NppDarkMode::darkMessageBoxW(nullptr, _stylerPath.c_str(), L"Load stylers.xml failed", MB_OK);
 		}
-		delete _pXmlUserStylerDoc;
-		_pXmlUserStylerDoc = NULL;
+		delete _pXmlUserStylerDoc._doc;
+		_pXmlUserStylerDoc._doc = nullptr;
 		isAllLoaded = false;
 	}
 	else
@@ -1391,34 +1565,35 @@ bool NppParameters::load()
 	_themeSwitcher.addDefaultThemeFromXml(_stylerPath);
 
 	//-----------------------------------//
-	// userDefineLang.xml : for per user //
+	// userDefineLang.xml : for per-user //
 	//-----------------------------------//
 	_userDefineLangsFolderPath = _userDefineLangPath = _userPath;
-	pathAppend(_userDefineLangPath, TEXT("userDefineLang.xml"));
-	pathAppend(_userDefineLangsFolderPath, TEXT("userDefineLangs"));
+	pathAppend(_userDefineLangPath, L"userDefineLang.xml");
+	pathAppend(_userDefineLangsFolderPath, L"userDefineLangs");
 
 	std::vector<std::wstring> udlFiles;
-	getFilesInFolder(udlFiles, TEXT("*.xml"), _userDefineLangsFolderPath);
+	getFilesInFolder(udlFiles, L"*.xml", _userDefineLangsFolderPath);
 
-	_pXmlUserLangDoc = new TiXmlDocument(_userDefineLangPath);
-	loadOkay = _pXmlUserLangDoc->LoadFile();
+	_pXmlUserLangDoc._path = _userDefineLangPath;
+	_pXmlUserLangDoc._doc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFileUDL(_pXmlUserLangDoc._doc, _userDefineLangPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlUserLangDoc;
-		_pXmlUserLangDoc = nullptr;
+		delete _pXmlUserLangDoc._doc;
+		_pXmlUserLangDoc._doc = nullptr;
 		isAllLoaded = false;
 	}
 	else
 	{
-		auto r = addUserDefineLangsFromXmlTree(_pXmlUserLangDoc);
+		auto r = addUserDefineLangsFromXmlTree(_pXmlUserLangDoc._doc);
 		if (r.second - r.first > 0)
-			_pXmlUserLangsDoc.push_back(UdlXmlFileState(_pXmlUserLangDoc, false, true, r));
+			_pXmlUserLangsDoc.emplace_back(_pXmlUserLangDoc._doc, _pXmlUserLangDoc._path, false, true, r);
 	}
 
 	for (const auto& i : udlFiles)
 	{
-		auto udlDoc = new TiXmlDocument(i);
-		loadOkay = udlDoc->LoadFile();
+		NppXml::Document udlDoc = new NppXml::NewDocument();
+		loadOkay = NppXml::loadFileUDL(udlDoc, i.c_str());
 		if (!loadOkay)
 		{
 			delete udlDoc;
@@ -1427,19 +1602,25 @@ bool NppParameters::load()
 		{
 			auto r = addUserDefineLangsFromXmlTree(udlDoc);
 			if (r.second - r.first > 0)
-				_pXmlUserLangsDoc.push_back(UdlXmlFileState(udlDoc, false, false, r));
+			{
+				_pXmlUserLangsDoc.emplace_back(udlDoc, i, false, false, r);
+			}
+			else
+			{
+				delete udlDoc;
+			}
 		}
 	}
 
 	//----------------------------------------------//
-	// nativeLang.xml : for per user				//
+	// nativeLang.xml : for per-user				//
 	// In case of absence of user's nativeLang.xml, //
-	// We'll look in the Notepad++ Dir.			 //
+	// We'll look in the Notepad++ Dir.			    //
 	//----------------------------------------------//
 
 	std::wstring nativeLangPath;
 	nativeLangPath = _userPath;
-	pathAppend(nativeLangPath, TEXT("nativeLang.xml"));
+	pathAppend(nativeLangPath, L"nativeLang.xml");
 
 	// LocalizationSwitcher should use always user path
 	_localizationSwitcher._nativeLangPath = nativeLangPath;
@@ -1448,71 +1629,85 @@ bool NppParameters::load()
 	{
 		// overwrite nativeLangPath variable
 		nativeLangPath = _nppPath;
-		pathAppend(nativeLangPath, TEXT("localization\\"));
+		pathAppend(nativeLangPath, L"localization\\");
 		pathAppend(nativeLangPath, _startWithLocFileName);
 	}
 	else // use %appdata% location, or (if absence then) npp installed location
 	{
-		if (!PathFileExists(nativeLangPath.c_str()))
+		if (!doesFileExist(nativeLangPath.c_str()))
 		{
 			nativeLangPath = _nppPath;
-			pathAppend(nativeLangPath, TEXT("nativeLang.xml"));
+			pathAppend(nativeLangPath, L"nativeLang.xml");
 		}
 	}
 
-
-	_pXmlNativeLangDocA = new TiXmlDocumentA();
-
-	loadOkay = _pXmlNativeLangDocA->LoadUnicodeFilePath(nativeLangPath.c_str());
+	_pXmlNativeLangDoc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFileNativeLang(_pXmlNativeLangDoc, nativeLangPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlNativeLangDocA;
-		_pXmlNativeLangDocA = nullptr;
+		delete _pXmlNativeLangDoc;
+		_pXmlNativeLangDoc = nullptr;
 		isAllLoaded = false;
 	}
 
-	//---------------------------------//
-	// toolbarIcons.xml : for per user //
-	//---------------------------------//
-	std::wstring toolbarIconsPath(_userPath);
-	pathAppend(toolbarIconsPath, TEXT("toolbarIcons.xml"));
+	//---------------------------------------//
+	// toolbarButtonsConf.xml : for per-user //
+	//---------------------------------------//
+	std::wstring toolbarButtonsConfXmlPath(_userPath);
+	pathAppend(toolbarButtonsConfXmlPath, L"toolbarButtonsConf.xml");
 
-	_pXmlToolIconsDoc = new TiXmlDocument(toolbarIconsPath);
-	loadOkay = _pXmlToolIconsDoc->LoadFile();
+	_pXmlToolButtonsConfDoc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFile(_pXmlToolButtonsConfDoc, toolbarButtonsConfXmlPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlToolIconsDoc;
-		_pXmlToolIconsDoc = nullptr;
+		delete _pXmlToolButtonsConfDoc;
+		_pXmlToolButtonsConfDoc = nullptr;
 		isAllLoaded = false;
 	}
 
 	//------------------------------//
-	// shortcuts.xml : for per user //
+	// shortcuts.xml : for per-user //
 	//------------------------------//
-	wstring v852NoNeedShortcutsBackup;
-	_shortcutsPath = v852NoNeedShortcutsBackup = _userPath;
+	_shortcutsPath = _userPath;
 	pathAppend(_shortcutsPath, SHORTCUTSXML_FILENAME);
-	pathAppend(v852NoNeedShortcutsBackup, NONEEDSHORTCUTSXMLBACKUP_FILENAME);
 
-	if (!PathFileExists(_shortcutsPath.c_str()))
+	if (!doesFileExist(_shortcutsPath.c_str()))
 	{
 		std::wstring srcShortcutsPath(_nppPath);
-		pathAppend(srcShortcutsPath, SHORTCUTSXML_FILENAME);
+		pathAppend(srcShortcutsPath, SHORTCUTSXML_MODEL_FILENAME);
+		if (doesFileExist(srcShortcutsPath.c_str()))
+			::CopyFile(srcShortcutsPath.c_str(), _shortcutsPath.c_str(), TRUE);
+		else
+			generateXmlFromScratch(_shortcutsPath.c_str(), SHORTCUT_XML_CONTENT);
 
-		::CopyFile(srcShortcutsPath.c_str(), _shortcutsPath.c_str(), TRUE);
+		// Calculate the shortcuts.xml file HMAC to write it in config.xml for later integrity check
 
-		// Creat empty file v852NoNeedShortcutsBackup.xml for not giving warning, neither doing backup, in future use.
-		HANDLE hFile = ::CreateFile(v852NoNeedShortcutsBackup.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		::FlushFileBuffers(hFile);
-		::CloseHandle(hFile);
+		std::string fileContent = getFileContent(_shortcutsPath.c_str());
+
+		// Compute HMAC
+		std::string machineGUID = getMachineGUID();
+		_nppGUI._shortcutsOnDiskHmac = computeHMAC(machineGUID, fileContent);
+
+		// For the HMAC of new copied or generated shortcuts.xml, store it in config.xml without any condition
+		_nppGUI._shortcutsXmlHmacInConfig = _nppGUI._shortcutsOnDiskHmac;
+	}
+	else // shortcuts.xml already exists, keep tracking its HMAC for checking the integrity later
+	{
+		// Calculate the HMAC of shortcuts.xml on disk
+
+		std::string fileContent = getFileContent(_shortcutsPath.c_str());
+
+		// Compute HMAC
+		std::string machineGUID = getMachineGUID();
+		_nppGUI._shortcutsOnDiskHmac = computeHMAC(machineGUID, fileContent);
 	}
 
-	_pXmlShortcutDocA = new TiXmlDocumentA();
-	loadOkay = _pXmlShortcutDocA->LoadUnicodeFilePath(_shortcutsPath.c_str());
+	_pXmlShortcutDoc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFileShortcut(_pXmlShortcutDoc, _shortcutsPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlShortcutDocA;
-		_pXmlShortcutDocA = nullptr;
+		delete _pXmlShortcutDoc;
+		_pXmlShortcutDoc = nullptr;
 		isAllLoaded = false;
 	}
 	else
@@ -1522,73 +1717,132 @@ bool NppParameters::load()
 		getUserCmdsFromXmlTree();
 
 		// fill out _scintillaModifiedKeys :
-		// those user defined Scintilla key will be used remap Scintilla Key Array
+		// those user-defined Scintilla keys will be used to remap the Scintilla Key Array
 		getScintKeysFromXmlTree();
 	}
 
-	//---------------------------------//
-	// contextMenu.xml : for per user //
-	//---------------------------------//
+	//--------------------------------//
+	// contextMenu.xml : for per-user //
+	//--------------------------------//
 	_contextMenuPath = _userPath;
-	pathAppend(_contextMenuPath, TEXT("contextMenu.xml"));
+	pathAppend(_contextMenuPath, CONTEXTMENUXML_FILENAME);
 
-	if (!PathFileExists(_contextMenuPath.c_str()))
+	if (!doesFileExist(_contextMenuPath.c_str()))
 	{
 		std::wstring srcContextMenuPath(_nppPath);
-		pathAppend(srcContextMenuPath, TEXT("contextMenu.xml"));
+		pathAppend(srcContextMenuPath, CONTEXTMENUXML_MODEL_FILENAME);
 
-		::CopyFile(srcContextMenuPath.c_str(), _contextMenuPath.c_str(), TRUE);
+		if (doesFileExist(srcContextMenuPath.c_str()))
+			::CopyFile(srcContextMenuPath.c_str(), _contextMenuPath.c_str(), TRUE);
+		else
+			generateXmlFromScratch(_contextMenuPath.c_str(), CONTEXTMENU_XML_CONTENT);
 	}
 
-	_pXmlContextMenuDocA = new TiXmlDocumentA();
-	loadOkay = _pXmlContextMenuDocA->LoadUnicodeFilePath(_contextMenuPath.c_str());
+	_pXmlContextMenuDoc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFileContextMenu(_pXmlContextMenuDoc, _contextMenuPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlContextMenuDocA;
-		_pXmlContextMenuDocA = nullptr;
+		delete _pXmlContextMenuDoc;
+		_pXmlContextMenuDoc = nullptr;
 		isAllLoaded = false;
 	}
 
 	//---------------------------------------------//
-	// tabContextMenu.xml : for per user, optional //
+	// tabContextMenu.xml : for per-user, optional //
 	//---------------------------------------------//
 	_tabContextMenuPath = _userPath;
-	pathAppend(_tabContextMenuPath, TEXT("tabContextMenu.xml"));
+	pathAppend(_tabContextMenuPath, L"tabContextMenu.xml");
 
-	_pXmlTabContextMenuDocA = new TiXmlDocumentA();
-	loadOkay = _pXmlTabContextMenuDocA->LoadUnicodeFilePath(_tabContextMenuPath.c_str());
+	_pXmlTabContextMenuDoc = new NppXml::NewDocument();
+	loadOkay = NppXml::loadFileContextMenu(_pXmlTabContextMenuDoc, _tabContextMenuPath.c_str());
 	if (!loadOkay)
 	{
-		delete _pXmlTabContextMenuDocA;
-		_pXmlTabContextMenuDocA = nullptr;
+		delete _pXmlTabContextMenuDoc;
+		_pXmlTabContextMenuDoc = nullptr;
+	}
+
+	//-----------------------------------------------------------------------//
+	// serverWhiteList.xml : for per-user                                    //
+	// This xml file is optional - Notepad++ app or a user creates this file //
+	// in order to automatically allow  files loading for predefined set     //
+	// of safe net-servers, without asking for confirmation.                 //
+	// This has to precede the session.xml loading.                          //
+	//-----------------------------------------------------------------------//
+	_serverWhiteListPath = _userPath;
+	const std::wstring serverWhiteListFile = L"serverWhiteList.xml";
+	pathAppend(_serverWhiteListPath, serverWhiteListFile);
+	if (doesFileExist(_serverWhiteListPath.c_str()))
+	{
+		_pXmlServerWhiteListDoc = new NppXml::NewDocument();
+		loadOkay = NppXml::loadFile(_pXmlServerWhiteListDoc, _serverWhiteListPath.c_str());
+		if (!loadOkay)
+		{
+			delete _pXmlServerWhiteListDoc;
+			_pXmlServerWhiteListDoc = nullptr;
+		}
+		else
+		{
+			bool isFileContentOk = false;
+			NppXml::Element root = NppXml::firstChildElement(_pXmlServerWhiteListDoc, "NotepadPlus");
+			if (root)
+			{
+				NppXml::Element childNode = NppXml::firstChildElement(root, "NetworkPathsAlwaysAction");
+				if (childNode)
+				{
+					const std::string strValue = NppXml::attribute(childNode, "value");
+					if (strValue.length() == 1)
+					{
+						switch (strValue[0])
+						{
+							case '?':
+								_networkPathAlwaysAction = networkPathAlwaysAsk;
+								isFileContentOk = true;
+								break;
+							case '!':
+								_networkPathAlwaysAction = networkPathAlwaysSkip;
+								isFileContentOk = true;
+								break;
+							case '*':
+								_networkPathAlwaysAction = networkPathAlwaysLoad;
+								isFileContentOk = true;
+								break;
+							default:
+								// invalid, will be reset to default
+								break;
+						}
+					}
+				}
+			}
+			if (!isFileContentOk)
+				makeDefaultServerWhiteList(true); // invalid content, reset to safe default
+		}
 	}
 
 	//----------------------------//
-	// session.xml : for per user //
+	// session.xml : for per-user //
 	//----------------------------//
 
-	pathAppend(_sessionPath, TEXT("session.xml"));
+	pathAppend(_sessionPath, L"session.xml");
 
 	// Don't load session.xml if not required in order to speed up!!
 	const NppGUI & nppGUI = (NppParameters::getInstance()).getNppGUI();
 	if (nppGUI._rememberLastSession)
 	{
-		TiXmlDocument* pXmlSessionDoc = new TiXmlDocument(_sessionPath);
-
-		loadOkay = pXmlSessionDoc->LoadFile();
+		NppXml::Document pXmlSessionDoc = new NppXml::NewDocument();
+		loadOkay = NppXml::loadFile(pXmlSessionDoc, _sessionPath.c_str());
 		if (loadOkay)
 		{
-			loadOkay = getSessionFromXmlTree(pXmlSessionDoc, _session);
+			loadOkay = getSessionFromXmlTree(pXmlSessionDoc, _session, _sessionPath, true);
 		}
-		
+
 		if (!loadOkay)
 		{
-			wstring sessionInCaseOfCorruption_bak = _sessionPath;
+			std::wstring sessionInCaseOfCorruption_bak = _sessionPath;
 			sessionInCaseOfCorruption_bak += SESSION_BACKUP_EXT;
-			if (::PathFileExists(sessionInCaseOfCorruption_bak.c_str()))
+			if (doesFileExist(sessionInCaseOfCorruption_bak.c_str()))
 			{
-				BOOL bFileSwapOk = false;
-				if (::PathFileExists(_sessionPath.c_str()))
+				bool bFileSwapOk = false;
+				if (doesFileExist(_sessionPath.c_str()))
 				{
 					// an invalid session.xml file exists
 					bFileSwapOk = ::ReplaceFile(_sessionPath.c_str(), sessionInCaseOfCorruption_bak.c_str(), nullptr,
@@ -1603,10 +1857,10 @@ bool NppParameters::load()
 
 				if (bFileSwapOk)
 				{
-					TiXmlDocument* pXmlSessionBackupDoc = new TiXmlDocument(_sessionPath);
-					loadOkay = pXmlSessionBackupDoc->LoadFile();
+					NppXml::Document pXmlSessionBackupDoc = new NppXml::NewDocument();
+					loadOkay = NppXml::loadFile(pXmlSessionBackupDoc, _sessionPath.c_str());
 					if (loadOkay)
-						loadOkay = getSessionFromXmlTree(pXmlSessionBackupDoc, _session);
+						loadOkay = getSessionFromXmlTree(pXmlSessionBackupDoc, _session, _sessionPath, true);
 
 					delete pXmlSessionBackupDoc;
 				}
@@ -1623,24 +1877,15 @@ bool NppParameters::load()
 
 		delete pXmlSessionDoc;
 
-		for (size_t i = 0, len = _pXmlExternalLexerDoc.size() ; i < len ; ++i)
-			if (_pXmlExternalLexerDoc[i])
-				delete _pXmlExternalLexerDoc[i];
+		for (auto& extDoc : _pXmlExternalLexerDoc)
+		{
+			if (extDoc._doc)
+			{
+				delete extDoc._doc;
+				extDoc._doc = nullptr;
+			}
+		}
 	}
-
-	//-------------------------------------------------------------//
-	// enableSelectFgColor.xml : for per user                      //
-	// This empty xml file is optional - user adds this empty file //
-	// manually in order to set selected text's foreground color.  //
-	//-------------------------------------------------------------//
-	std::wstring enableSelectFgColorPath = _userPath;
-	pathAppend(enableSelectFgColorPath, TEXT("enableSelectFgColor.xml"));
-
-	if (PathFileExists(enableSelectFgColorPath.c_str()))
-	{
-		_isSelectFgColorEnabled = true;
-	}
-
 
 	std::wstring filePath, filePath2, issueFileName;
 	//-------------------------------------------------------------//
@@ -1650,31 +1895,14 @@ bool NppParameters::load()
 	//-------------------------------------------------------------//
 	filePath = _nppPath;
 	issueFileName = nppLogNetworkDriveIssue;
-	issueFileName += TEXT(".xml");
+	issueFileName += L".xml";
 	pathAppend(filePath, issueFileName);
-	_doNppLogNetworkDriveIssue = (PathFileExists(filePath.c_str()) == TRUE);
+	_doNppLogNetworkDriveIssue = doesFileExist(filePath.c_str());
 	if (!_doNppLogNetworkDriveIssue)
 	{
 		filePath2 = _userPath;
 		pathAppend(filePath2, issueFileName);
-		_doNppLogNetworkDriveIssue = (PathFileExists(filePath2.c_str()) == TRUE);
-	}
-
-	//-------------------------------------------------------------//
-	// nppLogNulContentCorruptionIssue.xml                         //
-	// This empty xml file is optional - user adds this empty file //
-	// It's for debugging use only                                 //
-	//-------------------------------------------------------------//
-	filePath = _nppPath;
-	issueFileName = nppLogNulContentCorruptionIssue;
-	issueFileName += TEXT(".xml");
-	pathAppend(filePath, issueFileName);
-	_doNppLogNulContentCorruptionIssue = (PathFileExists(filePath.c_str()) == TRUE);
-	if (!_doNppLogNulContentCorruptionIssue)
-	{
-		filePath2 = _userPath;
-		pathAppend(filePath2, issueFileName);
-		_doNppLogNulContentCorruptionIssue = (PathFileExists(filePath2.c_str()) == TRUE);
+		_doNppLogNetworkDriveIssue = doesFileExist(filePath2.c_str());
 	}
 
 	//-------------------------------------------------------------//
@@ -1686,13 +1914,23 @@ bool NppParameters::load()
 	filePath = _nppPath;
 	std::wstring noRegForOSAppRestartTrigger = L"noRestartAutomatically.xml";
 	pathAppend(filePath, noRegForOSAppRestartTrigger);
-	_isRegForOSAppRestartDisabled = (::PathFileExists(filePath.c_str()) == TRUE);
+	_isRegForOSAppRestartDisabled = doesFileExist(filePath.c_str());
 	if (!_isRegForOSAppRestartDisabled)
 	{
 		filePath = _userPath;
 		pathAppend(filePath, noRegForOSAppRestartTrigger);
-		_isRegForOSAppRestartDisabled = (::PathFileExists(filePath.c_str()) == TRUE);
+		_isRegForOSAppRestartDisabled = doesFileExist(filePath.c_str());
 	}
+
+	//-------------------------------------------------------------//
+	// disableNppAutoUpdate.xml                                    //
+	// This empty xml file is optional. If it exists, auto-update  //
+	// will be disabled, even though WinGUp is present.            //
+	//-------------------------------------------------------------//
+	filePath = _nppPath;
+	std::wstring disableNppAutoUpdateFileName = L"disableNppAutoUpdate.xml";
+	pathAppend(filePath, disableNppAutoUpdateFileName);
+	_isNppAutoUpdateDisabled = doesFileExist(filePath.c_str());
 
 	return isAllLoaded;
 }
@@ -1700,37 +1938,43 @@ bool NppParameters::load()
 
 void NppParameters::destroyInstance()
 {
-	delete _pXmlDoc;
-	delete _pXmlUserDoc;
-	delete _pXmlUserStylerDoc;
-	
+	delete _pXmlDoc._doc;
+	delete _xmlUserDoc._doc;
+	delete _pXmlUserStylerDoc._doc;
+
 	//delete _pXmlUserLangDoc; will be deleted in the vector
 	for (const auto& l : _pXmlUserLangsDoc)
 	{
 		delete l._udlXmlDoc;
 	}
 
-	delete _pXmlNativeLangDocA;
-	delete _pXmlToolIconsDoc;
-	delete _pXmlShortcutDocA;
-	delete _pXmlContextMenuDocA;
-	delete _pXmlTabContextMenuDocA;
+	if (_pXmlServerWhiteListDoc)
+	{
+		delete _pXmlServerWhiteListDoc;
+		_pXmlServerWhiteListDoc = nullptr;
+	}
+
+	delete _pXmlNativeLangDoc;
+	delete _pXmlToolButtonsConfDoc;
+	delete _pXmlShortcutDoc;
+	delete _pXmlContextMenuDoc;
+	delete _pXmlTabContextMenuDoc;
 	delete 	getInstancePointer();
 }
 
 
-void NppParameters::saveConfig_xml()
+void NppParameters::saveConfig_xml() const
 {
-	if (_pXmlUserDoc)
-		_pXmlUserDoc->SaveFile();
+	if (_xmlUserDoc._doc)
+		static_cast<void>(NppXml::saveFile(_xmlUserDoc._doc, _xmlUserDoc._path.c_str()));
 }
 
 
-void NppParameters::setWorkSpaceFilePath(int i, const TCHAR* wsFile)
+void NppParameters::setWorkSpaceFilePath(int i, const wchar_t* wsFile)
 {
 	if (i < 0 || i > 2 || !wsFile)
 		return;
-	_workSpaceFilePathes[i] = wsFile;
+	_workSpaceFilePaths[i] = wsFile;
 }
 
 
@@ -1741,7 +1985,7 @@ void NppParameters::removeTransparent(HWND hwnd)
 }
 
 
-void NppParameters::SetTransparent(HWND hwnd, int percent)
+void NppParameters::setTransparent(HWND hwnd, int percent)
 {
 	::SetWindowLongPtr(hwnd, GWL_EXSTYLE, ::GetWindowLongPtr(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
 	if (percent > 255)
@@ -1766,7 +2010,7 @@ bool NppParameters::isExistingExternalLangName(const char* newName) const
 }
 
 
-const TCHAR* NppParameters::getUserDefinedLangNameFromExt(TCHAR *ext, TCHAR *fullName) const
+const wchar_t* NppParameters::getUserDefinedLangNameFromExt(const wchar_t* ext, const wchar_t* fullName) const
 {
 	if ((!ext) || (!ext[0]))
 		return nullptr;
@@ -1779,9 +2023,9 @@ const TCHAR* NppParameters::getUserDefinedLangNameFromExt(TCHAR *ext, TCHAR *ful
 		cutString(_userLangArray[i]->_ext.c_str(), extVect);
 
 		// Force to use dark mode UDL in dark mode or to use  light mode UDL in light mode
-		for (size_t j = 0, len = extVect.size(); j < len; ++j)
+		for (const auto& extStr : extVect)
 		{
-			if (!wcsicmp(extVect[j].c_str(), ext) || (wcschr(fullName, '.') && !wcsicmp(extVect[j].c_str(), fullName)))
+			if (::_wcsicmp(extStr.c_str(), ext) == 0 || (std::wcschr(fullName, L'.') && ::_wcsicmp(extStr.c_str(), fullName) == 0))
 			{
 				// preserve ext matched UDL
 				iMatched = i;
@@ -1804,24 +2048,23 @@ const TCHAR* NppParameters::getUserDefinedLangNameFromExt(TCHAR *ext, TCHAR *ful
 }
 
 
-int NppParameters::getExternalLangIndexFromName(const TCHAR* externalLangName) const
+int NppParameters::getExternalLangIndexFromName(const wchar_t* externalLangName) const
 {
-	WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
 	for (int i = 0 ; i < _nbExternalLang ; ++i)
 	{
-		if (!lstrcmp(externalLangName, wmc.char2wchar(_externalLangArray[i]->_name.c_str(), CP_ACP)))
+		if (externalLangName == string2wstring(_externalLangArray[i]->_name))
 			return i;
 	}
 	return -1;
 }
 
 
-UserLangContainer* NppParameters::getULCFromName(const TCHAR *userLangName)
+const UserLangContainer* NppParameters::getULCFromName(const wchar_t* userLangName) const
 {
 	for (int i = 0 ; i < _nbUserLang ; ++i)
 	{
-		if (0 == lstrcmp(userLangName, _userLangArray[i]->_name.c_str()))
-			return _userLangArray[i];
+		if (userLangName == _userLangArray[i]->_name)
+			return _userLangArray[i].get();
 	}
 
 	//qui doit etre jamais passer
@@ -1831,16 +2074,16 @@ UserLangContainer* NppParameters::getULCFromName(const TCHAR *userLangName)
 
 COLORREF NppParameters::getCurLineHilitingColour()
 {
-	const Style * pStyle = _widgetStyleArray.findByName(TEXT("Current line background colour"));
+	const Style* pStyle = _widgetStyleArray.findByName(L"Current line background colour");
 	if (!pStyle)
-		return COLORREF(-1);
+		return static_cast<COLORREF>(-1);
 	return pStyle->_bgColor;
 }
 
 
 void NppParameters::setCurLineHilitingColour(COLORREF colour2Set)
 {
-	Style * pStyle = _widgetStyleArray.findByName(TEXT("Current line background colour"));
+	Style * pStyle = _widgetStyleArray.findByName(L"Current line background colour");
 	if (!pStyle)
 		return;
 	pStyle->_bgColor = colour2Set;
@@ -1850,15 +2093,15 @@ void NppParameters::setCurLineHilitingColour(COLORREF colour2Set)
 
 static int CALLBACK EnumFontFamExProc(const LOGFONT* lpelfe, const TEXTMETRIC*, DWORD, LPARAM lParam)
 {
-	std::vector<std::wstring>& strVect = *(std::vector<std::wstring> *)lParam;
-	const int32_t vectSize = static_cast<int32_t>(strVect.size());
-	const TCHAR* lfFaceName = ((ENUMLOGFONTEX*)lpelfe)->elfLogFont.lfFaceName;
+	auto& strVect = *reinterpret_cast<std::vector<std::wstring>*>(lParam);
+	const auto vectSize = static_cast<int>(strVect.size());
+	const wchar_t* lfFaceName = (reinterpret_cast<const ENUMLOGFONTEX*>(lpelfe))->elfLogFont.lfFaceName;
 
 	//Search through all the fonts, EnumFontFamiliesEx never states anything about order
 	//Start at the end though, that's the most likely place to find a duplicate
-	for (int i = vectSize - 1 ; i >= 0 ; i--)
+	for (int i = vectSize - 1; i >= 0; --i)
 	{
-		if (0 == lstrcmp(strVect[i].c_str(), lfFaceName))
+		if (strVect[i] == lfFaceName)
 			return 1;	//we already have seen this typeface, ignore it
 	}
 
@@ -1877,13 +2120,18 @@ void NppParameters::setFontList(HWND hWnd)
 	LOGFONT lf{};
 	_fontlist.clear();
 	_fontlist.reserve(64); // arbitrary
-	_fontlist.push_back(std::wstring());
+	_fontlist.emplace_back(L"");
 
 	lf.lfCharSet = DEFAULT_CHARSET;
 	lf.lfFaceName[0]='\0';
 	lf.lfPitchAndFamily = 0;
 	HDC hDC = ::GetDC(hWnd);
-	::EnumFontFamiliesEx(hDC, &lf, EnumFontFamExProc, reinterpret_cast<LPARAM>(&_fontlist), 0);
+	if (hDC)
+	{
+		::EnumFontFamiliesEx(hDC, &lf, EnumFontFamExProc, reinterpret_cast<LPARAM>(&_fontlist), 0);
+		::ReleaseDC(hWnd, hDC);
+	}
+	_fontlist.push_back(DEFAULT_DLG_FONT);
 }
 
 bool NppParameters::isInFontList(const std::wstring& fontName2Search) const
@@ -1899,96 +2147,713 @@ bool NppParameters::isInFontList(const std::wstring& fontName2Search) const
 	return false;
 }
 
-LOGFONT NppParameters::getDefaultGUIFont(DefaultFontType type)
-{
-	LOGFONT lf{};
-	NONCLIENTMETRICS ncm{};
-	ncm.cbSize = sizeof(NONCLIENTMETRICS);
-	if (::SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICS), &ncm, 0) != FALSE)
-	{
-		switch (type)
-		{
-			case DefaultFontType::menu:
-			{
-				lf = ncm.lfMenuFont;
-				break;
-			}
-
-			case DefaultFontType::status:
-			{
-				lf = ncm.lfStatusFont;
-				break;
-			}
-
-			case DefaultFontType::caption:
-			{
-				lf = ncm.lfCaptionFont;
-				break;
-			}
-
-			case DefaultFontType::smcaption:
-			{
-				lf = ncm.lfSmCaptionFont;
-				break;
-			}
-
-			// case DefaultFontType::message:
-			default:
-			{
-				lf = ncm.lfMessageFont;
-				break;
-			}
-		}
-	}
-	else // should not happen, fallback
-	{
-		auto hf = static_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
-		::GetObject(hf, sizeof(LOGFONT), &lf);
-	}
-	return lf;
-}
-
 void NppParameters::getLangKeywordsFromXmlTree()
 {
-	TiXmlNode *root =
-		_pXmlDoc->FirstChild(TEXT("NotepadPlus"));
-		if (!root) return;
+	NppXml::Element root = NppXml::firstChildElement(_pXmlDoc._doc, "NotepadPlus");
+	if (!root) return;
+	updateFromModelXml(root, ConfXml::lang);	// updateKeyWordsFromModelXml(root);
 	feedKeyWordsParameters(root);
 }
 
-
-void NppParameters::getExternalLexerFromXmlTree(TiXmlDocument* externalLexerDoc)
+void NppParameters::getExternalLexerFromXmlTree(NppXml::Document externalLexerDoc)
 {
-	TiXmlNode *root = externalLexerDoc->FirstChild(TEXT("NotepadPlus"));
-		if (!root) return;
+	NppXml::Element root = NppXml::firstChildElement(externalLexerDoc, "NotepadPlus");
+	if (!root) return;
 	feedKeyWordsParameters(root);
 	feedStylerArray(root);
 }
 
 
-int NppParameters::addExternalLangToEnd(ExternalLangContainer * externalLang)
+int NppParameters::addExternalLangToEnd(std::unique_ptr<ExternalLangContainer> externalLang)
 {
-	_externalLangArray[_nbExternalLang] = externalLang;
+	_externalLangArray[_nbExternalLang] = std::move(externalLang);
 	++_nbExternalLang;
 	++L_END;
-	return _nbExternalLang-1;
+	return _nbExternalLang - 1;
 }
 
 
 bool NppParameters::getUserStylersFromXmlTree()
 {
-	TiXmlNode *root = _pXmlUserStylerDoc->FirstChild(TEXT("NotepadPlus"));
-		if (!root) return false;
-	return feedStylerArray(root);
+	NppXml::Element root = NppXml::firstChildElement(_pXmlUserStylerDoc._doc, "NotepadPlus");
+	if (!root)
+		return false;
+
+	addDefaultStyles(root);	// make sure that GlobalStyles > WidgetStyles has certain elements, allowing defaults to be populated based on other existing WidgetStyles if needed
+	updateFromModelXml(root, ConfXml::styles);	// look for any WidgetStyles or LexerType>WordsStyles that are missing in the current XML and populate from Model if needed
+	return feedStylerArray(root);	// transfer the XML data structure into Notepad++'s internal data structure
 }
 
 
-bool NppParameters::getUserParametersFromXmlTree()
+bool NppParameters::updateFromModelXml(NppXml::Element& rootUser, ConfXml whichConf)
 {
-	if (!_pXmlUserDoc)
+	// Determine conf-specific information first
+	std::wstring modelXmlFilename;
+	NppXml::Document pXmlDocument = nullptr;
+	std::string mainElementName;
+	std::wstring docPath;
+	switch (whichConf)
+	{
+		case ConfXml::lang:
+		{
+			modelXmlFilename = L"langs.model.xml";
+			pXmlDocument = _pXmlDoc._doc;
+			docPath = _pXmlDoc._path;
+			mainElementName = "Languages";
+			break;
+		}
+		case ConfXml::styles:
+		{
+			modelXmlFilename = L"stylers.model.xml";
+			pXmlDocument = _pXmlUserStylerDoc._doc;
+			docPath = _pXmlUserStylerDoc._path;
+			mainElementName = "LexerStyles";
+			break;
+		}
+		default:
+		{
+			// if it's an unknown config file, return immediately, as there's nothing to do
+			return false;
+		}
+	}
+
+	// Need the name of the XML model document
+	std::wstring modelXmlPath(_nppPath);
+	pathAppend(modelXmlPath, modelXmlFilename);
+
+	// compare the *.model.xml's filesystem "modified" timestamp (date only) to the value stored in the user file modelFileLastModifiedDate attribute
+	const int userModelLastModifDate = NppXml::intAttribute(rootUser, "modelFileLastModifiedDate", 0);
+
+	// read the actual timestamp from the model file; if there's a problem reading the attributes, just exit out (don't need to warn the user, since the main XML has already been loaded)
+	WIN32_FILE_ATTRIBUTE_DATA attributes{};
+	if (!::GetFileAttributesExW(modelXmlPath.c_str(), GetFileExInfoStandard, &attributes))
 		return false;
 
-	TiXmlNode *root = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	int modifiedDate = 0;
+	if (!fileTimeToYMD(attributes.ftLastWriteTime, modifiedDate))
+		return false;
+
+	// if modifiedDate is not later than user stored model timestamp, no need to check more.
+	// Note: in case of absence of attribute "modelModifDate", userModelModifTimestamp will be 0
+	if (userModelLastModifDate >= modifiedDate)
+		return false;
+
+	// update immediately the modelModifDate stored in the active XML
+	NppXml::setAttribute(rootUser, "modelFileLastModifiedDate", modifiedDate);
+
+	// At this point, need to parse the model file
+	// if there's a problem loading the model XML, just exit out (don't need to warn the user, since the main XML has already been loaded
+	// the same logic will be used for any other errors while trying to do this XML merge)
+	NppXml::Document pXmlModel = new NppXml::NewDocument();
+
+	auto handleErrorThenExit = [&]() {
+		switch (whichConf)
+		{
+			case ConfXml::lang:
+			{
+				static_cast<void>(NppXml::saveFile(pXmlDocument, docPath.c_str()));
+				break;
+			}
+			case ConfXml::styles:
+			{
+				writeStyles(_lexerStylerVect, _widgetStyleArray);
+				break;
+			}
+		}
+
+		delete pXmlModel;
+		return false;
+	};
+
+	if (!NppXml::loadFile(pXmlModel, modelXmlPath.c_str()))
+	{
+		return handleErrorThenExit();
+	}
+
+	NppXml::Element rootModel = NppXml::firstChildElement(pXmlModel, "NotepadPlus");
+	if (!rootModel)
+	{
+		return handleErrorThenExit();
+	}
+
+	// compare the *.model.xml's modelDate to that of the active XML
+	const int v_model = NppXml::intAttribute(rootModel, "modelDate", 0);
+
+	if (v_model == 0) // in case modelDate is absent in *.model.xml, no update will happen
+	{
+		return handleErrorThenExit();
+	}
+
+	const int v_user = NppXml::intAttribute(rootUser, "modelDate", 0);
+
+	// v_user is 0 when "modelDate" is absent.
+	if (v_user >= v_model)
+	{
+		return handleErrorThenExit();
+	}
+
+	// update (or add) the modelDate stored in the active XML
+	NppXml::setAttribute(rootUser, "modelDate", v_model);
+
+	// get the main internal <Languages> element from both user and model
+	NppXml::Element mainElemUser = NppXml::firstChildElement(rootUser, mainElementName.c_str());
+	NppXml::Element mainElemModel = NppXml::firstChildElement(rootModel, mainElementName.c_str());
+	if (!mainElemUser || !mainElemModel)
+	{
+		return handleErrorThenExit();
+	}
+
+	switch (whichConf)
+	{
+		case ConfXml::lang:
+		{
+			updateLangXml(mainElemUser, mainElemModel);
+			static_cast<void>(NppXml::saveFile(pXmlDocument, docPath.c_str()));
+			break;
+		}
+		case ConfXml::styles:
+		{
+			updateStylesXml(rootUser, docPath, rootModel, mainElemUser, mainElemModel);
+			writeStyles(_lexerStylerVect, _widgetStyleArray);
+			break;
+		}
+	}
+
+	delete pXmlModel;
+	return true;
+}
+
+void NppParameters::updateLangXml(NppXml::Element& mainElemUser, const NppXml::Element& mainElemModel)
+{
+	// map each of the user-file's languages -> element-pointer, to keep track of the languages already in the user-file
+	std::map<std::string, NppXml::Element> mapUserLanguages{};
+	for (NppXml::Element langFromUser = NppXml::firstChildElement(mainElemUser, "Language");
+		langFromUser;
+		langFromUser = NppXml::nextSiblingElement(langFromUser, "Language"))
+	{
+		const char* languageName = NppXml::attribute(langFromUser, "name");
+		if (languageName)
+			mapUserLanguages[languageName] = langFromUser;
+	}
+
+	// for each language in the Model,
+	for (NppXml::Element langFromModel = NppXml::firstChildElement(mainElemModel, "Language");
+		langFromModel;
+		langFromModel = NppXml::nextSiblingElement(langFromModel, "Language"))
+	{
+		std::string modelLanguageName = NppXml::attribute(langFromModel, "name", "");
+		if (modelLanguageName.empty())
+			continue;
+
+		// see if language already exists in UserLanguages
+		if (mapUserLanguages.contains(modelLanguageName))
+		{
+			// if so, see if I need to update individual entries
+
+			// first, enumerate each keywords name -> element pointer, so I know what's already there
+			std::map<std::string, NppXml::Element> mapUserKeywords{};
+			for (NppXml::Element keywordsFromUser = NppXml::firstChildElement(mapUserLanguages[modelLanguageName], "Keywords");
+				keywordsFromUser;
+				keywordsFromUser = NppXml::nextSiblingElement(keywordsFromUser, "Keywords"))
+			{
+				const char* keywordsName = NppXml::attribute(keywordsFromUser, "name");
+				if (keywordsName)
+					mapUserKeywords[keywordsName] = keywordsFromUser;
+			}
+
+			// then, for each Keywords entry in the model, check to see if it already exists in the user list
+			for (NppXml::Element keywordsFromModel = NppXml::firstChildElement(langFromModel, "Keywords");
+				keywordsFromModel;
+				keywordsFromModel = NppXml::nextSiblingElement(keywordsFromModel, "Keywords"))
+			{
+				const char* modelKwName = NppXml::attribute(keywordsFromModel, "name");
+				std::string modelKeywordsName = modelKwName ? modelKwName : "";
+				if (modelKeywordsName.empty())
+					continue;
+
+				// does this Keywords element exist in User already?
+				if (mapUserKeywords.contains(modelKeywordsName))
+				{
+					// if Keywords element in user langs.xml, need to check to see if any words are missing from its contents
+
+					// start by extracting the list of words in the user version of this Keywords element
+					NppXml::Node pKwsValue = NppXml::firstChild(mapUserKeywords[modelKeywordsName]);
+					std::string sText = pKwsValue ? NppXml::getValue(pKwsValue) : "";
+					std::vector<std::string> vsUserWords{};
+					std::map<std::string, bool> mapUserWords{};
+					if (!sText.empty())
+					{
+						std::string sToken;
+						std::istringstream strm(sText);
+						while (strm >> sToken)
+						{
+							vsUserWords.push_back(sToken);
+							mapUserWords[sToken] = true;
+						}
+					}
+
+					// then go through each word in the model, and add it to the list if it's not already there
+					int nWordsAdded = 0;
+					NppXml::Node pKwsValueModel = NppXml::firstChild(keywordsFromModel);
+					std::string sTextModel = pKwsValueModel ? NppXml::getValue(pKwsValueModel) : "";
+					if (!pKwsValue)
+					{
+						if (pKwsValueModel)
+						{
+							NppXml::insertEndChild(mapUserKeywords[modelKeywordsName], pKwsValueModel);
+						}
+					}
+					else
+					{
+						if (!sTextModel.empty())
+						{
+							std::string sToken;
+							std::istringstream strm(sTextModel);
+							while (strm >> sToken)
+							{
+								if (!mapUserWords.contains(sToken))
+								{
+									vsUserWords.push_back(sToken);
+									++nWordsAdded;
+								}
+							}
+						}
+
+						// if there were any words added to the list, need to update the element contents
+						if (nWordsAdded)
+						{
+							// sort the words in standard case-sensitive alphabetical order
+							std::sort(vsUserWords.begin(), vsUserWords.end());
+
+							// convert that list into space-separated string, with at most 8000 characters per line
+							size_t lineLength = 0;
+							static constexpr size_t maxLineLength = 8000;
+							bool first = true;
+							std::string sOutputWords;
+							for (const auto& sWord : vsUserWords)
+							{
+								if (!first)
+								{
+									// space between words
+									sOutputWords += " ";
+									lineLength += 1;
+								}
+								first = false;
+
+								if (lineLength + sWord.length() >= maxLineLength)
+								{
+									// start next line
+									lineLength = 0;
+									sOutputWords += "\n                ";
+								}
+
+								// add this word to the output string
+								sOutputWords += sWord;
+								lineLength += sWord.length();
+							}
+
+							// and update the XML's value
+							NppXml::setValue(pKwsValue, sOutputWords);
+						}
+					}
+				}
+				else
+				{
+					// if this Keywords element doesn't exist in user list, need to clone it from model to the right parent language in the user list
+					NppXml::insertEndChild(mapUserLanguages[modelLanguageName], keywordsFromModel);
+				}
+			}
+
+			// Also, since <Language name="..." ...> can have other attributes, need to check to make sure that
+			// the user langs copy of language isn't missing any of the attributes from the model
+			NppXml::Element thisLanguageFromUser = mapUserLanguages[modelLanguageName];
+			for (NppXml::Attribute attrModel = NppXml::firstAttribute(langFromModel);
+				attrModel;
+				attrModel = NppXml::next(attrModel))
+			{
+				// if attribute not in user, need to add it (but leave it alone if the user-langs has it, but is just an empty string, because that's intentionally blank)
+				const char* attrName = NppXml::getName(attrModel);
+				const char* pcUserValue = NppXml::attribute(thisLanguageFromUser, attrName);
+				if (!pcUserValue)
+					NppXml::setAttribute(thisLanguageFromUser, attrName, NppXml::getValue(attrModel));
+				else if (std::strcmp(attrName, "ext") == 0)
+				{
+					// Get both user and model values for the ext attribute
+					std::string sExtValues = std::string(pcUserValue) + " " + NppXml::getValue(attrModel);
+					std::string sExtUpdated;
+					std::map<std::string, bool> isExtDone{};
+					std::string sToken;
+					std::istringstream strm(sExtValues);
+					while (strm >> sToken)
+					{
+						if (!isExtDone.contains(sToken))
+						{
+							if (!sExtUpdated.empty())
+								sExtUpdated += " ";
+							sExtUpdated += sToken;
+							isExtDone[sToken] = true;
+						}
+					}
+					NppXml::setAttribute(thisLanguageFromUser, attrName, sExtUpdated);
+				}
+			}
+		}
+		else
+		{
+			// otherwise, since Language doesn't exist in User Languages, need to duplicate/clone from model to user-langs structure
+			NppXml::insertEndChild(mainElemUser, langFromModel);
+		}
+	}
+
+	return;
+}
+
+void NppParameters::updateStylesXml(const NppXml::Element& rootUser, const std::wstring& userDocPath, const NppXml::Element& rootModel, NppXml::Element& mainElemUser, const NppXml::Element& mainElemModel)
+{
+	std::string defaultFgColor, defaultBgColor;
+
+	auto endsWith = [](std::wstring const& fullString, std::wstring const& suffix) -> bool
+	{
+		if (fullString.length() >= suffix.length())
+		{
+			// Compare the last 'suffix.length()' characters of 'fullString' with 'suffix'
+			return fullString.compare(fullString.length() - suffix.length(), suffix.length(), suffix) == 0;
+		}
+		else
+		{
+			return false;
+		}
+	};
+	const bool useDefaultColors = !endsWith(userDocPath, L"stylers.xml"); // use the Colors from "Default Style", except when it's stylers.xml
+
+	// Start with GlobalStyles
+	//		(even though it comes later in the actual XML file, need to be able to extract the defaultFgColor and defaultBgColor before doing the individual lexers)
+	NppXml::Element gsUser = NppXml::firstChildElement(rootUser, "GlobalStyles");
+	NppXml::Element gsModel = NppXml::firstChildElement(rootModel, "GlobalStyles");
+	if (!gsUser || !gsModel)
+		return;
+
+	// map UserStyler's widget styleID||name -> node-pointer
+	std::map<std::string, NppXml::Element> mapUserWidgets{};
+	for (NppXml::Element widgetFromUser = NppXml::firstChildElement(gsUser, "WidgetStyle");
+		widgetFromUser;
+		widgetFromUser = NppXml::nextSiblingElement(widgetFromUser, "WidgetStyle"))
+	{
+		// use StyleID for the map's key, or if styleID not found or if "0" then use the widget's name (lowercase) instead
+		const int styleID = NppXml::intAttribute(widgetFromUser, "styleID", 0);
+		std::string widgetKey;
+		if (styleID > 0 && styleID <= 256)
+			widgetKey = std::to_string(styleID);
+		else
+			widgetKey = NppXml::attribute(widgetFromUser, "name");
+
+		// add widget to map using the key
+		if (!widgetKey.empty())
+		{
+			mapUserWidgets[widgetKey] = widgetFromUser;
+
+			// save the colors from <WidgetStyle name="Default Style" styleID="32" ...>
+			if (widgetKey == "32")
+			{
+				defaultFgColor = NppXml::attribute(widgetFromUser, "fgColor");
+				defaultBgColor = NppXml::attribute(widgetFromUser, "bgColor");
+			}
+		}
+	}
+
+	// for each WidgetStyle in the model,
+	for (NppXml::Element widgetFromModel = NppXml::firstChildElement(gsModel, "WidgetStyle");
+		widgetFromModel;
+		widgetFromModel = NppXml::nextSiblingElement(widgetFromModel, "WidgetStyle"))
+	{
+		// extract the key
+		const int styleID = NppXml::intAttribute(widgetFromModel, "styleID", 0);
+		std::string widgetKey;
+		if (styleID > 0 && styleID <= 256)
+			widgetKey = std::to_string(styleID);
+		else if (const char* name = NppXml::attribute(widgetFromModel, "name"); name)
+			widgetKey = name;
+
+		if (widgetKey.empty())
+			continue;
+
+		// see if WidgetStyle already exists in UserStyles
+		if (mapUserWidgets.contains(widgetKey))
+		{
+			// if so, see if I need to update individual attributes
+			for (NppXml::Attribute attrModel = NppXml::firstAttribute(widgetFromModel);
+				attrModel;
+				attrModel = NppXml::next(attrModel))
+			{
+				// if attribute not in user, need to add it (but leave it alone if it's there but an empty string, because then it's intentionally set blank)
+				const char* attrName = NppXml::getName(attrModel);
+				const char* pcUserValue = NppXml::attribute(mapUserWidgets[widgetKey], attrName);
+				if (!pcUserValue)
+				{
+					NppXml::setAttribute(mapUserWidgets[widgetKey], attrName, NppXml::getValue(attrModel));
+
+					if (useDefaultColors)
+					{
+						// override the value from the model file with the default value, for fgColor and bgColor only
+						if (std::strcmp(attrName, "fgColor") == 0)
+							NppXml::setAttribute(mapUserWidgets[widgetKey], attrName, defaultFgColor);
+						else if (std::strcmp(attrName, "bgColor") == 0)
+							NppXml::setAttribute(mapUserWidgets[widgetKey], attrName, defaultBgColor);
+					}
+				}
+			}
+		}
+		else
+		{
+			// otherwise, need to duplicate/clone from model to userStyles
+			NppXml::Element p_cloneElement = NppXml::insertEndChild(gsUser, widgetFromModel);
+
+			// if using the default colors, need to override fgColor and bgColor
+			if (useDefaultColors)
+			{
+				if (NppXml::attribute(p_cloneElement, "fgColor"))
+					NppXml::setAttribute(p_cloneElement, "fgColor", defaultFgColor);
+				if (NppXml::attribute(p_cloneElement, "bgColor"))
+					NppXml::setAttribute(p_cloneElement, "bgColor", defaultBgColor);
+			}
+		}
+	}
+
+
+	// map UserStyler's lexer name -> element-pointer
+	std::map<std::string, NppXml::Element> mapUserLexers{};
+	for (NppXml::Element lexerFromUser = NppXml::firstChildElement(mainElemUser, "LexerType");
+		lexerFromUser;
+		lexerFromUser = NppXml::nextSiblingElement(lexerFromUser, "LexerType"))
+	{
+		const char* lexerName = NppXml::attribute(lexerFromUser, "name");
+		if (lexerName)
+			mapUserLexers[lexerName] = lexerFromUser;
+	}
+
+	// For each lexer in the model,
+	for (NppXml::Element lexerFromModel = NppXml::firstChildElement(mainElemModel, "LexerType");
+		lexerFromModel;
+		lexerFromModel = NppXml::nextSiblingElement(lexerFromModel, "LexerType"))
+	{
+		const char* modelLexerName = NppXml::attribute(lexerFromModel, "name");
+		
+		if (!modelLexerName)
+			continue;
+
+		// map styleID numbers: index will be the target dot-js ID, intermediate index is fgColor/bgColor, stored value will be the source embedded-javascript color string
+		std::map <std::string, std::map<std::string, std::string>> mapColorsEmbeddedToDotJs;
+		if (std::strcmp(modelLexerName, "javascript.js") == 0 && mapUserLexers.contains("javascript"))
+		{
+			NppXml::Element srcEmbeddedLexer = mapUserLexers["javascript"];
+
+			// iterate through each embedded WordsStyle element
+			for (NppXml::Element embeddedWordsStyle = NppXml::firstChildElement(srcEmbeddedLexer, "WordsStyle");
+				embeddedWordsStyle;
+				embeddedWordsStyle = NppXml::nextSiblingElement(embeddedWordsStyle, "WordsStyle"))
+			{
+				const char* embeddedID = NppXml::attribute(embeddedWordsStyle, "styleID");
+				const char* embeddedFG = NppXml::attribute(embeddedWordsStyle, "fgColor");
+				const char* embeddedBG = NppXml::attribute(embeddedWordsStyle, "bgColor");
+				if (embeddedID)
+				{
+					auto do_embedded_to_dot_js_map = [](std::map <std::string, std::map<std::string, std::string>>&colorid_map, const std::string& dotjs_id, const std::string& emb_id_desired, const char* embID, const char* embFG, const char* embBG) {
+						if (emb_id_desired == embID)
+						{
+							if (embFG)
+								colorid_map[dotjs_id]["fgColor"] = embFG;
+							if (embBG)
+								colorid_map[dotjs_id]["bgColor"] = embBG;
+						}
+					};
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "11", "41", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::DEFAULT from EMBEDDED::DEFAULT
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "4", "45", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::NUMBER from EMBEDDED::NUMBER
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "16", "46", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::TYPE_WORD<type1> from EMBEDDED::WORD
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "5", "47", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::INSTRUCTION_WORD <instre1> from EMBEDDED::KEYWORD <instre1>
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "19", "47", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::WINDOW_INSTRUCTION <instre2> also from EMBEDDED::KEYWORD <instre1> (there isn't 1:1 mapping, so multiple .js styles inherit from from same embedded style)
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "6", "48", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::STRING from EMBEDDED::DOUBLE STRING
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "20", "48", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::STRING_RAW also from EMBEDDED::DOUBLE STRING
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "7", "49", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::CHARACTER from EMBEDDED::SINGLE STRING
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "10", "50", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::OPERATOR from EMBEDDED::SYMBOLS
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "14", "52", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::REGEX from EMBEDDED::REGEX
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "1", "42", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::COMMENT from EMBEDDED::COMMENT
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "2", "43", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::COMMENT LINE from EMBEDDED::COMMENT LINE
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "3", "44", embeddedID, embeddedFG, embeddedBG);     // get DOTJS::COMMENT DOC from EMBEDDED::COMMENT DOC
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "15", "44", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::COMMENT LINE DOC also from EMBEDDED::COMMENT DOC
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "17", "44", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::COMMENT LINE DOC also from EMBEDDED::COMMENT DOC
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "18", "44", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::COMMENT DOC KEYWORD also from EMBEDDED::COMMENT DOC
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "19", "44", embeddedID, embeddedFG, embeddedBG);    // get DOTJS::COMMENT DOC KEYWORD ERROR also from EMBEDDED::COMMENT DOC
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "128", "200", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "129", "201", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "130", "202", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "131", "203", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "132", "204", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "133", "205", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "134", "206", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+					do_embedded_to_dot_js_map(mapColorsEmbeddedToDotJs, "135", "207", embeddedID, embeddedFG, embeddedBG);  // get DOTJS::USER* from EMBEDDED::USER*
+				}
+			}
+		}
+
+		// see if lexer already exists in UserStyles
+		if (mapUserLexers.contains(modelLexerName))
+		{
+			// if so, see if I need to update individual entries
+
+			// first, enumerate each words-style ID -> element-pointer, so I know what's already there
+			std::map<std::string, NppXml::Element> mapUserWordsStyles{};
+			for (NppXml::Element wordsStyleFromUser = NppXml::firstChildElement(mapUserLexers[modelLexerName], "WordsStyle");
+				wordsStyleFromUser;
+				wordsStyleFromUser = NppXml::nextSiblingElement(wordsStyleFromUser, "WordsStyle"))
+			{
+				const char* wordsStyleID = NppXml::attribute(wordsStyleFromUser, "styleID");
+				if (wordsStyleID)
+					mapUserWordsStyles[wordsStyleID] = wordsStyleFromUser;
+			}
+
+			// then, for each words-style in the Model, check to see if it already exists in the user list
+			for (NppXml::Element wordsStyleFromModel = NppXml::firstChildElement(lexerFromModel, "WordsStyle");
+				wordsStyleFromModel;
+				wordsStyleFromModel = NppXml::nextSiblingElement(wordsStyleFromModel, "WordsStyle"))
+			{
+				std::string modelWordsStyleID = NppXml::attribute(wordsStyleFromModel, "styleID", "");
+				if (modelWordsStyleID.empty())
+					continue;
+
+				// does it exist in User already?
+				if (mapUserWordsStyles.contains(modelWordsStyleID))
+				{
+					// if already exists, check for missing attributes
+
+					// need the element from user, to be able to check its attributes against the model's attributes
+					NppXml::Element elementFromUser = mapUserWordsStyles[modelWordsStyleID];
+
+					// loop through each attribute in the model's element
+					for (NppXml::Attribute attrModel = NppXml::firstAttribute(wordsStyleFromModel);
+						attrModel;
+						attrModel = NppXml::next(attrModel))
+					{
+						// if attribute not in user, need to add it (but leave it alone if it's there but an empty string, because then it's intentionally set blank)
+						const char* attrName = NppXml::getName(attrModel);
+						const char* pcUserValue = NppXml::attribute(elementFromUser, attrName);
+						if (!pcUserValue)
+						{
+							NppXml::setAttribute(elementFromUser, attrName, NppXml::getValue(attrModel));
+
+							if (useDefaultColors)
+							{
+								std::string newFg = defaultFgColor;
+								std::string newBg = defaultBgColor;
+								std::string dest_id = NppXml::attribute(elementFromUser, "styleID", "");
+								if (!dest_id.empty() && mapColorsEmbeddedToDotJs.contains(dest_id))
+								{
+									//std::string src_id = mapColorsEmbeddedToDotJs[dest_id];
+									if (std::strcmp(attrName, "fgColor") == 0 && mapColorsEmbeddedToDotJs[dest_id].contains(attrName))
+										newFg =  mapColorsEmbeddedToDotJs[dest_id][attrName];
+									if (std::strcmp(attrName, "bgColor") == 0 && mapColorsEmbeddedToDotJs[dest_id].contains(attrName))
+										newBg = mapColorsEmbeddedToDotJs[dest_id][attrName];
+								}
+
+								// override the value from the model file with the default value, for fgColor and bgColor only
+								if (std::strcmp(attrName, "fgColor") == 0)
+									NppXml::setAttribute(elementFromUser, attrName, newFg);
+								else if (std::strcmp(attrName, "bgColor") == 0)
+									NppXml::setAttribute(elementFromUser, attrName, newBg);
+							}
+						}
+					}
+				}
+				else
+				{
+					// if WordsStyle doesn't exist, need to clone it from model to the right parent lexer in the user list
+					NppXml::Element p_cloneElement = NppXml::insertEndChild(mapUserLexers[modelLexerName], wordsStyleFromModel);
+
+					// if using the default colors, need to override fgColor and bgColor
+					if (useDefaultColors)
+					{
+						std::string newFg = defaultFgColor;
+						std::string newBg = defaultBgColor;
+						std::string dest_id = NppXml::attribute(p_cloneElement, "styleID", "");
+						if (!dest_id.empty() && mapColorsEmbeddedToDotJs.contains(dest_id))
+						{
+							if (NppXml::attribute(p_cloneElement, "fgColor") && mapColorsEmbeddedToDotJs[dest_id].contains("fgColor"))
+								newFg = mapColorsEmbeddedToDotJs[dest_id]["fgColor"];
+							if (NppXml::attribute(p_cloneElement, "bgColor") && mapColorsEmbeddedToDotJs[dest_id].contains("bgColor"))
+								newBg = mapColorsEmbeddedToDotJs[dest_id]["bgColor"];
+						}
+
+						if (NppXml::attribute(p_cloneElement, "fgColor"))
+							NppXml::setAttribute(p_cloneElement, "fgColor", newFg);
+						if (NppXml::attribute(p_cloneElement, "bgColor"))
+							NppXml::setAttribute(p_cloneElement, "bgColor", newBg);
+					}
+				}
+			}
+		}
+		else
+		{
+			// otherwise, if Lexer doesn't exist in the userStyles, need to duplicate/clone from model to userStyles
+			NppXml::Node p_clone = NppXml::insertEndChild(mainElemUser, lexerFromModel);
+
+			if (useDefaultColors)
+			{
+				std::string newFg = defaultFgColor;
+				std::string newBg = defaultBgColor;
+
+				// iterate through all WordsStyle in the clone, and override fg and bg colors as needed
+				for (NppXml::Element wordsStyleFromClone = NppXml::firstChildElement(p_clone, "WordsStyle");
+					wordsStyleFromClone;
+					wordsStyleFromClone = NppXml::nextSiblingElement(wordsStyleFromClone, "WordsStyle"))
+				{
+					std::string dest_id = NppXml::attribute(wordsStyleFromClone, "styleID", "");
+					if (!dest_id.empty() && mapColorsEmbeddedToDotJs.contains(dest_id))
+					{
+						if (NppXml::attribute(wordsStyleFromClone, "fgColor") && mapColorsEmbeddedToDotJs[dest_id].contains("fgColor"))
+							newFg = mapColorsEmbeddedToDotJs[dest_id]["fgColor"];
+						if (NppXml::attribute(wordsStyleFromClone, "bgColor") && mapColorsEmbeddedToDotJs[dest_id].contains("bgColor"))
+							newBg = mapColorsEmbeddedToDotJs[dest_id]["bgColor"];
+					}
+
+					if (NppXml::attribute(wordsStyleFromClone, "fgColor"))
+						NppXml::setAttribute(wordsStyleFromClone, "fgColor", newFg);
+					if (NppXml::attribute(wordsStyleFromClone, "bgColor"))
+						NppXml::setAttribute(wordsStyleFromClone, "bgColor", newBg);
+				}
+			}
+		}
+	}
+
+	// Ensure searchResult LexerType is always the last child of mainElemUser,
+	// regardless of where it appeared in the original XML or where new entries
+	// were appended during the merge above.
+	NppXml::Element searchResultNode;
+	for (NppXml::Element lexerNode = NppXml::firstChildElement(mainElemUser, "LexerType");
+		lexerNode;
+		lexerNode = NppXml::nextSiblingElement(lexerNode, "LexerType"))
+	{
+		const char* name = NppXml::attribute(lexerNode, "name");
+		if (name && std::strcmp(name, "searchResult") == 0)
+		{
+			searchResultNode = lexerNode;
+			break;
+		}
+	}
+
+	if (searchResultNode)
+	{
+		NppXml::deleteChild(mainElemUser, searchResultNode);
+		NppXml::insertEndChild(mainElemUser, searchResultNode);
+	}
+
+	return;
+}
+
+bool NppParameters::getUserParametersFromXmlTree()
+{
+	if (!_xmlUserDoc._doc)
+		return false;
+
+	NppXml::Element root = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -1999,12 +2864,11 @@ bool NppParameters::getUserParametersFromXmlTree()
 	feedFileListParameters(root);
 
 	// Erase the History root
-	TiXmlNode *node = root->FirstChildElement(TEXT("History"));
-	root->RemoveChild(node);
+	NppXml::Element histRoot = NppXml::firstChildElement(root, "History");
+	NppXml::deleteChild(root, histRoot);
 
 	// Add a new empty History root
-	TiXmlElement HistoryNode(TEXT("History"));
-	root->InsertEndChild(HistoryNode);
+	NppXml::createChildElement(root, "History");
 
 	//Get Find history parameters
 	feedFindHistoryParameters(root);
@@ -2022,12 +2886,12 @@ bool NppParameters::getUserParametersFromXmlTree()
 }
 
 
-std::pair<unsigned char, unsigned char> NppParameters::addUserDefineLangsFromXmlTree(TiXmlDocument *tixmldoc)
+std::pair<unsigned char, unsigned char> NppParameters::addUserDefineLangsFromXmlTree(NppXml::Document xmldoc)
 {
-	if (!tixmldoc)
+	if (!xmldoc)
 		return std::make_pair(static_cast<unsigned char>(0), static_cast<unsigned char>(0));
 
-	TiXmlNode *root = tixmldoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element root = NppXml::firstChildElement(xmldoc, "NotepadPlus");
 	if (!root)
 		return std::make_pair(static_cast<unsigned char>(0), static_cast<unsigned char>(0));
 
@@ -2038,10 +2902,10 @@ std::pair<unsigned char, unsigned char> NppParameters::addUserDefineLangsFromXml
 
 bool NppParameters::getShortcutsFromXmlTree()
 {
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 		return false;
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -2052,10 +2916,10 @@ bool NppParameters::getShortcutsFromXmlTree()
 
 bool NppParameters::getMacrosFromXmlTree()
 {
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 		return false;
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -2066,10 +2930,10 @@ bool NppParameters::getMacrosFromXmlTree()
 
 bool NppParameters::getUserCmdsFromXmlTree()
 {
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 		return false;
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -2080,10 +2944,10 @@ bool NppParameters::getUserCmdsFromXmlTree()
 
 bool NppParameters::getPluginCmdsFromXmlTree()
 {
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 		return false;
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -2094,10 +2958,10 @@ bool NppParameters::getPluginCmdsFromXmlTree()
 
 bool NppParameters::getScintKeysFromXmlTree()
 {
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 		return false;
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
@@ -2107,29 +2971,22 @@ bool NppParameters::getScintKeysFromXmlTree()
 
 void NppParameters::initMenuKeys()
 {
-	int nbCommands = sizeof(winKeyDefs)/sizeof(WinMenuKeyDefinition);
-	WinMenuKeyDefinition wkd;
 	int previousFuncID = 0;
-	for (int i = 0; i < nbCommands; ++i)
+	for (const auto& wkd : winKeyDefs)
 	{
-		wkd = winKeyDefs[i];
-		Shortcut sc((wkd.specialName ? wstring2string(wkd.specialName, CP_UTF8).c_str() : ""), wkd.isCtrl, wkd.isAlt, wkd.isShift, static_cast<unsigned char>(wkd.vKey));
-		_shortcuts.push_back( CommandShortcut(sc, wkd.functionId, previousFuncID == wkd.functionId) );
+		Shortcut sc((wkd.specialName ? wstring2string(wkd.specialName).c_str() : ""), wkd.isCtrl, wkd.isAlt, wkd.isShift, static_cast<unsigned char>(wkd.vKey));
+		_shortcuts.emplace_back(sc, wkd.functionId, previousFuncID == wkd.functionId);
 		previousFuncID = wkd.functionId;
 	}
 }
 
 void NppParameters::initScintillaKeys()
 {
-	int nbCommands = sizeof(scintKeyDefs)/sizeof(ScintillaKeyDefinition);
-
 	//Warning! Matching function have to be consecutive
-	ScintillaKeyDefinition skd;
 	int prevIndex = -1;
 	int prevID = -1;
-	for (int i = 0; i < nbCommands; ++i)
+	for (const auto& skd : scintKeyDefs)
 	{
-		skd = scintKeyDefs[i];
 		if (skd.functionId == prevID)
 		{
 			KeyCombo kc;
@@ -2141,32 +2998,31 @@ void NppParameters::initScintillaKeys()
 		}
 		else
 		{
-			Shortcut s = Shortcut(wstring2string(skd.name, CP_UTF8).c_str(), skd.isCtrl, skd.isAlt, skd.isShift, static_cast<unsigned char>(skd.vKey));
-			ScintillaKeyMap sm = ScintillaKeyMap(s, skd.functionId, skd.redirFunctionId);
-			_scintillaKeyCommands.push_back(sm);
+			Shortcut s = Shortcut(wstring2string(skd.name).c_str(), skd.isCtrl, skd.isAlt, skd.isShift, static_cast<unsigned char>(skd.vKey));
+			_scintillaKeyCommands.emplace_back(s, skd.functionId, skd.redirFunctionId);
 			++prevIndex;
 		}
 		prevID = skd.functionId;
 	}
 }
 
-bool NppParameters::reloadContextMenuFromXmlTree(HMENU mainMenuHadle, HMENU pluginsMenu)
+bool NppParameters::reloadContextMenuFromXmlTree(HMENU mainMenuHandle, HMENU pluginsMenu)
 {
 	_contextMenuItems.clear();
-	return getContextMenuFromXmlTree(mainMenuHadle, pluginsMenu);
+	return getContextMenuFromXmlTree(mainMenuHandle, pluginsMenu);
 }
 
-int NppParameters::getCmdIdFromMenuEntryItemName(HMENU mainMenuHadle, const std::wstring& menuEntryName, const std::wstring& menuItemName)
+int NppParameters::getCmdIdFromMenuEntryItemName(HMENU mainMenuHandle, const std::wstring& menuEntryName, const std::wstring& menuItemName)
 {
-	int nbMenuEntry = ::GetMenuItemCount(mainMenuHadle);
+	int nbMenuEntry = ::GetMenuItemCount(mainMenuHandle);
 	for (int i = 0; i < nbMenuEntry; ++i)
 	{
-		TCHAR menuEntryString[menuItemStrLenMax];
-		::GetMenuString(mainMenuHadle, i, menuEntryString, menuItemStrLenMax, MF_BYPOSITION);
-		if (wcsicmp(menuEntryName.c_str(), purgeMenuItemString(menuEntryString).c_str()) == 0)
+		wchar_t menuEntryString[menuItemStrLenMax];
+		::GetMenuString(mainMenuHandle, i, menuEntryString, menuItemStrLenMax, MF_BYPOSITION);
+		if (_wcsicmp(menuEntryName.c_str(), purgeMenuItemString(menuEntryString).c_str()) == 0)
 		{
-			vector< pair<HMENU, int> > parentMenuPos;
-			HMENU topMenu = ::GetSubMenu(mainMenuHadle, i);
+			std::vector<std::pair<HMENU, int>> parentMenuPos;
+			HMENU topMenu = ::GetSubMenu(mainMenuHandle, i);
 			int maxTopMenuPos = ::GetMenuItemCount(topMenu);
 			HMENU currMenu = topMenu;
 			int currMaxMenuPos = maxTopMenuPos;
@@ -2178,7 +3034,7 @@ int NppParameters::getCmdIdFromMenuEntryItemName(HMENU mainMenuHadle, const std:
 				if (::GetSubMenu(currMenu, currMenuPos))
 				{
 					//  Go into sub menu
-					parentMenuPos.push_back(::make_pair(currMenu, currMenuPos));
+					parentMenuPos.emplace_back(currMenu, currMenuPos);
 					currMenu = ::GetSubMenu(currMenu, currMenuPos);
 					currMenuPos = 0;
 					currMaxMenuPos = ::GetMenuItemCount(currMenu);
@@ -2186,9 +3042,9 @@ int NppParameters::getCmdIdFromMenuEntryItemName(HMENU mainMenuHadle, const std:
 				else
 				{
 					//  Check current menu position.
-					TCHAR cmdStr[menuItemStrLenMax];
+					wchar_t cmdStr[menuItemStrLenMax];
 					::GetMenuString(currMenu, currMenuPos, cmdStr, menuItemStrLenMax, MF_BYPOSITION);
-					if (wcsicmp(menuItemName.c_str(), purgeMenuItemString(cmdStr).c_str()) == 0)
+					if (_wcsicmp(menuItemName.c_str(), purgeMenuItemString(cmdStr).c_str()) == 0)
 					{
 						return ::GetMenuItemID(currMenu, currMenuPos);
 					}
@@ -2221,17 +3077,17 @@ int NppParameters::getPluginCmdIdFromMenuEntryItemName(HMENU pluginsMenu, const 
 	int nbPlugins = ::GetMenuItemCount(pluginsMenu);
 	for (int i = 0; i < nbPlugins; ++i)
 	{
-		TCHAR menuItemString[menuItemStrLenMax];
+		wchar_t menuItemString[menuItemStrLenMax];
 		::GetMenuString(pluginsMenu, i, menuItemString, menuItemStrLenMax, MF_BYPOSITION);
-		if (wcsicmp(pluginName.c_str(), purgeMenuItemString(menuItemString).c_str()) == 0)
+		if (_wcsicmp(pluginName.c_str(), purgeMenuItemString(menuItemString).c_str()) == 0)
 		{
 			HMENU pluginMenu = ::GetSubMenu(pluginsMenu, i);
 			int nbPluginCmd = ::GetMenuItemCount(pluginMenu);
 			for (int j = 0; j < nbPluginCmd; ++j)
 			{
-				TCHAR pluginCmdStr[menuItemStrLenMax];
+				wchar_t pluginCmdStr[menuItemStrLenMax];
 				::GetMenuString(pluginMenu, j, pluginCmdStr, menuItemStrLenMax, MF_BYPOSITION);
-				if (wcsicmp(pluginCmdName.c_str(), purgeMenuItemString(pluginCmdStr).c_str()) == 0)
+				if (_wcsicmp(pluginCmdName.c_str(), purgeMenuItemString(pluginCmdStr).c_str()) == 0)
 				{
 					return ::GetMenuItemID(pluginMenu, j);
 				}
@@ -2241,81 +3097,74 @@ int NppParameters::getPluginCmdIdFromMenuEntryItemName(HMENU pluginsMenu, const 
 	return -1;
 }
 
-bool NppParameters::getContextMenuFromXmlTree(HMENU mainMenuHadle, HMENU pluginsMenu, bool isEditCM)
+bool NppParameters::getContextMenuFromXmlTree(HMENU mainMenuHandle, HMENU pluginsMenu, bool isEditCM)
 {
-	std::vector<MenuItemUnit>& contextMenuItems = isEditCM ? _contextMenuItems : _tabContextMenuItems;
-
-	TiXmlDocumentA* pXmlContextMenuDocA = isEditCM ? _pXmlContextMenuDocA : _pXmlTabContextMenuDocA;
+	NppXml::Document pXmlContextMenuDoc = isEditCM ? _pXmlContextMenuDoc : _pXmlTabContextMenuDoc;
 	std::string cmName = isEditCM ? "ScintillaContextMenu" : "TabContextMenu";
 
-	if (!pXmlContextMenuDocA)
+	if (!pXmlContextMenuDoc)
 		return false;
-	TiXmlNodeA *root = pXmlContextMenuDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(pXmlContextMenuDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
 	WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
 	NativeLangSpeaker* pNativeSpeaker = (NppParameters::getInstance()).getNativeLangSpeaker();
 
-	TiXmlNodeA *contextMenuRoot = root->FirstChildElement(cmName.c_str());
+	NppXml::Element contextMenuRoot = NppXml::firstChildElement(root, cmName.c_str());
 	if (contextMenuRoot)
 	{
-		for (TiXmlNodeA *childNode = contextMenuRoot->FirstChildElement("Item");
-			childNode ;
-			childNode = childNode->NextSibling("Item") )
-		{
-			const char *folderNameDefaultA = (childNode->ToElement())->Attribute("FolderName");
-			const char *folderNameTranslateID_A = (childNode->ToElement())->Attribute("TranslateID");
-			const char *displayAsA = (childNode->ToElement())->Attribute("ItemNameAs");
+		std::vector<MenuItemUnit>& contextMenuItems = isEditCM ? _contextMenuItems : _tabContextMenuItems;
 
-			std::wstring folderName;
-			std::wstring displayAs;
-			folderName = folderNameDefaultA ? wmc.char2wchar(folderNameDefaultA, SC_CP_UTF8) : TEXT("");
-			displayAs = displayAsA ? wmc.char2wchar(displayAsA, SC_CP_UTF8) : TEXT("");
+		for (NppXml::Element childNode = NppXml::firstChildElement(contextMenuRoot, "Item");
+			childNode;
+			childNode = NppXml::nextSiblingElement(childNode, "Item"))
+		{
+			const char* folderNameDefaultA = NppXml::attribute(childNode, "FolderName");
+			const char* folderNameTranslateID_A = NppXml::attribute(childNode, "TranslateID");
+			const char* displayAsA = NppXml::attribute(childNode, "ItemNameAs");
+
+			std::wstring folderName = folderNameDefaultA ? wmc.char2wchar(folderNameDefaultA, SC_CP_UTF8) : L"";
+			std::wstring displayAs = displayAsA ? wmc.char2wchar(displayAsA, SC_CP_UTF8) : L"";
 
 			if (folderNameTranslateID_A)
 			{
 				folderName = pNativeSpeaker->getLocalizedStrFromID(folderNameTranslateID_A, folderName);
 			}
 
-			int id;
-			const char *idStr = (childNode->ToElement())->Attribute("id", &id);
-			if (idStr)
+			const int id = NppXml::intAttribute(childNode, "id", -1);
+			if (id >= 0)
 			{
-				contextMenuItems.push_back(MenuItemUnit(id, displayAs.c_str(), folderName.c_str()));
+				contextMenuItems.emplace_back(id, displayAs.c_str(), folderName.c_str());
 			}
 			else
 			{
-				const char *menuEntryNameA = (childNode->ToElement())->Attribute("MenuEntryName");
-				const char *menuItemNameA = (childNode->ToElement())->Attribute("MenuItemName");
+				const char* menuEntryNameA = NppXml::attribute(childNode, "MenuEntryName");
+				const char* menuItemNameA = NppXml::attribute(childNode, "MenuItemName");
 
-				std::wstring menuEntryName;
-				std::wstring menuItemName;
-				menuEntryName = menuEntryNameA?wmc.char2wchar(menuEntryNameA, SC_CP_UTF8):TEXT("");
-				menuItemName = menuItemNameA?wmc.char2wchar(menuItemNameA, SC_CP_UTF8):TEXT("");
+				std::wstring menuEntryName = menuEntryNameA ? wmc.char2wchar(menuEntryNameA, SC_CP_UTF8) : L"";
+				std::wstring menuItemName = menuItemNameA ? wmc.char2wchar(menuItemNameA, SC_CP_UTF8) : L"";
 
 				if (!menuEntryName.empty() && !menuItemName.empty())
 				{
-					int cmd = getCmdIdFromMenuEntryItemName(mainMenuHadle, menuEntryName, menuItemName);
+					int cmd = getCmdIdFromMenuEntryItemName(mainMenuHandle, menuEntryName, menuItemName);
 					if (cmd != -1)
-						contextMenuItems.push_back(MenuItemUnit(cmd, displayAs.c_str(), folderName.c_str()));
+						contextMenuItems.emplace_back(cmd, displayAs.c_str(), folderName.c_str());
 				}
 				else
 				{
-					const char *pluginNameA = (childNode->ToElement())->Attribute("PluginEntryName");
-					const char *pluginCmdNameA = (childNode->ToElement())->Attribute("PluginCommandItemName");
+					const char* pluginNameA = NppXml::attribute(childNode, "PluginEntryName");
+					const char* pluginCmdNameA = NppXml::attribute(childNode, "PluginCommandItemName");
 
-					std::wstring pluginName;
-					std::wstring pluginCmdName;
-					pluginName = pluginNameA?wmc.char2wchar(pluginNameA, SC_CP_UTF8):TEXT("");
-					pluginCmdName = pluginCmdNameA?wmc.char2wchar(pluginCmdNameA, SC_CP_UTF8):TEXT("");
+					std::wstring pluginName = pluginNameA ? wmc.char2wchar(pluginNameA, SC_CP_UTF8) : L"";
+					std::wstring pluginCmdName = pluginCmdNameA ? wmc.char2wchar(pluginCmdNameA, SC_CP_UTF8) : L"";
 
-					// if plugin menu existing plls the value of PluginEntryName and PluginCommandItemName are valid
+					// if plugin menu exists, also the value of PluginEntryName and PluginCommandItemName are valid
 					if (pluginsMenu && !pluginName.empty() && !pluginCmdName.empty())
 					{
-						int pluginCmdId = getPluginCmdIdFromMenuEntryItemName(pluginsMenu, pluginName, pluginCmdName);
+						const int pluginCmdId = getPluginCmdIdFromMenuEntryItemName(pluginsMenu, pluginName, pluginCmdName);
 						if (pluginCmdId != -1)
-							contextMenuItems.push_back(MenuItemUnit(pluginCmdId, displayAs.c_str(), folderName.c_str()));
+							contextMenuItems.emplace_back(pluginCmdId, displayAs.c_str(), folderName.c_str());
 					}
 				}
 			}
@@ -2325,7 +3174,7 @@ bool NppParameters::getContextMenuFromXmlTree(HMENU mainMenuHadle, HMENU plugins
 }
 
 
-void NppParameters::setWorkingDir(const TCHAR * newPath)
+void NppParameters::setWorkingDir(const wchar_t * newPath)
 {
 	if (newPath && newPath[0])
 	{
@@ -2333,26 +3182,26 @@ void NppParameters::setWorkingDir(const TCHAR * newPath)
 	}
 	else
 	{
-		if (PathFileExists(_nppGUI._defaultDirExp))
+		if (doesDirectoryExist(_nppGUI._defaultDirExp))
 			_currentDirectory = _nppGUI._defaultDirExp;
 		else
-			_currentDirectory = _nppPath.c_str();
+			_currentDirectory = _nppPath;
 	}
 }
 
-bool NppParameters::loadSession(Session& session, const TCHAR* sessionFileName, const bool bSuppressErrorMsg)
+bool NppParameters::loadSession(Session& session, const wchar_t* sessionFileName, const bool bSuppressErrorMsg)
 {
-	TiXmlDocument* pXmlSessionDocument = new TiXmlDocument(sessionFileName);
-	bool loadOkay = pXmlSessionDocument->LoadFile();
+	NppXml::Document pXmlSessionDocument = new NppXml::NewDocument();
+	bool loadOkay = NppXml::loadFile(pXmlSessionDocument, sessionFileName);
 	if (loadOkay)
-		loadOkay = getSessionFromXmlTree(pXmlSessionDocument, session);
+		loadOkay = getSessionFromXmlTree(pXmlSessionDocument, session, sessionFileName, true);
 
 	if (!loadOkay && !bSuppressErrorMsg)
 	{
 		_pNativeLangSpeaker->messageBox("SessionFileInvalidError",
-			NULL,
-			TEXT("Session file is either corrupted or not valid."),
-			TEXT("Could not Load Session"),
+			nullptr,
+			L"Session file is either corrupted or not valid.",
+			L"Could not Load Session",
 			MB_OK);
 	}
 
@@ -2360,159 +3209,443 @@ bool NppParameters::loadSession(Session& session, const TCHAR* sessionFileName, 
 	return loadOkay;
 }
 
-
-bool NppParameters::getSessionFromXmlTree(TiXmlDocument *pSessionDoc, Session& session)
+bool NppParameters::isServerAllowed(const char* path2check, bool bCaseSensitive)
 {
-	if (!pSessionDoc)
+	if (!path2check || !_pXmlServerWhiteListDoc)
 		return false;
-	
-	TiXmlNode *root = pSessionDoc->FirstChild(TEXT("NotepadPlus"));
+
+	switch (_networkPathAlwaysAction)
+	{
+		case networkPathAlwaysSkip:
+			return false;
+		case networkPathAlwaysLoad:
+			return true;
+		case networkPathAlwaysAsk:
+		default:
+			break;
+	}
+
+	std::string path2checkServerName;
+	if (!getServerName(path2check, path2checkServerName))
+		return false;
+
+	NppXml::Element root = NppXml::firstChildElement(_pXmlServerWhiteListDoc, "NotepadPlus");
 	if (!root)
 		return false;
 
-	TiXmlNode *sessionRoot = root->FirstChildElement(TEXT("Session"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(root, "ServerAllowed");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "ServerAllowed"))
+	{
+		const std::string allowedItem = NppXml::attribute(childNode, "name");
+		if (allowedItem.empty())
+			continue;
+
+		if (bCaseSensitive)
+		{
+			if (path2checkServerName == allowedItem)
+				return true;
+		}
+		else
+		{
+			// Windows default
+			if (_stricmp(path2checkServerName.c_str(), allowedItem.c_str()) == 0)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+bool NppParameters::getServerName(const std::string& path2check, std::string& serverNameOutput)
+{
+	serverNameOutput.clear();
+
+	if (path2check.length() < 3)
+		return false; // cannot be a net-path with server name
+
+	// case insensitive starts_with
+	auto starts_with_ci = [](std::string_view str, std::string_view prefix) {
+		if (str.size() < prefix.size()) return false;
+		return std::equal(prefix.begin(), prefix.end(), str.begin(), [](char a, char b) {
+			return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+		});
+	};
+
+	std::string path2checkNormStrip = path2check;
+	std::replace(path2checkNormStrip.begin(), path2checkNormStrip.end(), '/', '\\'); // 1st normalize to backslashes
+	if (starts_with_ci(path2checkNormStrip, "\\\\?\\"))
+	{
+		if (starts_with_ci(path2checkNormStrip, "\\\\?\\UNC\\"))
+			path2checkNormStrip = "\\\\" + path2checkNormStrip.substr(8);
+		else
+			path2checkNormStrip = path2checkNormStrip.substr(4);
+	}
+	else if (starts_with_ci(path2checkNormStrip, "file:\\\\"))
+	{
+		path2checkNormStrip = path2checkNormStrip.substr(5);
+	}
+
+	// a valid net-path starting with double-backslash?
+	if ((path2checkNormStrip.length() < 3) || (path2checkNormStrip[0] != L'\\') || (path2checkNormStrip[1] != L'\\'))
+		return false;
+
+	// extract the server name between the prefix and the next backslash
+	const size_t serverStartPos = 2;
+	size_t serverEndPos = path2checkNormStrip.find('\\', serverStartPos);
+	if ((serverEndPos == std::wstring::npos) || (serverEndPos == serverStartPos))
+		return false; // invalid, missing a share file specification after
+
+	serverNameOutput = path2checkNormStrip.substr(serverStartPos, serverEndPos - serverStartPos);
+
+	return true;
+}
+
+bool NppParameters::makeDefaultServerWhiteList(bool bSave2File)
+{
+	if (_pXmlServerWhiteListDoc)
+	{
+		NppXml::reset(_pXmlServerWhiteListDoc);
+	}
+	else
+	{
+		_pXmlServerWhiteListDoc = new NppXml::NewDocument();
+		if (!_pXmlServerWhiteListDoc)
+			return false;
+	}
+
+	NppXml::createNewDeclaration(_pXmlServerWhiteListDoc);
+	NppXml::Element root = NppXml::createChildElement(_pXmlServerWhiteListDoc, "NotepadPlus");
+
+	NppXml::Element childElement = NppXml::createChildElement(root, "NetworkPathsAlwaysAction");
+	NppXml::setAttribute(childElement, "value", "?"); // default (networkPathAlwaysAsk)
+
+	return bSave2File ? NppXml::saveServerWhiteList(_pXmlServerWhiteListDoc, _serverWhiteListPath) : true;
+}
+
+bool NppParameters::addServerToWhiteList(const char* netpath, bool bCaseSensitive)
+{
+	if (!netpath)
+		return false;
+
+	std::string netpathServerName;
+	if (!getServerName(netpath, netpathServerName))
+		return false;
+
+	if (!_pXmlServerWhiteListDoc)
+	{
+		if (!makeDefaultServerWhiteList(false))
+			return false;
+	}
+
+	NppXml::Element root = NppXml::firstChildElement(_pXmlServerWhiteListDoc, "NotepadPlus");
+	if (!root)
+		return false;
+
+	for (NppXml::Element childNode = NppXml::firstChildElement(root, "ServerAllowed");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "ServerAllowed"))
+	{
+		std::string allowedItem = NppXml::attribute(childNode, "name");
+		if (bCaseSensitive)
+		{
+			if (netpathServerName == allowedItem)
+				return true; // already there
+		}
+		else
+		{
+			// Windows default
+			if (_stricmp(netpathServerName.c_str(), allowedItem.c_str()) == 0)
+				return true; // already there
+		}
+	}
+
+	// add new record
+	NppXml::Element elementServerAllowed = NppXml::createChildElement(root, "ServerAllowed");
+	NppXml::setAttribute(elementServerAllowed, "name", netpathServerName);
+
+	return NppXml::saveServerWhiteList(_pXmlServerWhiteListDoc, _serverWhiteListPath);
+}
+
+bool NppParameters::setNetworkPathAlwaysActionInServerWhitelist(NetworkPathAlwaysAction mode)
+{
+	if (!_pXmlServerWhiteListDoc)
+	{
+		if (!makeDefaultServerWhiteList(false))
+			return false;
+	}
+
+	NppXml::Element root = NppXml::firstChildElement(_pXmlServerWhiteListDoc, "NotepadPlus");
+	if (root)
+	{
+		NppXml::Element childNode = NppXml::firstChildElement(root, "NetworkPathsAlwaysAction");
+		if (childNode)
+		{
+			switch (mode)
+			{
+				case networkPathAlwaysAsk:
+					NppXml::setAttribute(childNode, "value", "?");
+					break;
+				case networkPathAlwaysSkip:
+					NppXml::setAttribute(childNode, "value", "!");
+					break;
+				case networkPathAlwaysLoad:
+					NppXml::setAttribute(childNode, "value", "*");
+					break;
+				default:
+					assert(false);
+					return false; // unknown
+			}
+
+			_networkPathAlwaysAction = mode;
+
+			return NppXml::saveServerWhiteList(_pXmlServerWhiteListDoc, _serverWhiteListPath);
+		}
+	}
+
+	return false;
+}
+
+bool NppParameters::getSessionFromXmlTree(const NppXml::Document& pSessionDoc, Session& session, const std::wstring& sessionDocFileName, bool detectNetworkPath)
+{
+	if (!pSessionDoc)
+		return false;
+
+	NppXml::Element root = NppXml::firstChildElement(pSessionDoc, "NotepadPlus");
+	if (!root)
+		return false;
+
+	NppXml::Element sessionRoot = NppXml::firstChildElement(root, "Session");
 	if (!sessionRoot)
 		return false;
 
-	TiXmlElement *actView = sessionRoot->ToElement();
-	int index = 0;
-	const TCHAR *str = actView->Attribute(TEXT("activeView"), &index);
-	if (str)
+	bool bNeedsSessionXmlFileUpdateAfter = false;
+
+	const int index = NppXml::intAttribute(sessionRoot, "activeView", -1);
+	if (index >= 0)
 	{
 		session._activeView = index;
 	}
 
-	const size_t nbView = 2;
-	TiXmlNode *viewRoots[nbView];
-	viewRoots[0] = sessionRoot->FirstChildElement(TEXT("mainView"));
-	viewRoots[1] = sessionRoot->FirstChildElement(TEXT("subView"));
+	WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
+
+	static constexpr size_t nbView = 2;
+	NppXml::Element viewRoots[nbView] {
+		NppXml::firstChildElement(sessionRoot, "mainView"),
+		NppXml::firstChildElement(sessionRoot, "subView")
+	};
+
+	HINSTANCE hInst = ::GetModuleHandle(nullptr);
+	HWND nppHwnd = ::FindWindow(Notepad_plus_Window::getClassName(), NULL);
+
+	bool isNppExit = false;
+	if (g_bNppExitFlag.load())
+		isNppExit = true; // NetworkPathWarning should not be shown at the Notepad++ exit
+
 	for (size_t k = 0; k < nbView; ++k)
 	{
 		if (viewRoots[k])
 		{
-			int index2 = 0;
-			TiXmlElement *actIndex = viewRoots[k]->ToElement();
-			str = actIndex->Attribute(TEXT("activeIndex"), &index2);
-			if (str)
+			const int index2 = NppXml::intAttribute(viewRoots[k], "activeIndex", -1);
+			if (index2 >= 0)
 			{
 				if (k == 0)
 					session._activeMainIndex = index2;
 				else // k == 1
 					session._activeSubIndex = index2;
 			}
-			for (TiXmlNode *childNode = viewRoots[k]->FirstChildElement(TEXT("File"));
-				childNode ;
-				childNode = childNode->NextSibling(TEXT("File")) )
+
+			for (NppXml::Element childNode = NppXml::firstChildElement(viewRoots[k], "File"), nextNode;
+				childNode;
+				childNode = nextNode)
 			{
-				const TCHAR *fileName = (childNode->ToElement())->Attribute(TEXT("filename"));
+				// cache the possible next sibling before doing anything else (nodes can be removed further in the cycle...)
+				nextNode = NppXml::nextSiblingElement(childNode, "File");
+
+				const char* fileName = NppXml::attribute(childNode, "filename");
 				if (fileName)
 				{
-					Position position;
-					const TCHAR* posStr = (childNode->ToElement())->Attribute(TEXT("firstVisibleLine"));
-					if (posStr)
-						position._firstVisibleLine = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("xOffset"));
-					if (posStr)
-						position._xOffset = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("startPos"));
-					if (posStr)
-						position._startPos = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("endPos"));
-					if (posStr)
-						position._endPos = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("selMode"));
-					if (posStr)
-						position._selMode = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("scrollWidth"));
-					if (posStr)
-						position._scrollWidth = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("offset"));
-					if (posStr)
-						position._offset = static_cast<intptr_t>(_ttoi64(posStr));
-					posStr = (childNode->ToElement())->Attribute(TEXT("wrapCount"));
-					if (posStr)
-						position._wrapCount = static_cast<intptr_t>(_ttoi64(posStr));
+					const std::wstring wstrFileName = string2wstring(fileName);
 
-					MapPosition mapPosition;
-					const TCHAR* mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapFirstVisibleDisplayLine"));
-					if (mapPosStr)
-						mapPosition._firstVisibleDisplayLine = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapFirstVisibleDocLine"));
-					if (mapPosStr)
-						mapPosition._firstVisibleDocLine = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapLastVisibleDocLine"));
-					if (mapPosStr)
-						mapPosition._lastVisibleDocLine = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapNbLine"));
-					if (mapPosStr)
-						mapPosition._nbLine = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapHigherPos"));
-					if (mapPosStr)
-						mapPosition._higherPos = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapWidth"));
-					if (mapPosStr)
-						mapPosition._width = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapHeight"));
-					if (mapPosStr)
-						mapPosition._height = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapKByteInDoc"));
-					if (mapPosStr)
-						mapPosition._KByteInDoc = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					mapPosStr = (childNode->ToElement())->Attribute(TEXT("mapWrapIndentMode"));
-					if (mapPosStr)
-						mapPosition._wrapIndentMode = static_cast<intptr_t>(_ttoi64(mapPosStr));
-					const TCHAR *boolStr = (childNode->ToElement())->Attribute(TEXT("mapIsWrap"));
-					if (boolStr)
-						mapPosition._isWrap = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-					const TCHAR *langName;
-					langName = (childNode->ToElement())->Attribute(TEXT("lang"));
-					int encoding = -1;
-					const TCHAR *encStr = (childNode->ToElement())->Attribute(TEXT("encoding"), &encoding);
-					const TCHAR *backupFilePath = (childNode->ToElement())->Attribute(TEXT("backupFilePath"));
-
-					FILETIME fileModifiedTimestamp{};
-					(childNode->ToElement())->Attribute(TEXT("originalFileLastModifTimestamp"), reinterpret_cast<int32_t*>(&fileModifiedTimestamp.dwLowDateTime));
-					(childNode->ToElement())->Attribute(TEXT("originalFileLastModifTimestampHigh"), reinterpret_cast<int32_t*>(&fileModifiedTimestamp.dwHighDateTime));
-
-					bool isUserReadOnly = false;
-					const TCHAR *boolStrReadOnly = (childNode->ToElement())->Attribute(TEXT("userReadOnly"));
-					if (boolStrReadOnly)
-						isUserReadOnly = _wcsicmp(TEXT("yes"), boolStrReadOnly) == 0;
-
-					sessionFileInfo sfi(fileName, langName, encStr ? encoding : -1, isUserReadOnly, position, backupFilePath, fileModifiedTimestamp, mapPosition);
-
-					const TCHAR* intStrTabColour = (childNode->ToElement())->Attribute(TEXT("tabColourId"));
-					if (intStrTabColour)
+					if (!isNppExit && detectNetworkPath && isUncPath(wstrFileName))
 					{
-						sfi._individualTabColour = _wtoi(intStrTabColour);
-					}
-
-					const TCHAR* rtlStr = (childNode->ToElement())->Attribute(TEXT("RTL"));
-					if (rtlStr)
-					{
-						sfi._isRTL = _wcsicmp(TEXT("yes"), rtlStr) == 0;
-					}
-
-					for (TiXmlNode *markNode = childNode->FirstChildElement(TEXT("Mark"));
-						markNode;
-						markNode = markNode->NextSibling(TEXT("Mark")))
-					{
-						const TCHAR* lineNumberStr = (markNode->ToElement())->Attribute(TEXT("line"));
-						if (lineNumberStr)
+						if (!isServerAllowed(fileName)) // is in the serverWhiteList.xml ?
 						{
-							sfi._marks.push_back(static_cast<size_t>(_ttoi64(lineNumberStr)));
+							if (_networkPathAlwaysAction == networkPathAlwaysAsk)
+							{
+								NetworkPathWarningBox networkPathWarningBox;
+								networkPathWarningBox.init(hInst, nppHwnd, wstrFileName);
+								networkPathWarningBox.doDialog(_pNativeLangSpeaker ? _pNativeLangSpeaker->isRTL() : false);
+								int buttonID = networkPathWarningBox.getClickedButtonId();
+								networkPathWarningBox.destroy();
+
+								if (buttonID == IDCANCEL || buttonID == IDNO) // Skip once or Always skip
+								{
+									// as the Skip or AlwaysSkip causes the current filename will not be in the Notepad++ session anymore,
+									// it is important to update also the current session.xml content on disk accordingly,
+									// otherwise any subsequent indirect Notepad++ app launching (e.g. via the NppShell context menu)
+									// causes this getSessionFromXmlTree will check old out-of-date session.xml content
+									bNeedsSessionXmlFileUpdateAfter = true;
+									NppXml::deleteChild(viewRoots[k], childNode);
+									continue;
+								}
+							}
+							else if (_networkPathAlwaysAction == networkPathAlwaysSkip)
+							{
+								bNeedsSessionXmlFileUpdateAfter = true;
+								NppXml::deleteChild(viewRoots[k], childNode);
+								continue;
+							}
+							else if (_networkPathAlwaysAction == networkPathAlwaysLoad)
+							{
+								// do nothing, continue to load the file
+							}
 						}
 					}
 
-					for (TiXmlNode *foldNode = childNode->FirstChildElement(TEXT("Fold"));
-						foldNode;
-						foldNode = foldNode->NextSibling(TEXT("Fold")))
+					Position position{
+						._firstVisibleLine = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "firstVisibleLine", 0)),
+						._startPos = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "startPos", 0)),
+						._endPos = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "endPos", 0)),
+						._xOffset = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "xOffset", 0)),
+						._selMode = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "selMode", 0)),
+						._scrollWidth = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "scrollWidth", 1)),
+						._offset = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "offset", 0)),
+						._wrapCount = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "wrapCount", 0))
+					};
+
+					MapPosition mapPosition{
+						._firstVisibleDisplayLine = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapFirstVisibleDisplayLine", -1)),
+						._firstVisibleDocLine = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapFirstVisibleDocLine", -1)),
+						._lastVisibleDocLine = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapLastVisibleDocLine", -1)),
+						._nbLine = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapNbLine", -1)),
+						._higherPos = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapHigherPos", -1)),
+						._width = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapWidth", -1)),
+						._height = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapHeight", -1)),
+						._wrapIndentMode = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapWrapIndentMode", -1)),
+						._KByteInDoc = static_cast<intptr_t>(NppXml::int64Attribute(childNode, "mapKByteInDoc", MapPosition::getMaxPeekLenInKB())),
+						._isWrap = getBoolAttribute(childNode, "mapIsWrap")
+					};
+
+					const char* langName = NppXml::attribute(childNode, "lang");
+					const std::wstring wstrLangName = langName ? string2wstring(langName) : L"";
+
+					const char* backupFilePath = NppXml::attribute(childNode, "backupFilePath");
+					const std::wstring wstrBackupFilePath = wmc.char2wchar(backupFilePath ? backupFilePath : "", CP_UTF8);
+
+					if (!isNppExit && detectNetworkPath && isUncPath(wstrBackupFilePath))
 					{
-						const TCHAR *lineNumberStr = (foldNode->ToElement())->Attribute(TEXT("line"));
-						if (lineNumberStr)
+						if (!isServerAllowed(backupFilePath)) // is in the serverWhiteList.xml ?
 						{
-							sfi._foldStates.push_back(static_cast<size_t>(_ttoi64(lineNumberStr)));
+							if (_networkPathAlwaysAction == networkPathAlwaysAsk)
+							{
+								NetworkPathWarningBox networkPathWarningBox;
+								networkPathWarningBox.init(hInst, nppHwnd, wstrBackupFilePath);
+								networkPathWarningBox.doDialog(_pNativeLangSpeaker ? _pNativeLangSpeaker->isRTL() : false);
+								int buttonID = networkPathWarningBox.getClickedButtonId();
+								networkPathWarningBox.destroy();
+
+								if (buttonID == IDCANCEL || buttonID == IDNO) // Skip once or Always skip
+								{
+									bNeedsSessionXmlFileUpdateAfter = true;
+									NppXml::deleteChild(viewRoots[k], childNode);
+									continue;
+								}
+							}
+							else if (_networkPathAlwaysAction == networkPathAlwaysSkip)
+							{
+								bNeedsSessionXmlFileUpdateAfter = true;
+								NppXml::deleteChild(viewRoots[k], childNode);
+								continue;
+							}
+							else if (_networkPathAlwaysAction == networkPathAlwaysLoad)
+							{
+								// do nothing, continue to load the file
+							}
+						}
+					}
+
+					wchar_t normalizedBackupFilePath[MAX_PATH]{};
+
+					if (!wstrBackupFilePath.empty() && (wstrBackupFilePath.length() < MAX_PATH))
+					{
+						std::wstring sanitizedPath = wstrBackupFilePath;
+						std::replace(sanitizedPath.begin(), sanitizedPath.end(), L'/', L'\\');
+
+						if (!::PathCanonicalize(normalizedBackupFilePath, sanitizedPath.c_str()))
+							normalizedBackupFilePath[0] = L'\0'; // treat failure as "no path" -> falls through to reconstruction below
+					}
+					else if (!wstrBackupFilePath.empty())
+					{
+						const wchar_t* fn = ::PathFindFileNameW(wstrBackupFilePath.c_str());
+						static_cast<void>(::StringCchCopyW(normalizedBackupFilePath, MAX_PATH, fn));
+					}
+
+					std::wstring currentBackupFilePath = NppParameters::getInstance().getUserPath() + L"\\backup\\";
+
+					wchar_t normalizedBackupDir[MAX_PATH]{};
+					if (::GetFullPathNameW(currentBackupFilePath.c_str(), MAX_PATH, normalizedBackupDir, NULL) == 0)
+						static_cast<void>(::StringCchCopyW(normalizedBackupDir, MAX_PATH, currentBackupFilePath.c_str()));
+
+					if (normalizedBackupFilePath[0])
+					{
+						const std::wstring backupFilePathW = normalizedBackupFilePath;
+						bool isConfined = false;
+						size_t normalizedBackupDirLen = wcslen(normalizedBackupDir);
+						if (backupFilePathW.size() >= normalizedBackupDirLen)
+						{
+							int res = ::CompareStringOrdinal(backupFilePathW.c_str(), static_cast<int>(normalizedBackupDirLen), normalizedBackupDir, static_cast<int>(normalizedBackupDirLen), TRUE);
+							isConfined = res == CSTR_EQUAL;
+						}
+
+						if (!isConfined)
+						{
+							// reconstruct backupFilePath
+							wchar_t* fn = ::PathFindFileNameW(normalizedBackupFilePath);
+
+							std::wstring safePath = normalizedBackupDir;
+							safePath += fn;
+							static_cast<void>(::StringCchCopyW(normalizedBackupFilePath, MAX_PATH, safePath.c_str()));
+						}
+					}
+
+					FILETIME fileModifiedTimestamp {
+						.dwLowDateTime = static_cast<DWORD>(NppXml::uint64Attribute(childNode, "originalFileLastModifTimestamp", 0)),
+						.dwHighDateTime = static_cast<DWORD>(NppXml::uint64Attribute(childNode, "originalFileLastModifTimestampHigh", 0))
+					};
+
+					const int encoding = NppXml::intAttribute(childNode, "encoding", -1);
+
+					const bool isUserReadOnly = getBoolAttribute(childNode, "userReadOnly");
+					const bool isPinned = getBoolAttribute(childNode, "tabPinned");
+					const bool isUntitleTabRenamed = getBoolAttribute(childNode, "untitleTabRenamed");
+
+					sessionFileInfo sfi(wstrFileName.c_str(), wstrLangName.c_str(), encoding,
+						isUserReadOnly, isPinned, isUntitleTabRenamed,
+						position, normalizedBackupFilePath, fileModifiedTimestamp, mapPosition);
+
+					sfi._individualTabColour = NppXml::intAttribute(childNode, "tabColourId", -1);
+					sfi._isRTL = getBoolAttribute(childNode, "RTL");
+
+					for (NppXml::Element markNode = NppXml::firstChildElement(childNode, "Mark");
+						markNode;
+						markNode = NppXml::nextSiblingElement(markNode, "Mark"))
+					{
+						const auto lineNumber = static_cast<intptr_t>(NppXml::int64Attribute(markNode, "line", -1));
+						if (lineNumber > -1)
+						{
+							sfi._marks.push_back(static_cast<size_t>(lineNumber));
+						}
+					}
+
+					for (NppXml::Element foldNode = NppXml::firstChildElement(childNode, "Fold");
+						foldNode;
+						foldNode = NppXml::nextSiblingElement(foldNode, "Fold"))
+					{
+						const auto lineNumber = static_cast<intptr_t>(NppXml::int64Attribute(foldNode, "line", -1));
+						if (lineNumber > -1)
+						{
+							sfi._foldStates.push_back(static_cast<size_t>(lineNumber));
 						}
 					}
 					if (k == 0)
@@ -2525,347 +3658,387 @@ bool NppParameters::getSessionFromXmlTree(TiXmlDocument *pSessionDoc, Session& s
 	}
 
 	// Node structure and naming corresponds to config.xml
-	TiXmlNode *fileBrowserRoot = sessionRoot->FirstChildElement(TEXT("FileBrowser"));
+	NppXml::Element fileBrowserRoot = NppXml::firstChildElement(sessionRoot, "FileBrowser");
 	if (fileBrowserRoot)
 	{
-		const TCHAR *selectedItemPath = (fileBrowserRoot->ToElement())->Attribute(TEXT("latestSelectedItem"));
-		if (selectedItemPath)
+		const char* selectedItemPath = NppXml::attribute(fileBrowserRoot, "latestSelectedItem");
+		if (selectedItemPath && selectedItemPath[0])
 		{
-			session._fileBrowserSelectedItem = selectedItemPath;
+			session._fileBrowserSelectedItem = string2wstring(selectedItemPath);
 		}
 
-		for (TiXmlNode *childNode = fileBrowserRoot->FirstChildElement(TEXT("root"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(fileBrowserRoot, "root"), nextNode;
 			childNode;
-			childNode = childNode->NextSibling(TEXT("root")))
+			childNode = nextNode)
 		{
-			const TCHAR *fileName = (childNode->ToElement())->Attribute(TEXT("foldername"));
-			if (fileName)
+			// cache the possible next sibling before doing anything else (nodes can be removed further in the cycle...)
+			nextNode = NppXml::nextSiblingElement(childNode, "root");
+
+			const char* fileName = NppXml::attribute(childNode, "foldername");
+			if (fileName && fileName[0])
 			{
-				session._fileBrowserRoots.push_back({ fileName });
+				std::wstring rootFolder = string2wstring(fileName);
+
+				if (!isNppExit && detectNetworkPath && isUncPath(rootFolder))
+				{
+					if (!isServerAllowed(fileName)) // is in the serverWhiteList.xml ?
+					{
+						if (_networkPathAlwaysAction == networkPathAlwaysAsk)
+						{
+							NetworkPathWarningBox networkPathWarningBox;
+							networkPathWarningBox.init(hInst, nppHwnd, rootFolder);
+							networkPathWarningBox.doDialog(_pNativeLangSpeaker ? _pNativeLangSpeaker->isRTL() : false);
+							int buttonID = networkPathWarningBox.getClickedButtonId();
+							networkPathWarningBox.destroy();
+
+							if (buttonID == IDCANCEL || buttonID == IDNO) // Skip once or Always skip
+							{
+								bNeedsSessionXmlFileUpdateAfter = true;
+								NppXml::deleteChild(fileBrowserRoot, childNode);
+								continue;
+							}
+						}
+						else if (_networkPathAlwaysAction == networkPathAlwaysSkip)
+						{
+							bNeedsSessionXmlFileUpdateAfter = true;
+							NppXml::deleteChild(fileBrowserRoot, childNode);
+							continue;
+						}
+						else if (_networkPathAlwaysAction == networkPathAlwaysLoad)
+						{
+							// do nothing, continue to load the file
+						}
+					}
+				}
+
+				std::wstring lowerRoot = stringToLower(rootFolder);
+				FileBrowserRootsInfo fileRootInfo(std::move(rootFolder));
+
+				std::unordered_set<std::wstring> seenLower;
+				for (NppXml::Element expNode = NppXml::firstChildElement(childNode, "expanded");
+					expNode;
+					expNode = NppXml::nextSiblingElement(expNode, "expanded"))
+				{
+					const char* pathAttr = NppXml::attribute(expNode, "path");
+					if (!pathAttr || !pathAttr[0])
+						continue;
+
+					std::wstring expandedPath = string2wstring(pathAttr);
+					std::wstring lowerExpanded = stringToLower(expandedPath);
+
+					if (lowerExpanded.rfind(lowerRoot, 0) != 0)
+						continue;
+
+					auto [it, inserted] = seenLower.insert(std::move(lowerExpanded));
+					if (!inserted)
+						continue;
+
+					fileRootInfo._expandedPaths.insert(std::move(expandedPath));
+				}
+
+				session._fileBrowserRoots.push_back(std::move(fileRootInfo));
 			}
 		}
 	}
 
+	if (bNeedsSessionXmlFileUpdateAfter && !sessionDocFileName.empty())
+		static_cast<void>(NppXml::saveFile(pSessionDoc, sessionDocFileName));
+
 	return true;
 }
 
-void NppParameters::feedFileListParameters(TiXmlNode *node)
+void NppParameters::feedFileListParameters(const NppXml::Element& element)
 {
-	TiXmlNode *historyRoot = node->FirstChildElement(TEXT("History"));
+	NppXml::Element historyRoot = NppXml::firstChildElement(element, "History");
 	if (!historyRoot) return;
 
 	// nbMaxFile value
-	int nbMaxFile = _nbMaxRecentFile;
-	const TCHAR *strVal = (historyRoot->ToElement())->Attribute(TEXT("nbMaxFile"), &nbMaxFile);
-	if (strVal && (nbMaxFile >= 0) && (nbMaxFile <= NB_MAX_LRF_FILE))
-		_nbMaxRecentFile = nbMaxFile;
+	_nbMaxRecentFile = getRangeClampAttribute<UINT>(historyRoot, "nbMaxFile", 0, static_cast<UINT>(NB_MAX_LRF_FILE), _nbMaxRecentFile);
 
 	// customLen value
-	int customLen = RECENTFILES_SHOWFULLPATH;
-	strVal = (historyRoot->ToElement())->Attribute(TEXT("customLength"), &customLen);
-	if (strVal)
-		_recentFileCustomLength = std::min<int>(customLen, NB_MAX_LRF_CUSTOMLENGTH);
+	const int customLen = NppXml::intAttribute(historyRoot, "customLength", RECENTFILES_SHOWFULLPATH);
+	_recentFileCustomLength = std::min<int>(customLen, NB_MAX_LRF_CUSTOMLENGTH);
 
 	// inSubMenu value
-	strVal = (historyRoot->ToElement())->Attribute(TEXT("inSubMenu"));
-	if (strVal)
-		_putRecentFileInSubMenu = (lstrcmp(strVal, TEXT("yes")) == 0);
+	_putRecentFileInSubMenu = getBoolAttribute(historyRoot, "inSubMenu");
 
-	for (TiXmlNode *childNode = historyRoot->FirstChildElement(TEXT("File"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(historyRoot, "File");
 		childNode && (_nbRecentFile < NB_MAX_LRF_FILE);
-		childNode = childNode->NextSibling(TEXT("File")) )
+		childNode = NppXml::nextSiblingElement(childNode, "File"))
 	{
-		const TCHAR *filePath = (childNode->ToElement())->Attribute(TEXT("filename"));
-		if (filePath)
+		const std::wstring filePath = string2wstring(NppXml::attribute(childNode, "filename", ""));
+		if (!filePath.empty())
 		{
-			_LRFileList[_nbRecentFile] = new std::wstring(filePath);
+			_LRFileList[_nbRecentFile] = std::make_unique<std::wstring>(filePath);
 			++_nbRecentFile;
 		}
 	}
 }
 
-void NppParameters::feedFileBrowserParameters(TiXmlNode *node)
+void NppParameters::feedFileBrowserParameters(const NppXml::Element& element)
 {
-	TiXmlNode *fileBrowserRoot = node->FirstChildElement(TEXT("FileBrowser"));
+	NppXml::Element fileBrowserRoot = NppXml::firstChildElement(element, "FileBrowser");
 	if (!fileBrowserRoot) return;
 
-	const TCHAR *selectedItemPath = (fileBrowserRoot->ToElement())->Attribute(TEXT("latestSelectedItem"));
-	if (selectedItemPath)
+	const char* selectedItemPath = NppXml::attribute(fileBrowserRoot, "latestSelectedItem");
+	if (selectedItemPath && selectedItemPath[0])
 	{
-		_fileBrowserSelectedItemPath = selectedItemPath;
+		_fileBrowserSelectedItemPath = string2wstring(selectedItemPath);
 	}
 
-	for (TiXmlNode *childNode = fileBrowserRoot->FirstChildElement(TEXT("root"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(fileBrowserRoot, "root");
 		childNode;
-		childNode = childNode->NextSibling(TEXT("root")) )
+		childNode = NppXml::nextSiblingElement(childNode, "root"))
 	{
-		const TCHAR *filePath = (childNode->ToElement())->Attribute(TEXT("foldername"));
-		if (filePath)
+		const char* filePath = NppXml::attribute(childNode, "foldername");
+		if (filePath && filePath[0])
 		{
-			_fileBrowserRoot.push_back(filePath);
+			std::wstring rootFolder = string2wstring(filePath);
+			std::wstring lowerRoot = stringToLower(rootFolder);
+			FileBrowserRootsInfo fileRootInfo(std::move(rootFolder));
+
+			std::unordered_set<std::wstring> seenLower;
+			for (NppXml::Element expNode = NppXml::firstChildElement(childNode, "expanded");
+				expNode;
+				expNode = NppXml::nextSiblingElement(expNode, "expanded"))
+			{
+				const char* pathAttr = NppXml::attribute(expNode, "path");
+				if (!pathAttr || !pathAttr[0])
+					continue;
+
+				std::wstring expandedPath = string2wstring(pathAttr);
+				std::wstring lowerExpanded = stringToLower(expandedPath);
+
+				if (lowerExpanded.rfind(lowerRoot, 0) != 0)
+					continue;
+
+				auto [it, inserted] = seenLower.insert(std::move(lowerExpanded));
+				if (!inserted)
+					continue;
+
+				fileRootInfo._expandedPaths.insert(std::move(expandedPath));
+			}
+
+			_fileBrowserRoots.push_back(fileRootInfo);
 		}
 	}
 }
 
-void NppParameters::feedProjectPanelsParameters(TiXmlNode *node)
+void NppParameters::feedProjectPanelsParameters(const NppXml::Element& element)
 {
-	TiXmlNode *projPanelRoot = node->FirstChildElement(TEXT("ProjectPanels"));
+	NppXml::Element projPanelRoot = NppXml::firstChildElement(element, "ProjectPanels");
 	if (!projPanelRoot) return;
 
-	for (TiXmlNode *childNode = projPanelRoot->FirstChildElement(TEXT("ProjectPanel"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(projPanelRoot, "ProjectPanel");
 		childNode;
-		childNode = childNode->NextSibling(TEXT("ProjectPanel")) )
+		childNode = NppXml::nextSiblingElement(childNode, "ProjectPanel"))
 	{
-		int index = 0;
-		const TCHAR *idStr = (childNode->ToElement())->Attribute(TEXT("id"), &index);
-		if (idStr && (index >= 0 && index <= 2))
+		const int index = NppXml::intAttribute(childNode, "id", 0);
+		if (index >= 0 && index <= 2)
 		{
-			const TCHAR *filePath = (childNode->ToElement())->Attribute(TEXT("workSpaceFile"));
-			if (filePath)
+			const char* filePath = NppXml::attribute(childNode, "workSpaceFile");
+			if (filePath && filePath[0])
 			{
-				_workSpaceFilePathes[index] = filePath;
+				_workSpaceFilePaths[index] = string2wstring(filePath);
 			}
 		}
 	}
 }
 
-void NppParameters::feedColumnEditorParameters(TiXmlNode *node)
+void NppParameters::feedColumnEditorParameters(const NppXml::Element& element)
 {
-	TiXmlNode * columnEditorRoot = node->FirstChildElement(TEXT("ColumnEditor"));
+	NppXml::Element  columnEditorRoot = NppXml::firstChildElement(element, "ColumnEditor");
 	if (!columnEditorRoot) return;
 
-	const TCHAR* strVal = (columnEditorRoot->ToElement())->Attribute(TEXT("choice"));
+	const char* strVal = NppXml::attribute(columnEditorRoot, "choice");
 	if (strVal)
 	{
-		if (lstrcmp(strVal, TEXT("text")) == 0)
+		if (std::strcmp(strVal, "text") == 0)
 			_columnEditParam._mainChoice = activeText;
 		else
 			_columnEditParam._mainChoice = activeNumeric;
 	}
-	TiXmlNode *childNode = columnEditorRoot->FirstChildElement(TEXT("text"));
+	NppXml::Element childNode = NppXml::firstChildElement(columnEditorRoot, "text");
 	if (!childNode) return;
 
-	const TCHAR* content = (childNode->ToElement())->Attribute(TEXT("content"));
-	if (content)
+	const char* content = NppXml::attribute(childNode, "content");
+	if (content && content[0])
 	{
-		_columnEditParam._insertedTextContent = content;
+		_columnEditParam._insertedTextContent = string2wstring(content);
 	}
 
-	childNode = columnEditorRoot->FirstChildElement(TEXT("number"));
+	childNode = NppXml::firstChildElement(columnEditorRoot, "number");
 	if (!childNode) return;
 
-	int val;
-	strVal = (childNode->ToElement())->Attribute(TEXT("initial"), &val);
-	if (strVal)
+	int val = NppXml::intAttribute(childNode, "initial", -1);
+	if (val > -1)
 		_columnEditParam._initialNum = val;
 
-	strVal = (childNode->ToElement())->Attribute(TEXT("increase"), &val);
-	if (strVal)
+	val = NppXml::intAttribute(childNode, "increase", -1);
+	if (val > -1)
 		_columnEditParam._increaseNum = val;
 
-	strVal = (childNode->ToElement())->Attribute(TEXT("repeat"), &val);
-	if (strVal)
+	val = NppXml::intAttribute(childNode, "repeat", -1);
+	if (val > -1)
 		_columnEditParam._repeatNum = val;
 
-	strVal = (childNode->ToElement())->Attribute(TEXT("formatChoice"));
+	strVal = NppXml::attribute(childNode, "formatChoice");
 	if (strVal)
 	{
-		if (lstrcmp(strVal, TEXT("hex")) == 0)
-			_columnEditParam._formatChoice = 1;
-		else if (lstrcmp(strVal, TEXT("oct")) == 0)
-			_columnEditParam._formatChoice = 2;
-		else if (lstrcmp(strVal, TEXT("bin")) == 0)
-			_columnEditParam._formatChoice = 3;
+		using enum NumBase;
+		if (std::strcmp(strVal, "hex") == 0)
+			_columnEditParam._formatChoice = BASE_16;
+		else if (std::strcmp(strVal, "hexuc") == 0)
+			_columnEditParam._formatChoice = BASE_16_UPPERCASE;
+		else if (std::strcmp(strVal, "oct") == 0)
+			_columnEditParam._formatChoice = BASE_08;
+		else if (std::strcmp(strVal, "bin") == 0)
+			_columnEditParam._formatChoice = BASE_02;
 		else // "dec"
-			_columnEditParam._formatChoice = 0;
+			_columnEditParam._formatChoice = BASE_10;
 	}
 
-	strVal = (childNode->ToElement())->Attribute(TEXT("leadingChoice"));
+	strVal = NppXml::attribute(childNode, "leadingChoice");
 	if (strVal)
 	{
-		_columnEditParam._leadingChoice = ColumnEditorParam::noneLeading;
-		if (lstrcmp(strVal, TEXT("zeros")) == 0)
+		using enum ColumnEditorParam::leadingChoice;
+		if (std::strcmp(strVal, "zeros") == 0)
 		{
-			_columnEditParam._leadingChoice = ColumnEditorParam::zeroLeading;
+			_columnEditParam._leadingChoice = zeroLeading;
 		}
-		else if (lstrcmp(strVal, TEXT("spaces")) == 0)
+		else if (std::strcmp(strVal, "spaces") == 0)
 		{
-			_columnEditParam._leadingChoice = ColumnEditorParam::spaceLeading;
+			_columnEditParam._leadingChoice = spaceLeading;
+		}
+		else // "none"
+		{
+			_columnEditParam._leadingChoice = noneLeading;
 		}
 	}
 }
 
-void NppParameters::feedFindHistoryParameters(TiXmlNode *node)
+void NppParameters::feedFindHistoryParameters(const NppXml::Element& element)
 {
-	TiXmlNode *findHistoryRoot = node->FirstChildElement(TEXT("FindHistory"));
+	NppXml::Element findHistoryRoot = NppXml::firstChildElement(element, "FindHistory");
 	if (!findHistoryRoot) return;
 
-	(findHistoryRoot->ToElement())->Attribute(TEXT("nbMaxFindHistoryPath"), &_findHistory._nbMaxFindHistoryPath);
+	_findHistory._nbMaxFindHistoryPath = NppXml::intAttribute(findHistoryRoot, "nbMaxFindHistoryPath", _findHistory._nbMaxFindHistoryPath);
 	if (_findHistory._nbMaxFindHistoryPath > NB_MAX_FINDHISTORY_PATH)
 	{
 		_findHistory._nbMaxFindHistoryPath = NB_MAX_FINDHISTORY_PATH;
 	}
 	if ((_findHistory._nbMaxFindHistoryPath > 0) && (_findHistory._nbMaxFindHistoryPath <= NB_MAX_FINDHISTORY_PATH))
 	{
-		for (TiXmlNode *childNode = findHistoryRoot->FirstChildElement(TEXT("Path"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(findHistoryRoot, "Path");
 			childNode && (_findHistory._findHistoryPaths.size() < NB_MAX_FINDHISTORY_PATH);
-			childNode = childNode->NextSibling(TEXT("Path")) )
+			childNode = NppXml::nextSiblingElement(childNode, "Path"))
 		{
-			const TCHAR *filePath = (childNode->ToElement())->Attribute(TEXT("name"));
+			const char* filePath = NppXml::attribute(childNode, "name");
 			if (filePath)
 			{
-				_findHistory._findHistoryPaths.push_back(std::wstring(filePath));
+				_findHistory._findHistoryPaths.push_back(string2wstring(filePath));
 			}
 		}
 	}
 
-	(findHistoryRoot->ToElement())->Attribute(TEXT("nbMaxFindHistoryFilter"), &_findHistory._nbMaxFindHistoryFilter);
+	_findHistory._nbMaxFindHistoryFilter = NppXml::intAttribute(findHistoryRoot, "nbMaxFindHistoryFilter", _findHistory._nbMaxFindHistoryFilter);
 	if (_findHistory._nbMaxFindHistoryFilter > NB_MAX_FINDHISTORY_FILTER)
 	{
 		_findHistory._nbMaxFindHistoryFilter = NB_MAX_FINDHISTORY_FILTER;
 	}
 	if ((_findHistory._nbMaxFindHistoryFilter > 0) && (_findHistory._nbMaxFindHistoryFilter <= NB_MAX_FINDHISTORY_FILTER))
 	{
-		for (TiXmlNode *childNode = findHistoryRoot->FirstChildElement(TEXT("Filter"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(findHistoryRoot, "Filter");
 			childNode && (_findHistory._findHistoryFilters.size() < NB_MAX_FINDHISTORY_FILTER);
-			childNode = childNode->NextSibling(TEXT("Filter")))
+			childNode = NppXml::nextSiblingElement(childNode, "Filter"))
 		{
-			const TCHAR *fileFilter = (childNode->ToElement())->Attribute(TEXT("name"));
+			const char* fileFilter = NppXml::attribute(childNode, "name");
 			if (fileFilter)
 			{
-				_findHistory._findHistoryFilters.push_back(std::wstring(fileFilter));
+				_findHistory._findHistoryFilters.push_back(string2wstring(fileFilter));
 			}
 		}
 	}
 
-	(findHistoryRoot->ToElement())->Attribute(TEXT("nbMaxFindHistoryFind"), &_findHistory._nbMaxFindHistoryFind);
+	_findHistory._nbMaxFindHistoryFind = NppXml::intAttribute(findHistoryRoot, "nbMaxFindHistoryFind", _findHistory._nbMaxFindHistoryFind);
 	if (_findHistory._nbMaxFindHistoryFind > NB_MAX_FINDHISTORY_FIND)
 	{
 		_findHistory._nbMaxFindHistoryFind = NB_MAX_FINDHISTORY_FIND;
 	}
 	if ((_findHistory._nbMaxFindHistoryFind > 0) && (_findHistory._nbMaxFindHistoryFind <= NB_MAX_FINDHISTORY_FIND))
 	{
-		for (TiXmlNode *childNode = findHistoryRoot->FirstChildElement(TEXT("Find"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(findHistoryRoot, "Find");
 			childNode && (_findHistory._findHistoryFinds.size() < NB_MAX_FINDHISTORY_FIND);
-			childNode = childNode->NextSibling(TEXT("Find")))
+			childNode = NppXml::nextSiblingElement(childNode, "Find"))
 		{
-			const TCHAR *fileFind = (childNode->ToElement())->Attribute(TEXT("name"));
+			const char* fileFind = NppXml::attribute(childNode, "name");
 			if (fileFind)
 			{
-				_findHistory._findHistoryFinds.push_back(std::wstring(fileFind));
+				_findHistory._findHistoryFinds.push_back(string2wstring(fileFind));
 			}
 		}
 	}
 
-	(findHistoryRoot->ToElement())->Attribute(TEXT("nbMaxFindHistoryReplace"), &_findHistory._nbMaxFindHistoryReplace);
+	_findHistory._nbMaxFindHistoryReplace = NppXml::intAttribute(findHistoryRoot, "nbMaxFindHistoryReplace", _findHistory._nbMaxFindHistoryReplace);
 	if (_findHistory._nbMaxFindHistoryReplace > NB_MAX_FINDHISTORY_REPLACE)
 	{
 		_findHistory._nbMaxFindHistoryReplace = NB_MAX_FINDHISTORY_REPLACE;
 	}
 	if ((_findHistory._nbMaxFindHistoryReplace > 0) && (_findHistory._nbMaxFindHistoryReplace <= NB_MAX_FINDHISTORY_REPLACE))
 	{
-		for (TiXmlNode *childNode = findHistoryRoot->FirstChildElement(TEXT("Replace"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(findHistoryRoot, "Replace");
 			childNode && (_findHistory._findHistoryReplaces.size() < NB_MAX_FINDHISTORY_REPLACE);
-			childNode = childNode->NextSibling(TEXT("Replace")))
+			childNode = NppXml::nextSiblingElement(childNode, "Replace"))
 		{
-			const TCHAR *fileReplace = (childNode->ToElement())->Attribute(TEXT("name"));
+			const char* fileReplace = NppXml::attribute(childNode, "name");
 			if (fileReplace)
 			{
-				_findHistory._findHistoryReplaces.push_back(std::wstring(fileReplace));
+				_findHistory._findHistoryReplaces.push_back(string2wstring(fileReplace));
 			}
 		}
 	}
 
-	const TCHAR *boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("matchWord"));
-	if (boolStr)
-		_findHistory._isMatchWord = (lstrcmp(TEXT("yes"), boolStr) == 0);
+	_findHistory._isMatchWord = getBoolAttribute(findHistoryRoot, "matchWord");
+	_findHistory._isMatchCase = getBoolAttribute(findHistoryRoot, "matchCase");
+	_findHistory._isWrap = getBoolAttribute(findHistoryRoot, "wrap", _findHistory._isWrap);
+	_findHistory._isDirectionDown = getBoolAttribute(findHistoryRoot, "directionDown", _findHistory._isDirectionDown);
+	_findHistory._isFifRecursive = getBoolAttribute(findHistoryRoot, "fifRecuisive", _findHistory._isFifRecursive);
+	_findHistory._isFifInHiddenFolder = getBoolAttribute(findHistoryRoot, "fifInHiddenFolder");
+	_findHistory._isFifProjectPanel_1 = getBoolAttribute(findHistoryRoot, "fifProjectPanel1");
+	_findHistory._isFifProjectPanel_2 = getBoolAttribute(findHistoryRoot, "fifProjectPanel2");
+	_findHistory._isFifProjectPanel_3 = getBoolAttribute(findHistoryRoot, "fifProjectPanel3");
+	_findHistory._isFilterFollowDoc = getBoolAttribute(findHistoryRoot, "fifFilterFollowsDoc");
 
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("matchCase"));
-	if (boolStr)
-		_findHistory._isMatchCase = (lstrcmp(TEXT("yes"), boolStr) == 0);
+	{
+		using enum FindHistory::searchMode;
+		_findHistory._searchMode = getRangeDefaultAttribute(findHistoryRoot, "searchMode", normal, regExpr, _findHistory._searchMode);
+	}
 
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("wrap"));
-	if (boolStr)
-		_findHistory._isWrap = (lstrcmp(TEXT("yes"), boolStr) == 0);
+	{
+		using enum FindHistory::transparencyMode;
+		_findHistory._transparencyMode = getRangeDefaultAttribute(findHistoryRoot, "transparencyMode", none, persistent, _findHistory._transparencyMode);
+	}
 
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("directionDown"));
-	if (boolStr)
-		_findHistory._isDirectionDown = (lstrcmp(TEXT("yes"), boolStr) == 0);
+	_findHistory._transparency = getRangeDefaultAttribute(findHistoryRoot, "transparency", 1, 200, _findHistory._transparency);
 
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifRecuisive"));
-	if (boolStr)
-		_findHistory._isFifRecuisive = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifInHiddenFolder"));
-	if (boolStr)
-		_findHistory._isFifInHiddenFolder = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifProjectPanel1"));
-	if (boolStr)
-		_findHistory._isFifProjectPanel_1 = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifProjectPanel2"));
-	if (boolStr)
-		_findHistory._isFifProjectPanel_2 = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifProjectPanel3"));
-	if (boolStr)
-		_findHistory._isFifProjectPanel_3 = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifFilterFollowsDoc"));
-	if (boolStr)
-		_findHistory._isFilterFollowDoc = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("fifFolderFollowsDoc"));
-	if (boolStr)
-		_findHistory._isFolderFollowDoc = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	int mode = 0;
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("searchMode"), &mode);
-	if (boolStr)
-		_findHistory._searchMode = (FindHistory::searchMode)mode;
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("transparencyMode"), &mode);
-	if (boolStr)
-		_findHistory._transparencyMode = (FindHistory::transparencyMode)mode;
-
-	(findHistoryRoot->ToElement())->Attribute(TEXT("transparency"), &_findHistory._transparency);
-	if (_findHistory._transparency <= 0 || _findHistory._transparency > 200)
-		_findHistory._transparency = 150;
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("dotMatchesNewline"));
-	if (boolStr)
-		_findHistory._dotMatchesNewline = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("isSearch2ButtonsMode"));
-	if (boolStr)
-		_findHistory._isSearch2ButtonsMode = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("regexBackward4PowerUser"));
-	if (boolStr)
-		_findHistory._regexBackward4PowerUser = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("bookmarkLine"));
-	if (boolStr)
-		_findHistory._isBookmarkLine = (lstrcmp(TEXT("yes"), boolStr) == 0);
-
-	boolStr = (findHistoryRoot->ToElement())->Attribute(TEXT("purge"));
-	if (boolStr)
-		_findHistory._isPurge = (lstrcmp(TEXT("yes"), boolStr) == 0);
+	_findHistory._dotMatchesNewline = getBoolAttribute(findHistoryRoot, "dotMatchesNewline");
+	_findHistory._isSearch2ButtonsMode = getBoolAttribute(findHistoryRoot, "isSearch2ButtonsMode");
+	_findHistory._regexBackward4PowerUser = getBoolAttribute(findHistoryRoot, "regexBackward4PowerUser");
+	_findHistory._isBookmarkLine = getBoolAttribute(findHistoryRoot, "bookmarkLine");
+	_findHistory._isPurge = getBoolAttribute(findHistoryRoot, "purge");
 }
 
-void NppParameters::feedShortcut(TiXmlNodeA *node)
+void NppParameters::feedShortcut(const NppXml::Element& element)
 {
-	TiXmlNodeA *shortcutsRoot = node->FirstChildElement("InternalCommands");
+	NppXml::Element shortcutsRoot = NppXml::firstChildElement(element, "InternalCommands");
 	if (!shortcutsRoot) return;
 
-	for (TiXmlNodeA *childNode = shortcutsRoot->FirstChildElement("Shortcut");
-		childNode ;
-		childNode = childNode->NextSibling("Shortcut"))
+	for (NppXml::Element childNode = NppXml::firstChildElement(shortcutsRoot, "Shortcut");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Shortcut"))
 	{
-		int id = 0;
-		const char* idStr = (childNode->ToElement())->Attribute("id", &id);
-		if (idStr)
+		const int id = NppXml::intAttribute(childNode, "id", -1);
+		if (id > 0)
 		{
 			//find the commandid that matches this Shortcut sc and alter it, push back its index in the modified list, if not present
 			size_t len = _shortcuts.size();
@@ -2884,112 +4057,161 @@ void NppParameters::feedShortcut(TiXmlNodeA *node)
 	}
 }
 
-void NppParameters::feedMacros(TiXmlNodeA *node)
+void NppParameters::feedMacros(const NppXml::Element& element)
 {
-	TiXmlNodeA *macrosRoot = node->FirstChildElement("Macros");
+	NppXml::Element macrosRoot = NppXml::firstChildElement(element, "Macros");
 	if (!macrosRoot) return;
 
-	for (TiXmlNodeA *childNode = macrosRoot->FirstChildElement("Macro");
-		childNode ;
-		childNode = childNode->NextSibling("Macro"))
+	for (NppXml::Element childNode = NppXml::firstChildElement(macrosRoot, "Macro");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Macro"))
 	{
 		Shortcut sc;
-		string fdnm;
+		std::string fdnm;
 		if (getShortcuts(childNode, sc, &fdnm))
 		{
 			Macro macro;
 			getActions(childNode, macro);
-			int cmdID = ID_MACRO + static_cast<int32_t>(_macros.size());
-			_macros.push_back(MacroShortcut(sc, macro, cmdID));
-			_macroMenuItems.push_back(MenuItemUnit(cmdID, string2wstring(sc.getName(), CP_UTF8), string2wstring(fdnm, CP_UTF8)));
+			const auto cmdID = ID_MACRO + static_cast<int>(_macros.size());
+			_macros.emplace_back(sc, macro, cmdID);
+			_macroMenuItems.emplace_back(cmdID, string2wstring(sc.getName()), string2wstring(fdnm));
 		}
 	}
 }
 
 
-void NppParameters::getActions(TiXmlNodeA *node, Macro & macro)
+void NppParameters::getActions(const NppXml::Element& element, Macro& macro)
 {
-	for (TiXmlNodeA *childNode = node->FirstChildElement("Action");
-		childNode ;
-		childNode = childNode->NextSibling("Action") )
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "Action");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Action") )
 	{
-		int type;
-		const char *typeStr = (childNode->ToElement())->Attribute("type", &type);
-		if ((!typeStr) || (type > 3))
+		const int type = NppXml::intAttribute(childNode, "type", 4);
+		if (type > 3)
 			continue;
 
-		int msg = 0;
-		(childNode->ToElement())->Attribute("message", &msg);
+		const int msg = NppXml::intAttribute(childNode, "message", 0);
+		const int wParam = NppXml::intAttribute(childNode, "wParam", 0);
+		const int lParam = NppXml::intAttribute(childNode, "lParam", 0);
 
-		int wParam = 0;
-		(childNode->ToElement())->Attribute("wParam", &wParam);
+		const char* sParam = NppXml::attribute(childNode, "sParam", "");
 
-		int lParam = 0;
-		(childNode->ToElement())->Attribute("lParam", &lParam);
+		// Normalize end-of-line (EOL) characters for macro steps to address issues with old saved macros
+		// potentially having inconsistent EOL formats due to TinyXML1 and the native API.
+		//
+		// The logic replaces macro steps that use SCI_REPLACESEL with a single EOL with step using SCI_NEWLINE.
+		// Special handling is implemented for previous step that used CR (carriage return) EOL.
+		// If the current step has CRLF or LF, the previous step with CR is removed
+		// to avoid generating consecutive double newlines.
 
-		const char *sParam = (childNode->ToElement())->Attribute("sParam");
-		if (!sParam)
-			sParam = "";
-		recordedMacroStep step(msg, wParam, lParam, sParam, type);
-		if (step.isValid())
-			macro.push_back(step);
+		const bool isPrevMacroCR =
+			!macro.empty()
+			&& macro.back()._message == SCI_REPLACESEL
+			&& macro.back()._sParameter == "\r";
 
+		const bool isCR = std::strcmp(sParam, "\r") == 0;
+
+		if (msg == SCI_REPLACESEL
+			&& sParam[0] != '\0'
+			&& (isCR
+				|| std::strcmp(sParam, "\r\n") == 0
+				|| std::strcmp(sParam, "\n") == 0))
+		{
+			if (isPrevMacroCR)
+			{
+				if (isCR)
+				{
+					macro.back() = recordedMacroStep(SCI_NEWLINE, 0, 0, nullptr, 0);
+				}
+				else
+				{
+					// Remove the last macro step to prevent double newlines.
+					macro.pop_back();
+				}
+			}
+
+			if (isCR)
+			{
+				// Insert the original macro step with SCI_REPLACESEL and CR for later checking.
+				// See check for `isPrevMacroCR`.
+				macro.emplace_back(msg, wParam, lParam, sParam, type);
+			}
+			else
+			{
+				macro.emplace_back(SCI_NEWLINE, 0, 0, nullptr, 0);
+			}
+		}
+		else
+		{
+			if (isPrevMacroCR)
+			{
+				macro.back() = recordedMacroStep(SCI_NEWLINE, 0, 0, nullptr, 0);
+			}
+
+			macro.emplace_back(msg, wParam, lParam, sParam, type);
+		}
+	}
+
+	// Ensure the last macro step is correctly recorded as SCI_NEWLINE if it had an original CR.
+	if (!macro.empty()
+		&& macro.back()._message == SCI_REPLACESEL
+		&& macro.back()._sParameter == "\r")
+	{
+		macro.back() = recordedMacroStep(SCI_NEWLINE, 0, 0, nullptr, 0);
 	}
 }
 
-void NppParameters::feedUserCmds(TiXmlNodeA *node)
+void NppParameters::feedUserCmds(const NppXml::Element& element)
 {
-	TiXmlNodeA *userCmdsRoot = node->FirstChildElement("UserDefinedCommands");
+	NppXml::Element userCmdsRoot = NppXml::firstChildElement(element, "UserDefinedCommands");
 	if (!userCmdsRoot) return;
 
-	for (TiXmlNodeA *childNode = userCmdsRoot->FirstChildElement("Command");
-		childNode ;
-		childNode = childNode->NextSibling("Command") )
+	for (NppXml::Element childNode = NppXml::firstChildElement(userCmdsRoot, "Command");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Command"))
 	{
 		Shortcut sc;
-		string fdnm;
+		std::string fdnm;
 		if (getShortcuts(childNode, sc, &fdnm))
 		{
-			TiXmlNodeA *aNode = childNode->FirstChild();
+			NppXml::Node aNode = NppXml::firstChild(childNode); // text node
 			if (aNode)
 			{
-				const char* cmdStr = aNode->Value();
+				const char* cmdStr = NppXml::getValue(aNode);
 				if (cmdStr)
 				{
-					int cmdID = ID_USER_CMD + static_cast<int32_t>(_userCommands.size());
-					_userCommands.push_back(UserCommand(sc, cmdStr, cmdID));
-					_runMenuItems.push_back(MenuItemUnit(cmdID, string2wstring(sc.getName(), CP_UTF8), string2wstring(fdnm, CP_UTF8)));
+					const auto cmdID = ID_USER_CMD + static_cast<int>(_userCommands.size());
+					_userCommands.emplace_back(sc, cmdStr, cmdID);
+					_runMenuItems.emplace_back(cmdID, string2wstring(sc.getName()), string2wstring(fdnm));
 				}
 			}
 		}
 	}
 }
 
-void NppParameters::feedPluginCustomizedCmds(TiXmlNodeA *node)
+void NppParameters::feedPluginCustomizedCmds(const NppXml::Element& element)
 {
-	TiXmlNodeA *pluginCustomizedCmdsRoot = node->FirstChildElement("PluginCommands");
+	NppXml::Element pluginCustomizedCmdsRoot = NppXml::firstChildElement(element, "PluginCommands");
 	if (!pluginCustomizedCmdsRoot) return;
 
-	for (TiXmlNodeA *childNode = pluginCustomizedCmdsRoot->FirstChildElement("PluginCommand");
-		childNode ;
-		childNode = childNode->NextSibling("PluginCommand") )
+	for (NppXml::Element childNode = NppXml::firstChildElement(pluginCustomizedCmdsRoot, "PluginCommand");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "PluginCommand"))
 	{
-		const char *moduleName = (childNode->ToElement())->Attribute("moduleName");
+		const char *moduleName = NppXml::attribute(childNode, "moduleName");
 		if (!moduleName)
 			continue;
 
-		int internalID = -1;
-		const char *internalIDStr = (childNode->ToElement())->Attribute("internalID", &internalID);
-
-		if (!internalIDStr)
+		const int internalID = NppXml::intAttribute(childNode, "internalID", -1);
+		if (internalID == -1)
 			continue;
 
 		//Find the corresponding plugincommand and alter it, put the index in the list
 		size_t len = _pluginCommands.size();
 		for (size_t i = 0; i < len; ++i)
 		{
-			PluginCmdShortcut & pscOrig = _pluginCommands[i];
-			if (!strnicmp(pscOrig.getModuleName(), moduleName, strlen(moduleName)) && pscOrig.getInternalID() == internalID)
+			PluginCmdShortcut& pscOrig = _pluginCommands[i];
+			if (!::_strnicmp(pscOrig.getModuleName(), moduleName, std::strlen(moduleName)) && pscOrig.getInternalID() == internalID)
 			{
 				//Found matching command
 				getShortcuts(childNode, _pluginCommands[i]);
@@ -3000,31 +4222,29 @@ void NppParameters::feedPluginCustomizedCmds(TiXmlNodeA *node)
 	}
 }
 
-void NppParameters::feedScintKeys(TiXmlNodeA *node)
+void NppParameters::feedScintKeys(const NppXml::Element& element)
 {
-	TiXmlNodeA *scintKeysRoot = node->FirstChildElement("ScintillaKeys");
+	NppXml::Element scintKeysRoot = NppXml::firstChildElement(element, "ScintillaKeys");
 	if (!scintKeysRoot) return;
 
-	for (TiXmlNodeA *childNode = scintKeysRoot->FirstChildElement("ScintKey");
-		childNode ;
-		childNode = childNode->NextSibling("ScintKey") )
+	for (NppXml::Element childNode = NppXml::firstChildElement(scintKeysRoot, "ScintKey");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "ScintKey"))
 	{
-		int scintKey;
-		const char *keyStr = (childNode->ToElement())->Attribute("ScintID", &scintKey);
-		if (!keyStr)
+		const int scintKey = NppXml::intAttribute(childNode, "ScintID", -1);
+		if (scintKey == -1)
 			continue;
 
-		int menuID;
-		keyStr = (childNode->ToElement())->Attribute("menuCmdID", &menuID);
-		if (!keyStr)
+		const int menuID = NppXml::intAttribute(childNode, "menuCmdID", -1);
+		if (menuID == -1)
 			continue;
 
 		//Find the corresponding scintillacommand and alter it, put the index in the list
 		size_t len = _scintillaKeyCommands.size();
-		for (int32_t i = 0; i < static_cast<int32_t>(len); ++i)
+		for (int i = 0; i < static_cast<int>(len); ++i)
 		{
 			ScintillaKeyMap & skmOrig = _scintillaKeyCommands[i];
-			if (skmOrig.getScintillaKeyID() == (unsigned long)scintKey && skmOrig.getMenuCmdID() == menuID)
+			if (skmOrig.getScintillaKeyID() == static_cast<unsigned long>(scintKey) && skmOrig.getMenuCmdID() == menuID)
 			{
 				//Found matching command
 				_scintillaKeyCommands[i].clearDups();
@@ -3032,28 +4252,27 @@ void NppParameters::feedScintKeys(TiXmlNodeA *node)
 				_scintillaKeyCommands[i].setKeyComboByIndex(0, _scintillaKeyCommands[i].getKeyCombo());
 				addScintillaModifiedIndex(i);
 				KeyCombo kc;
-				for (TiXmlNodeA *nextNode = childNode->FirstChildElement("NextKey");
-					nextNode ;
-					nextNode = nextNode->NextSibling("NextKey"))
+				for (NppXml::Element nextNode = NppXml::firstChildElement(childNode, "NextKey");
+					nextNode;
+					nextNode = NppXml::nextSiblingElement(nextNode, "NextKey"))
 				{
-					const char *str = (nextNode->ToElement())->Attribute("Ctrl");
+					const char *str = NppXml::attribute(nextNode, "Ctrl");
 					if (!str)
 						continue;
 					kc._isCtrl = (strcmp("yes", str) == 0);
 
-					str = (nextNode->ToElement())->Attribute("Alt");
+					str = NppXml::attribute(nextNode, "Alt");
 					if (!str)
 						continue;
 					kc._isAlt = (strcmp("yes", str) == 0);
 
-					str = (nextNode->ToElement())->Attribute("Shift");
+					str = NppXml::attribute(nextNode, "Shift");
 					if (!str)
 						continue;
 					kc._isShift = (strcmp("yes", str) == 0);
 
-					int key;
-					str = (nextNode->ToElement())->Attribute("Key", &key);
-					if (!str)
+					const int key = NppXml::intAttribute(nextNode, "Key", -1);
+					if (key == -1)
 						continue;
 					kc._key = static_cast<unsigned char>(key);
 					_scintillaKeyCommands[i].addKeyCombo(kc);
@@ -3064,85 +4283,54 @@ void NppParameters::feedScintKeys(TiXmlNodeA *node)
 	}
 }
 
-bool NppParameters::getInternalCommandShortcuts(TiXmlNodeA *node, CommandShortcut & cs, string* folderName)
+bool NppParameters::getInternalCommandShortcuts(const NppXml::Element& element, CommandShortcut& cs, std::string* folderName)
 {
-	if (!node) return false;
+	assert(element && "Element in NppParameters::getInternalCommandShortcuts is null node.");
 
-	const char* name = (node->ToElement())->Attribute("name");
-	if (!name)
-		name = "";
+	const char* name = NppXml::attribute(element, "name", "");
 
-	bool isCtrl = false;
-	const char* isCtrlStr = (node->ToElement())->Attribute("Ctrl");
-	if (isCtrlStr)
-		isCtrl = (strcmp("yes", isCtrlStr) == 0);
+	const bool isCtrl = getBoolAttribute(element, "Ctrl");
+	const bool isAlt = getBoolAttribute(element, "Alt");
+	const bool isShift = getBoolAttribute(element, "Shift");
 
-	bool isAlt = false;
-	const char* isAltStr = (node->ToElement())->Attribute("Alt");
-	if (isAltStr)
-		isAlt = (strcmp("yes", isAltStr) == 0);
-
-	bool isShift = false;
-	const char* isShiftStr = (node->ToElement())->Attribute("Shift");
-	if (isShiftStr)
-		isShift = (strcmp("yes", isShiftStr) == 0);
-
-	int key;
-	const char* keyStr = (node->ToElement())->Attribute("Key", &key);
-	if (!keyStr)
+	const int key = NppXml::intAttribute(element, "Key", -1);
+	if (key == -1)
 		return false;
 
-	int nth = -1; // 0 based
-	const char* nthStr = (node->ToElement())->Attribute("nth", &nth);
-	if (nthStr && nth == 1)
+	const int nth = NppXml::intAttribute(element, "nth", -1); // 0 based
+	if (nth == 1)
 	{
 		if (cs.getNth() != nth)
 			return false;
 	}
-		
+
 	if (folderName)
 	{
-		const char* fn = (node->ToElement())->Attribute("FolderName");
-		*folderName = fn ? fn : "";
+		*folderName = NppXml::attribute(element, "FolderName", "");
 	}
 
 	cs = Shortcut(name, isCtrl, isAlt, isShift, static_cast<unsigned char>(key));
 	return true;
 }
 
-bool NppParameters::getShortcuts(TiXmlNodeA *node, Shortcut & sc, string* folderName)
+bool NppParameters::getShortcuts(const NppXml::Element& element, Shortcut& sc, std::string* folderName)
 {
-	if (!node) return false;
+	assert(element && "Element in NppParameters::getShortcuts is null node.");
 
-	const char* name = (node->ToElement())->Attribute("name");
-	if (!name)
-		name = "";
+	const char* name = NppXml::attribute(element, "name", "");
 
-	bool isCtrl = false;
-	const char* isCtrlStr = (node->ToElement())->Attribute("Ctrl");
-	if (isCtrlStr)
-		isCtrl = (strcmp("yes", isCtrlStr) == 0);
+	const bool isCtrl = getBoolAttribute(element, "Ctrl");
+	const bool isAlt = getBoolAttribute(element, "Alt");
+	const bool isShift = getBoolAttribute(element, "Shift");
 
-	bool isAlt = false;
-	const char* isAltStr = (node->ToElement())->Attribute("Alt");
-	if (isAltStr)
-		isAlt = (strcmp("yes", isAltStr) == 0);
-
-	bool isShift = false;
-	const char* isShiftStr = (node->ToElement())->Attribute("Shift");
-	if (isShiftStr)
-		isShift = (strcmp("yes", isShiftStr) == 0);
-
-	int key;
-	const char* keyStr = (node->ToElement())->Attribute("Key", &key);
-	if (!keyStr)
+	const int key = NppXml::intAttribute(element, "Key", -1);
+	if (key == -1)
 		return false;
 
 
 	if (folderName)
 	{
-		const char* fn = (node->ToElement())->Attribute("FolderName");
-		*folderName = fn ? fn : "";
+		*folderName = NppXml::attribute(element, "FolderName", "");
 	}
 
 	sc = Shortcut(name, isCtrl, isAlt, isShift, static_cast<unsigned char>(key));
@@ -3150,50 +4338,44 @@ bool NppParameters::getShortcuts(TiXmlNodeA *node, Shortcut & sc, string* folder
 }
 
 
-std::pair<unsigned char, unsigned char> NppParameters::feedUserLang(TiXmlNode *node)
+std::pair<unsigned char, unsigned char> NppParameters::feedUserLang(const NppXml::Element& element)
 {
-	int iBegin = _nbUserLang;
+	const int iBegin = _nbUserLang;
 
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("UserLang"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "UserLang");
 		childNode && (_nbUserLang < NB_MAX_USER_LANG);
-		childNode = childNode->NextSibling(TEXT("UserLang")) )
+		childNode = NppXml::nextSiblingElement(childNode, "UserLang"))
 	{
-		const TCHAR* name = (childNode->ToElement())->Attribute(TEXT("name"));
-		const TCHAR* ext = (childNode->ToElement())->Attribute(TEXT("ext"));
-		const TCHAR* darkModeTheme = (childNode->ToElement())->Attribute(TEXT("darkModeTheme"));
-		const TCHAR* udlVersion = (childNode->ToElement())->Attribute(TEXT("udlVersion"));
+		std::wstring name = string2wstring(NppXml::attribute(childNode, "name", ""));
+		std::wstring ext = string2wstring(NppXml::attribute(childNode, "ext", ""));
+		std::string udlVersion = NppXml::attribute(childNode, "udlVersion", "");
 
-		if (!name || !name[0] || !ext)
+		if (name.empty())
 		{
 			// UserLang name is missing, just ignore this entry
 			continue;
 		}
 
-		bool isDarkModeTheme = false;
-
-		if (darkModeTheme && darkModeTheme[0])
-		{
-			isDarkModeTheme = (lstrcmp(TEXT("yes"), darkModeTheme) == 0);
-		}
+		const bool isDarkModeTheme = getBoolAttribute(childNode, "darkModeTheme");
 
 		try {
-			_userLangArray[_nbUserLang] = new UserLangContainer(name, ext, isDarkModeTheme, udlVersion ? udlVersion : TEXT(""));
+			_userLangArray[_nbUserLang] = std::make_unique<UserLangContainer>(name.c_str(), ext.c_str(), udlVersion.c_str(), isDarkModeTheme);
 
 			++_nbUserLang;
 
-			TiXmlNode *settingsRoot = childNode->FirstChildElement(TEXT("Settings"));
+			NppXml::Element settingsRoot = NppXml::firstChildElement(childNode, "Settings");
 			if (!settingsRoot)
 				throw std::runtime_error("NppParameters::feedUserLang : Settings node is missing");
 
 			feedUserSettings(settingsRoot);
 
-			TiXmlNode *keywordListsRoot = childNode->FirstChildElement(TEXT("KeywordLists"));
+			NppXml::Element keywordListsRoot = NppXml::firstChildElement(childNode, "KeywordLists");
 			if (!keywordListsRoot)
 				throw std::runtime_error("NppParameters::feedUserLang : KeywordLists node is missing");
 
 			feedUserKeywordList(keywordListsRoot);
 
-			TiXmlNode *stylesRoot = childNode->FirstChildElement(TEXT("Styles"));
+			NppXml::Element stylesRoot = NppXml::firstChildElement(childNode, "Styles");
 			if (!stylesRoot)
 				throw std::runtime_error("NppParameters::feedUserLang : Styles node is missing");
 
@@ -3204,38 +4386,42 @@ std::pair<unsigned char, unsigned char> NppParameters::feedUserLang(TiXmlNode *n
 			{
 				const Style * pStyle = _userLangArray[_nbUserLang - 1]->_styles.findByID(i);
 				if (!pStyle)
-					_userLangArray[_nbUserLang - 1]->_styles.addStyler(i, globalMappper().styleNameMapper[i]);
+					_userLangArray[_nbUserLang - 1]->_styles.addStyler(i, string2wstring(globalMappper().styleNameMapper[i]).c_str());
 			}
+			_userLangArray[_nbUserLang - 1]->_isUnset = false;
 
 		}
 		catch (const std::exception&)
 		{
-			delete _userLangArray[--_nbUserLang];
+			_userLangArray[--_nbUserLang].reset();
 		}
 	}
-	int iEnd = _nbUserLang;
-	return pair<unsigned char, unsigned char>(static_cast<unsigned char>(iBegin), static_cast<unsigned char>(iEnd));
+	const int iEnd = _nbUserLang;
+	return std::pair<unsigned char, unsigned char>(static_cast<unsigned char>(iBegin), static_cast<unsigned char>(iEnd));
 }
 
-bool NppParameters::importUDLFromFile(const std::wstring& sourceFile)
+std::pair<unsigned char, unsigned char> NppParameters::importUDLFromFile(const std::wstring& sourceFile)
 {
-	TiXmlDocument *pXmlUserLangDoc = new TiXmlDocument(sourceFile);
+	NppXml::Document pXmlUserLangDoc = new NppXml::NewDocument();
 
-	bool loadOkay = pXmlUserLangDoc->LoadFile();
+	std::pair<unsigned char, unsigned char> addUdlResult(static_cast<unsigned char>(0), static_cast<unsigned char>(0));
+	
+	const bool loadOkay = NppXml::loadFileUDL(pXmlUserLangDoc, sourceFile.c_str());
 	if (loadOkay)
 	{
-		auto r = addUserDefineLangsFromXmlTree(pXmlUserLangDoc);
-		loadOkay = (r.second - r.first) != 0;
-		if (loadOkay)
+		addUdlResult = addUserDefineLangsFromXmlTree(pXmlUserLangDoc);
+		unsigned char addedUdlNumber = addUdlResult.second - addUdlResult.first;
+
+		if (addedUdlNumber)
 		{
-			_pXmlUserLangsDoc.push_back(UdlXmlFileState(nullptr, true, true, r));
+			_pXmlUserLangsDoc.emplace_back(nullptr, sourceFile, true, true, addUdlResult);
 
 			// imported UDL from xml file will be added into default udl, so we should make default udl dirty
-			setUdlXmlDirtyFromXmlDoc(_pXmlUserLangDoc);
+			setUdlXmlDirtyFromXmlDoc(_pXmlUserLangDoc._doc);
 		}
 	}
 	delete pXmlUserLangDoc;
-	return loadOkay;
+	return addUdlResult;
 }
 
 bool NppParameters::exportUDLToFile(size_t langIndex2export, const std::wstring& fileName2save)
@@ -3243,62 +4429,56 @@ bool NppParameters::exportUDLToFile(size_t langIndex2export, const std::wstring&
 	if (langIndex2export >= NB_MAX_USER_LANG)
 		return false;
 
-	if (static_cast<int32_t>(langIndex2export) >= _nbUserLang)
+	if (langIndex2export >= _nbUserLang)
 		return false;
 
-	TiXmlDocument *pNewXmlUserLangDoc = new TiXmlDocument(fileName2save);
-	TiXmlNode *newRoot2export = pNewXmlUserLangDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+	NppXml::Document pNewXmlUserLangDoc = new NppXml::NewDocument();
+	NppXml::createNewDeclaration(pNewXmlUserLangDoc);
+	NppXml::Element newRoot2export = NppXml::createChildElement(pNewXmlUserLangDoc, "NotepadPlus");
 
-	insertUserLang2Tree(newRoot2export, _userLangArray[langIndex2export]);
-	bool result = pNewXmlUserLangDoc->SaveFile();
+	insertUserLang2Tree(newRoot2export, _userLangArray[langIndex2export].get());
+	const bool result = NppXml::saveFileUDL(pNewXmlUserLangDoc, fileName2save.c_str());
 
 	delete pNewXmlUserLangDoc;
 	return result;
 }
 
-LangType NppParameters::getLangFromExt(const TCHAR *ext)
+LangType NppParameters::getLangFromExt(const wchar_t *ext)
 {
-	int i = getNbLang();
-	i--;
+	// first check a user defined extensions for styles
+	LexerStylerArray &lexStyleList = getLStylerArray();
+	for (size_t i = 0 ; i < lexStyleList.getNbLexer(); ++i)
+	{
+		const LexerStyler& styler = lexStyleList.getLexerFromIndex(i);
+		const wchar_t *extList = styler.getLexerUserExt();
+
+		if (isInList(ext, extList))
+			return getLangIDFromStr(styler.getLexerName());
+	}
+
+	// then check languages extensions
+	int i = getNbLang() - 1;
 	while (i >= 0)
 	{
-		Lang *l = getLangFromIndex(i--);
+		const Lang* l = getLangFromIndex(i--);
+		const wchar_t *defList = l->getDefaultExtList();
 
-		const TCHAR *defList = l->getDefaultExtList();
-		const TCHAR *userList = NULL;
-
-		LexerStylerArray &lsa = getLStylerArray();
-		const TCHAR *lName = l->getLangName();
-		LexerStyler *pLS = lsa.getLexerStylerByName(lName);
-
-		if (pLS)
-			userList = pLS->getLexerUserExt();
-
-		std::wstring list;
-		if (defList)
-			list += defList;
-
-		if (userList)
-		{
-			list += TEXT(" ");
-			list += userList;
-		}
-		if (isInList(ext, list.c_str()))
+		if (defList[0] && isInList(ext, defList))
 			return l->getLangID();
 	}
 	return L_TEXT;
 }
 
-void NppParameters::setCloudChoice(const TCHAR *pathChoice)
+void NppParameters::setCloudChoice(const wchar_t* pathChoice) const
 {
 	std::wstring cloudChoicePath = getSettingsFolder();
-	cloudChoicePath += TEXT("\\cloud\\");
+	cloudChoicePath += L"\\cloud\\";
 
-	if (!PathFileExists(cloudChoicePath.c_str()))
+	if (!doesDirectoryExist(cloudChoicePath.c_str()))
 	{
 		::CreateDirectory(cloudChoicePath.c_str(), NULL);
 	}
-	cloudChoicePath += TEXT("choice");
+	cloudChoicePath += L"choice";
 
 	WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
 	std::string cloudPathA = wmc.wchar2char(pathChoice, SC_CP_UTF8);
@@ -3306,12 +4486,12 @@ void NppParameters::setCloudChoice(const TCHAR *pathChoice)
 	writeFileContent(cloudChoicePath.c_str(), cloudPathA.c_str());
 }
 
-void NppParameters::removeCloudChoice()
+void NppParameters::removeCloudChoice() const
 {
 	std::wstring cloudChoicePath = getSettingsFolder();
 
-	cloudChoicePath += TEXT("\\cloud\\choice");
-	if (PathFileExists(cloudChoicePath.c_str()))
+	cloudChoicePath += L"\\cloud\\choice";
+	if (doesFileExist(cloudChoicePath.c_str()))
 	{
 		::DeleteFile(cloudChoicePath.c_str());
 	}
@@ -3323,26 +4503,26 @@ bool NppParameters::isCloudPathChanged() const
 		return false;
 	else if (_initialCloudChoice.size() - _nppGUI._cloudPath.size() == 1)
 	{
-		TCHAR c = _initialCloudChoice.at(_initialCloudChoice.size()-1);
+		wchar_t c = _initialCloudChoice.at(_initialCloudChoice.size()-1);
 		if (c == '\\' || c == '/')
 		{
-			if (_initialCloudChoice.find(_nppGUI._cloudPath) == 0)
+			if (_initialCloudChoice.starts_with(_nppGUI._cloudPath))
 				return false;
 		}
 	}
 	else if (_nppGUI._cloudPath.size() - _initialCloudChoice.size() == 1)
 	{
-		TCHAR c = _nppGUI._cloudPath.at(_nppGUI._cloudPath.size() - 1);
+		wchar_t c = _nppGUI._cloudPath.at(_nppGUI._cloudPath.size() - 1);
 		if (c == '\\' || c == '/')
 		{
-			if (_nppGUI._cloudPath.find(_initialCloudChoice) == 0)
+			if (_nppGUI._cloudPath.starts_with(_initialCloudChoice))
 				return false;
 		}
 	}
 	return true;
 }
 
-bool NppParameters::writeSettingsFilesOnCloudForThe1stTime(const std::wstring & cloudSettingsPath)
+bool NppParameters::writeSettingsFilesOnCloudForThe1stTime(const std::wstring& cloudSettingsPath) const
 {
 	bool isOK = false;
 
@@ -3351,40 +4531,40 @@ bool NppParameters::writeSettingsFilesOnCloudForThe1stTime(const std::wstring & 
 
 	// config.xml
 	std::wstring cloudConfigPath = cloudSettingsPath;
-	pathAppend(cloudConfigPath, TEXT("config.xml"));
-	if (!::PathFileExists(cloudConfigPath.c_str()) && _pXmlUserDoc)
+	pathAppend(cloudConfigPath, L"config.xml");
+	if (!doesFileExist(cloudConfigPath.c_str()) && _xmlUserDoc._doc)
 	{
-		isOK = _pXmlUserDoc->SaveFile(cloudConfigPath.c_str());
+		isOK = NppXml::saveFile(_xmlUserDoc._doc, cloudConfigPath.c_str());
 		if (!isOK)
 			return false;
 	}
 
 	// stylers.xml
 	std::wstring cloudStylersPath = cloudSettingsPath;
-	pathAppend(cloudStylersPath, TEXT("stylers.xml"));
-	if (!::PathFileExists(cloudStylersPath.c_str()) && _pXmlUserStylerDoc)
+	pathAppend(cloudStylersPath, L"stylers.xml");
+	if (!doesFileExist(cloudStylersPath.c_str()) && _pXmlUserStylerDoc._doc)
 	{
-		isOK = _pXmlUserStylerDoc->SaveFile(cloudStylersPath.c_str());
+		isOK = NppXml::saveFile(_pXmlUserStylerDoc._doc, cloudStylersPath.c_str());
 		if (!isOK)
 			return false;
 	}
 
 	// langs.xml
 	std::wstring cloudLangsPath = cloudSettingsPath;
-	pathAppend(cloudLangsPath, TEXT("langs.xml"));
-	if (!::PathFileExists(cloudLangsPath.c_str()) && _pXmlUserDoc)
+	pathAppend(cloudLangsPath, L"langs.xml");
+	if (!doesFileExist(cloudLangsPath.c_str()) && _pXmlDoc._doc)
 	{
-		isOK = _pXmlDoc->SaveFile(cloudLangsPath.c_str());
+		isOK = NppXml::saveFile(_pXmlDoc._doc, cloudLangsPath.c_str());
 		if (!isOK)
 			return false;
 	}
 
 	// userDefineLang.xml
 	std::wstring cloudUserLangsPath = cloudSettingsPath;
-	pathAppend(cloudUserLangsPath, TEXT("userDefineLang.xml"));
-	if (!::PathFileExists(cloudUserLangsPath.c_str()) && _pXmlUserLangDoc)
+	pathAppend(cloudUserLangsPath, L"userDefineLang.xml");
+	if (!doesFileExist(cloudUserLangsPath.c_str()) && _pXmlUserLangDoc._doc)
 	{
-		isOK = _pXmlUserLangDoc->SaveFile(cloudUserLangsPath.c_str());
+		isOK = NppXml::saveFile(_pXmlUserLangDoc._doc, cloudUserLangsPath.c_str());
 		if (!isOK)
 			return false;
 	}
@@ -3392,29 +4572,29 @@ bool NppParameters::writeSettingsFilesOnCloudForThe1stTime(const std::wstring & 
 	// shortcuts.xml
 	std::wstring cloudShortcutsPath = cloudSettingsPath;
 	pathAppend(cloudShortcutsPath, SHORTCUTSXML_FILENAME);
-	if (!::PathFileExists(cloudShortcutsPath.c_str()) && _pXmlShortcutDocA)
+	if (!doesFileExist(cloudShortcutsPath.c_str()) && _pXmlShortcutDoc)
 	{
-		isOK = _pXmlShortcutDocA->SaveUnicodeFilePath(cloudShortcutsPath.c_str());
+		isOK = NppXml::saveFileShortcut(_pXmlShortcutDoc, cloudShortcutsPath.c_str());
 		if (!isOK)
 			return false;
 	}
 
 	// contextMenu.xml
 	std::wstring cloudContextMenuPath = cloudSettingsPath;
-	pathAppend(cloudContextMenuPath, TEXT("contextMenu.xml"));
-	if (!::PathFileExists(cloudContextMenuPath.c_str()) && _pXmlContextMenuDocA)
+	pathAppend(cloudContextMenuPath, L"contextMenu.xml");
+	if (!doesFileExist(cloudContextMenuPath.c_str()) && _pXmlContextMenuDoc)
 	{
-		isOK = _pXmlContextMenuDocA->SaveUnicodeFilePath(cloudContextMenuPath.c_str());
+		isOK = NppXml::saveFile(_pXmlContextMenuDoc, cloudContextMenuPath.c_str());
 		if (!isOK)
 			return false;
 	}
 
 	// nativeLang.xml
 	std::wstring cloudNativeLangPath = cloudSettingsPath;
-	pathAppend(cloudNativeLangPath, TEXT("nativeLang.xml"));
-	if (!::PathFileExists(cloudNativeLangPath.c_str()) && _pXmlNativeLangDocA)
+	pathAppend(cloudNativeLangPath, L"nativeLang.xml");
+	if (!doesFileExist(cloudNativeLangPath.c_str()) && _pXmlNativeLangDoc != nullptr)
 	{
-		isOK = _pXmlNativeLangDocA->SaveUnicodeFilePath(cloudNativeLangPath.c_str());
+		isOK = NppXml::saveFile(_pXmlNativeLangDoc, cloudNativeLangPath.c_str());
 		if (!isOK)
 			return false;
 	}
@@ -3424,7 +4604,6 @@ bool NppParameters::writeSettingsFilesOnCloudForThe1stTime(const std::wstring & 
 
 /*
 Default UDL + Created + Imported
-
 */
 void NppParameters::writeDefaultUDL()
 {
@@ -3432,39 +4611,38 @@ void NppParameters::writeDefaultUDL()
 	std::vector<std::pair<bool, bool>> deleteState; //vector< pair<toDel, isInDefaultSharedContainer> >
 	for (const auto& udl : _pXmlUserLangsDoc)
 	{
-		if (!_pXmlUserLangDoc)
+		if (!_pXmlUserLangDoc._doc)
 		{
-			_pXmlUserLangDoc = new TiXmlDocument(_userDefineLangPath);
-			TiXmlDeclaration* decl = new TiXmlDeclaration(TEXT("1.0"), TEXT("UTF-8"), TEXT(""));
-			_pXmlUserLangDoc->LinkEndChild(decl);
-			_pXmlUserLangDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+			_pXmlUserLangDoc._doc = new NppXml::NewDocument();
+			NppXml::createNewDeclaration(_pXmlUserLangDoc._doc);
+			NppXml::createChildElement(_pXmlUserLangDoc._doc, "NotepadPlus");
 		}
 
 		bool toDelete = (udl._indexRange.second - udl._indexRange.first) == 0;
-		deleteState.push_back(std::pair(toDelete, udl._isInDefaultSharedContainer));
-		if ((!udl._udlXmlDoc || udl._udlXmlDoc == _pXmlUserLangDoc) && udl._isDirty && !toDelete) // new created or/and imported UDL plus _pXmlUserLangDoc (if exist)
+		deleteState.emplace_back(toDelete, udl._isInDefaultSharedContainer);
+		if ((!udl._udlXmlDoc || udl._udlXmlDoc == _pXmlUserLangDoc._doc) && udl._isDirty && !toDelete) // new created or/and imported UDL plus _pXmlUserLangDoc (if exist)
 		{
-			TiXmlNode *root = _pXmlUserLangDoc->FirstChild(TEXT("NotepadPlus"));
+			NppXml::Element root = NppXml::firstChildElement(_pXmlUserLangDoc._doc, "NotepadPlus");
 			if (root && !firstCleanDone)
 			{
-				_pXmlUserLangDoc->RemoveChild(root);
-				_pXmlUserLangDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+				NppXml::deleteChild(_pXmlUserLangDoc._doc, root);
+				NppXml::createChildElement(_pXmlUserLangDoc._doc, "NotepadPlus");
 				firstCleanDone = true;
 			}
 
-			root = _pXmlUserLangDoc->FirstChild(TEXT("NotepadPlus"));
+			root = NppXml::firstChildElement(_pXmlUserLangDoc._doc, "NotepadPlus");
 
 			for (int i = udl._indexRange.first; i < udl._indexRange.second; ++i)
 			{
-				insertUserLang2Tree(root, _userLangArray[i]);
+				insertUserLang2Tree(root, _userLangArray[i].get());
 			}
 		}
 	}
 
 	bool deleteAll = true;
-	for (std::pair<bool, bool> udlState : deleteState)
+	for (const auto& udlState : deleteState)
 	{
-		if (!udlState.first && udlState.second) // if not marked to be delete udl is (&&) in default shared container (ie. "userDefineLang.xml" file) 
+		if (!udlState.first && udlState.second) // if not marked to be delete udl is (&&) in default shared container (ie. "userDefineLang.xml" file)
 		{
 			deleteAll = false; // let's keep "userDefineLang.xml" file
 			break;
@@ -3473,11 +4651,11 @@ void NppParameters::writeDefaultUDL()
 
 	if (firstCleanDone) // at least one udl is for saving, the udl to be deleted are ignored
 	{
-		_pXmlUserLangDoc->SaveFile();
+		static_cast<void>(NppXml::saveFileUDL(_pXmlUserLangDoc._doc, _userDefineLangPath.c_str()));
 	}
 	else if (deleteAll)
 	{
-		if (::PathFileExists(_userDefineLangPath.c_str()))
+		if (doesFileExist(_userDefineLangPath.c_str()))
 		{
 			::DeleteFile(_userDefineLangPath.c_str());
 		}
@@ -3489,34 +4667,34 @@ void NppParameters::writeNonDefaultUDL()
 {
 	for (auto& udl : _pXmlUserLangsDoc)
 	{
-		if (udl._isDirty && udl._udlXmlDoc != nullptr && udl._udlXmlDoc != _pXmlUserLangDoc)
+		if (udl._isDirty && udl._udlXmlDoc != nullptr && udl._udlXmlDoc != _pXmlUserLangDoc._doc)
 		{
 			if (udl._indexRange.second == udl._indexRange.first) // no more udl for this xmldoc container
 			{
 				// no need to save, delete file
-				const TCHAR* docFilePath = udl._udlXmlDoc->Value();
-				if (docFilePath && ::PathFileExists(docFilePath))
+				const std::wstring& docFilePath = udl._path;
+				if (!docFilePath.empty() && doesFileExist(docFilePath.c_str()))
 				{
-					::DeleteFile(docFilePath);
+					::DeleteFile(docFilePath.c_str());
 				}
 			}
 			else
 			{
-				TiXmlNode *root = udl._udlXmlDoc->FirstChild(TEXT("NotepadPlus"));
+				NppXml::Element root = NppXml::firstChildElement(udl._udlXmlDoc, "NotepadPlus");
 				if (root)
 				{
-					udl._udlXmlDoc->RemoveChild(root);
+					NppXml::deleteChild(udl._udlXmlDoc, root);
 				}
 
-				udl._udlXmlDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+				NppXml::createChildElement(udl._udlXmlDoc, "NotepadPlus");
 
-				root = udl._udlXmlDoc->FirstChild(TEXT("NotepadPlus"));
+				root = NppXml::firstChildElement(udl._udlXmlDoc, "NotepadPlus");
 
 				for (int i = udl._indexRange.first; i < udl._indexRange.second; ++i)
 				{
-					insertUserLang2Tree(root, _userLangArray[i]);
+					insertUserLang2Tree(root, _userLangArray[i].get());
 				}
-				udl._udlXmlDoc->SaveFile();
+				static_cast<void>(NppXml::saveFileUDL(udl._udlXmlDoc, udl._path.c_str()));
 			}
 		}
 	}
@@ -3529,89 +4707,96 @@ void NppParameters::writeNeed2SaveUDL()
 }
 
 
-void NppParameters::insertCmd(TiXmlNodeA *shortcutsRoot, const CommandShortcut & cmd)
+void NppParameters::insertCmd(NppXml::Element& cmdRoot, const CommandShortcut& cmd)
 {
-	const KeyCombo & key = cmd.getKeyCombo();
-	TiXmlNodeA *sc = shortcutsRoot->InsertEndChild(TiXmlElementA("Shortcut"));
-	sc->ToElement()->SetAttribute("id", cmd.getID());
-	sc->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-	sc->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-	sc->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-	sc->ToElement()->SetAttribute("Key", key._key);
+	const KeyCombo& key = cmd.getKeyCombo();
+	NppXml::Element sc = NppXml::createChildElement(cmdRoot, "Shortcut");
+
+	NppXml::setAttribute(sc, "id", cmd.getID());
+	setBoolAttribute(sc, "Ctrl", key._isCtrl);
+	setBoolAttribute(sc, "Alt", key._isAlt);
+	setBoolAttribute(sc, "Shift", key._isShift);
+	NppXml::setAttribute(sc, "Key", key._key);
 	if (cmd.getNth() != 0)
-		sc->ToElement()->SetAttribute("nth", cmd.getNth());
+		NppXml::setAttribute(sc, "nth", cmd.getNth());
 }
 
 
-void NppParameters::insertMacro(TiXmlNodeA *macrosRoot, const MacroShortcut & macro, const string& folderName)
+void NppParameters::insertMacro(NppXml::Element& macrosRoot, const MacroShortcut& macro, const std::string& folderName)
 {
-	const KeyCombo & key = macro.getKeyCombo();
-	TiXmlNodeA *macroRoot = macrosRoot->InsertEndChild(TiXmlElementA("Macro"));
-	macroRoot->ToElement()->SetAttribute("name", macro.getMenuName());
-	macroRoot->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-	macroRoot->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-	macroRoot->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-	macroRoot->ToElement()->SetAttribute("Key", key._key);
+	const KeyCombo& key = macro.getKeyCombo();
+	NppXml::Element macroRoot = NppXml::createChildElement(macrosRoot, "Macro");
+
+	NppXml::setAttribute(macroRoot, "name", macro.getMenuName());
+	setBoolAttribute(macroRoot, "Ctrl", key._isCtrl);
+	setBoolAttribute(macroRoot, "Alt", key._isAlt);
+	setBoolAttribute(macroRoot, "Shift", key._isShift);
+	NppXml::setAttribute(macroRoot, "Key", key._key);
 	if (!folderName.empty())
 	{
-		macroRoot->ToElement()->SetAttribute("FolderName", folderName);
+		NppXml::setAttribute(macroRoot, "FolderName", folderName);
 	}
 
-	for (size_t i = 0, len = macro._macro.size(); i < len ; ++i)
+	for (size_t i = 0, len = macro._macro.size(); i < len; ++i)
 	{
-		TiXmlNodeA *actionNode = macroRoot->InsertEndChild(TiXmlElementA("Action"));
-		const recordedMacroStep & action = macro._macro[i];
-		actionNode->ToElement()->SetAttribute("type", action._macroType);
-		actionNode->ToElement()->SetAttribute("message", action._message);
-		actionNode->ToElement()->SetAttribute("wParam", static_cast<int>(action._wParameter));
-		actionNode->ToElement()->SetAttribute("lParam", static_cast<int>(action._lParameter));
-		actionNode->ToElement()->SetAttribute("sParam", action._sParameter.c_str());
+		const recordedMacroStep& action = macro._macro[i];
+		NppXml::Element actionNode = NppXml::createChildElement(macroRoot, "Action");
+
+		NppXml::setAttribute(actionNode, "type", action._macroType);
+		NppXml::setAttribute(actionNode, "message", action._message);
+		NppXml::setAttribute(actionNode, "wParam", action._wParameter);
+		NppXml::setAttribute(actionNode, "lParam", action._lParameter);
+		NppXml::setAttribute(actionNode, "sParam", action._sParameter);
 	}
 }
 
 
-void NppParameters::insertUserCmd(TiXmlNodeA *userCmdRoot, const UserCommand & userCmd, const string& folderName)
+void NppParameters::insertUserCmd(NppXml::Element& userCmdRoot, const UserCommand& userCmd, const std::string& folderName)
 {
-	const KeyCombo & key = userCmd.getKeyCombo();
-	TiXmlNodeA *cmdRoot = userCmdRoot->InsertEndChild(TiXmlElementA("Command"));
-	cmdRoot->ToElement()->SetAttribute("name", userCmd.getMenuName());
-	cmdRoot->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-	cmdRoot->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-	cmdRoot->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-	cmdRoot->ToElement()->SetAttribute("Key", key._key);
-	cmdRoot->InsertEndChild(TiXmlTextA(userCmd._cmd.c_str()));
+	const KeyCombo& key = userCmd.getKeyCombo();
+	NppXml::Element cmdRoot = NppXml::createChildElement(userCmdRoot, "Command");
+
+	NppXml::setAttribute(cmdRoot, "name", userCmd.getMenuName());
+	setBoolAttribute(cmdRoot, "Ctrl", key._isCtrl);
+	setBoolAttribute(cmdRoot, "Alt", key._isAlt);
+	setBoolAttribute(cmdRoot, "Shift", key._isShift);
+	NppXml::setAttribute(cmdRoot, "Key", key._key);
+
+	NppXml::createChildText(cmdRoot, userCmd._cmd);
 	if (!folderName.empty())
 	{
-		cmdRoot->ToElement()->SetAttribute("FolderName", folderName);
+		NppXml::setAttribute(cmdRoot, "FolderName", folderName);
 	}
 }
 
 
-void NppParameters::insertPluginCmd(TiXmlNodeA *pluginCmdRoot, const PluginCmdShortcut & pluginCmd)
+void NppParameters::insertPluginCmd(NppXml::Element& pluginCmdRoot, const PluginCmdShortcut& pluginCmd)
 {
-	const KeyCombo & key = pluginCmd.getKeyCombo();
-	TiXmlNodeA *pluginCmdNode = pluginCmdRoot->InsertEndChild(TiXmlElementA("PluginCommand"));
-	pluginCmdNode->ToElement()->SetAttribute("moduleName", pluginCmd.getModuleName());
-	pluginCmdNode->ToElement()->SetAttribute("internalID", pluginCmd.getInternalID());
-	pluginCmdNode->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-	pluginCmdNode->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-	pluginCmdNode->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-	pluginCmdNode->ToElement()->SetAttribute("Key", key._key);
+	const KeyCombo& key = pluginCmd.getKeyCombo();
+	NppXml::Element pluginCmdNode = NppXml::createChildElement(pluginCmdRoot, "PluginCommand");
+
+	NppXml::setAttribute(pluginCmdNode, "moduleName", pluginCmd.getModuleName());
+	NppXml::setAttribute(pluginCmdNode, "internalID", pluginCmd.getInternalID());
+	setBoolAttribute(pluginCmdNode, "Ctrl", key._isCtrl);
+	setBoolAttribute(pluginCmdNode, "Alt", key._isAlt);
+	setBoolAttribute(pluginCmdNode, "Shift", key._isShift);
+	NppXml::setAttribute(pluginCmdNode, "Key", key._key);
 }
 
 
-void NppParameters::insertScintKey(TiXmlNodeA *scintKeyRoot, const ScintillaKeyMap & scintKeyMap)
+void NppParameters::insertScintKey(NppXml::Element& scintKeyRoot, const ScintillaKeyMap& scintKeyMap)
 {
-	TiXmlNodeA *keyRoot = scintKeyRoot->InsertEndChild(TiXmlElementA("ScintKey"));
-	keyRoot->ToElement()->SetAttribute("ScintID", scintKeyMap.getScintillaKeyID());
-	keyRoot->ToElement()->SetAttribute("menuCmdID", scintKeyMap.getMenuCmdID());
+	NppXml::Element keyRoot = NppXml::createChildElement(scintKeyRoot, "ScintKey");
+
+	NppXml::setAttribute(keyRoot, "ScintID", scintKeyMap.getScintillaKeyID());
+	NppXml::setAttribute(keyRoot, "menuCmdID", scintKeyMap.getMenuCmdID());
 
 	//Add main shortcut
 	KeyCombo key = scintKeyMap.getKeyComboByIndex(0);
-	keyRoot->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-	keyRoot->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-	keyRoot->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-	keyRoot->ToElement()->SetAttribute("Key", key._key);
+	setBoolAttribute(keyRoot, "Ctrl", key._isCtrl);
+	setBoolAttribute(keyRoot, "Alt", key._isAlt);
+	setBoolAttribute(keyRoot, "Shift", key._isShift);
+	NppXml::setAttribute(keyRoot, "Key", key._key);
 
 	//Add additional shortcuts
 	size_t size = scintKeyMap.getSize();
@@ -3619,127 +4804,126 @@ void NppParameters::insertScintKey(TiXmlNodeA *scintKeyRoot, const ScintillaKeyM
 	{
 		for (size_t i = 1; i < size; ++i)
 		{
-			TiXmlNodeA *keyNext = keyRoot->InsertEndChild(TiXmlElementA("NextKey"));
 			key = scintKeyMap.getKeyComboByIndex(i);
-			keyNext->ToElement()->SetAttribute("Ctrl", key._isCtrl?"yes":"no");
-			keyNext->ToElement()->SetAttribute("Alt", key._isAlt?"yes":"no");
-			keyNext->ToElement()->SetAttribute("Shift", key._isShift?"yes":"no");
-			keyNext->ToElement()->SetAttribute("Key", key._key);
+			NppXml::Element keyNext = NppXml::createChildElement(keyRoot, "NextKey");
+
+			setBoolAttribute(keyNext, "Ctrl", key._isCtrl);
+			setBoolAttribute(keyNext, "Alt", key._isAlt);
+			setBoolAttribute(keyNext, "Shift", key._isShift);
+			NppXml::setAttribute(keyNext, "Key", key._key);
 		}
 	}
 }
 
 
-void NppParameters::writeSession(const Session & session, const TCHAR *fileName)
+void NppParameters::writeSession(const Session& session, const wchar_t* fileName)
 {
-	const TCHAR *sessionPathName = fileName ? fileName : _sessionPath.c_str();
+	const wchar_t* sessionPathName = fileName ? fileName : _sessionPath.c_str();
 
 	//
 	// Make sure session file is not read-only
 	//
 	removeReadOnlyFlagFromFileAttributes(sessionPathName);
 
-	// 
+	//
 	// Backup session file before overriting it
 	//
-	TCHAR backupPathName[MAX_PATH]{};
+	std::wstring backupPathName;
 	BOOL doesBackupCopyExist = FALSE;
-	if (PathFileExists(sessionPathName))
+	if (doesFileExist(sessionPathName))
 	{
-		_tcscpy(backupPathName, sessionPathName);
-		_tcscat(backupPathName, SESSION_BACKUP_EXT);
-		
+		backupPathName = sessionPathName;
+		backupPathName += SESSION_BACKUP_EXT;
+
 		// Make sure backup file is not read-only, if it exists
-		removeReadOnlyFlagFromFileAttributes(backupPathName);
-		doesBackupCopyExist = CopyFile(sessionPathName, backupPathName, FALSE);
+		removeReadOnlyFlagFromFileAttributes(backupPathName.c_str());
+		doesBackupCopyExist = CopyFile(sessionPathName, backupPathName.c_str(), FALSE);
 		if (!doesBackupCopyExist && !isEndSessionCritical())
 		{
-			wstring errTitle = L"Session file backup error: ";
+			std::wstring errTitle = L"Session file backup error: ";
 			errTitle += GetLastErrorAsString(0);
-			::MessageBox(nullptr, sessionPathName, errTitle.c_str(), MB_OK);
+			NppDarkMode::darkMessageBoxW(nullptr, sessionPathName, errTitle.c_str(), MB_OK);
 		}
 	}
 
 	//
 	// Prepare for writing
 	//
-	TiXmlDocument* pXmlSessionDoc = new TiXmlDocument(sessionPathName);
-	TiXmlDeclaration* decl = new TiXmlDeclaration(TEXT("1.0"), TEXT("UTF-8"), TEXT(""));
-	pXmlSessionDoc->LinkEndChild(decl);
-	TiXmlNode *root = pXmlSessionDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+	NppXml::Document pXmlSessionDoc = new NppXml::NewDocument();
+	NppXml::createNewDeclaration(pXmlSessionDoc);
+	NppXml::Element root = NppXml::createChildElement(pXmlSessionDoc, "NotepadPlus");
 
 	if (root)
 	{
-		TiXmlNode *sessionNode = root->InsertEndChild(TiXmlElement(TEXT("Session")));
-		(sessionNode->ToElement())->SetAttribute(TEXT("activeView"), static_cast<int32_t>(session._activeView));
+		NppXml::Element sessionNode = NppXml::createChildElement(root, "Session");
+		NppXml::setAttribute(sessionNode, "activeView", session._activeView);
 
 		struct ViewElem {
-			TiXmlNode *viewNode;
-			vector<sessionFileInfo> *viewFiles;
-			size_t activeIndex;
+			NppXml::Element viewNode;
+			const std::vector<sessionFileInfo>* viewFiles = nullptr;
+			size_t activeIndex = 0;
 		};
-		const int nbElem = 2;
-		ViewElem viewElems[nbElem];
-		viewElems[0].viewNode = sessionNode->InsertEndChild(TiXmlElement(TEXT("mainView")));
-		viewElems[1].viewNode = sessionNode->InsertEndChild(TiXmlElement(TEXT("subView")));
-		viewElems[0].viewFiles = (vector<sessionFileInfo> *)(&(session._mainViewFiles));
-		viewElems[1].viewFiles = (vector<sessionFileInfo> *)(&(session._subViewFiles));
-		viewElems[0].activeIndex = session._activeMainIndex;
-		viewElems[1].activeIndex = session._activeSubIndex;
+
+		static constexpr int nbElem = 2;
+		ViewElem viewElems[nbElem]{
+			ViewElem{.viewNode = NppXml::createChildElement(sessionNode, "mainView"), .viewFiles = &session._mainViewFiles, .activeIndex = session._activeMainIndex},
+			ViewElem{.viewNode = NppXml::createChildElement(sessionNode, "subView"), .viewFiles = &session._subViewFiles, .activeIndex = session._activeSubIndex}
+		};
 
 		for (size_t k = 0; k < nbElem ; ++k)
 		{
-			(viewElems[k].viewNode->ToElement())->SetAttribute(TEXT("activeIndex"), static_cast<int32_t>(viewElems[k].activeIndex));
-			vector<sessionFileInfo> & viewSessionFiles = *(viewElems[k].viewFiles);
+			NppXml::setAttribute(viewElems[k].viewNode, "activeIndex", viewElems[k].activeIndex);
+			const std::vector<sessionFileInfo>& viewSessionFiles = *(viewElems[k].viewFiles);
 
-			for (size_t i = 0, len = viewElems[k].viewFiles->size(); i < len ; ++i)
+			for (const auto& vsFile : viewSessionFiles)
 			{
-				TiXmlNode *fileNameNode = viewElems[k].viewNode->InsertEndChild(TiXmlElement(TEXT("File")));
+				NppXml::Element fileNameNode = NppXml::createChildElement(viewElems[k].viewNode, "File");
 
-				TCHAR szInt64[64];
+				NppXml::setAttribute(fileNameNode, "firstVisibleLine", vsFile._firstVisibleLine);
+				NppXml::setAttribute(fileNameNode, "xOffset", vsFile._xOffset);
+				NppXml::setAttribute(fileNameNode, "scrollWidth", vsFile._scrollWidth);
+				NppXml::setAttribute(fileNameNode, "startPos", vsFile._startPos);
+				NppXml::setAttribute(fileNameNode, "endPos", vsFile._endPos);
+				NppXml::setAttribute(fileNameNode, "selMode", vsFile._selMode);
+				NppXml::setAttribute(fileNameNode, "offset", vsFile._offset);
+				NppXml::setAttribute(fileNameNode, "wrapCount", vsFile._wrapCount);
+				NppXml::setAttribute(fileNameNode, "lang", wstring2string(vsFile._langName));
+				NppXml::setAttribute(fileNameNode, "encoding", vsFile._encoding);
+				setBoolAttribute(fileNameNode, "userReadOnly", (vsFile._isUserReadOnly && !vsFile._isMonitoring));
+				NppXml::setAttribute(fileNameNode, "filename", wstring2string(vsFile._fileName));
+				NppXml::setAttribute(fileNameNode, "backupFilePath", wstring2string(vsFile._backupFilePath));
+				NppXml::setAttribute(fileNameNode, "originalFileLastModifTimestamp", vsFile._originalFileLastModifTimestamp.dwLowDateTime);
+				NppXml::setAttribute(fileNameNode, "originalFileLastModifTimestampHigh", vsFile._originalFileLastModifTimestamp.dwHighDateTime);
+				NppXml::setAttribute(fileNameNode, "tabColourId", vsFile._individualTabColour);
+				setBoolAttribute(fileNameNode, "RTL", vsFile._isRTL);
+				setBoolAttribute(fileNameNode, "tabPinned", vsFile._isPinned);
 
-				(fileNameNode->ToElement())->SetAttribute(TEXT("firstVisibleLine"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._firstVisibleLine), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("xOffset"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._xOffset), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("scrollWidth"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._scrollWidth), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("startPos"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._startPos), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("endPos"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._endPos), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("selMode"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._selMode), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("offset"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._offset), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("wrapCount"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._wrapCount), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("lang"), viewSessionFiles[i]._langName.c_str());
-				(fileNameNode->ToElement())->SetAttribute(TEXT("encoding"), viewSessionFiles[i]._encoding);
-				(fileNameNode->ToElement())->SetAttribute(TEXT("userReadOnly"), (viewSessionFiles[i]._isUserReadOnly && !viewSessionFiles[i]._isMonitoring) ? TEXT("yes") : TEXT("no"));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("filename"), viewSessionFiles[i]._fileName.c_str());
-				(fileNameNode->ToElement())->SetAttribute(TEXT("backupFilePath"), viewSessionFiles[i]._backupFilePath.c_str());
-				(fileNameNode->ToElement())->SetAttribute(TEXT("originalFileLastModifTimestamp"), static_cast<int32_t>(viewSessionFiles[i]._originalFileLastModifTimestamp.dwLowDateTime));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("originalFileLastModifTimestampHigh"), static_cast<int32_t>(viewSessionFiles[i]._originalFileLastModifTimestamp.dwHighDateTime));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("tabColourId"), static_cast<int32_t>(viewSessionFiles[i]._individualTabColour));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("RTL"), viewSessionFiles[i]._isRTL ? TEXT("yes") : TEXT("no"));
+				// Save this info only when it's an untitled entry
+				if (vsFile._isUntitledTabRenamed)
+					NppXml::setAttribute(fileNameNode, "untitleTabRenamed", "yes");
 
-				// docMap 
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapFirstVisibleDisplayLine"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._firstVisibleDisplayLine), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapFirstVisibleDocLine"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._firstVisibleDocLine), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapLastVisibleDocLine"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._lastVisibleDocLine), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapNbLine"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._nbLine), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapHigherPos"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._higherPos), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapWidth"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._width), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapHeight"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._height), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapKByteInDoc"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._KByteInDoc), szInt64, 10));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("mapWrapIndentMode"), _i64tot(static_cast<LONGLONG>(viewSessionFiles[i]._mapPos._wrapIndentMode), szInt64, 10));
-				fileNameNode->ToElement()->SetAttribute(TEXT("mapIsWrap"), viewSessionFiles[i]._mapPos._isWrap ? TEXT("yes") : TEXT("no"));
+				// docMap
+				NppXml::setAttribute(fileNameNode, "mapFirstVisibleDisplayLine", vsFile._mapPos._firstVisibleDisplayLine);
+				NppXml::setAttribute(fileNameNode, "mapFirstVisibleDocLine", vsFile._mapPos._firstVisibleDocLine);
+				NppXml::setAttribute(fileNameNode, "mapLastVisibleDocLine", vsFile._mapPos._lastVisibleDocLine);
+				NppXml::setAttribute(fileNameNode, "mapNbLine", vsFile._mapPos._nbLine);
+				NppXml::setAttribute(fileNameNode, "mapHigherPos", vsFile._mapPos._higherPos);
+				NppXml::setAttribute(fileNameNode, "mapWidth", vsFile._mapPos._width);
+				NppXml::setAttribute(fileNameNode, "mapHeight", vsFile._mapPos._height);
+				NppXml::setAttribute(fileNameNode, "mapKByteInDoc", vsFile._mapPos._KByteInDoc);
+				NppXml::setAttribute(fileNameNode, "mapWrapIndentMode", vsFile._mapPos._wrapIndentMode);
+				setBoolAttribute(fileNameNode, "mapIsWrap", vsFile._mapPos._isWrap);
 
-				for (size_t j = 0, len = viewSessionFiles[i]._marks.size() ; j < len ; ++j)
+				for (const auto& markLine : vsFile._marks)
 				{
-					size_t markLine = viewSessionFiles[i]._marks[j];
-					TiXmlNode *markNode = fileNameNode->InsertEndChild(TiXmlElement(TEXT("Mark")));
-					markNode->ToElement()->SetAttribute(TEXT("line"), _ui64tot(static_cast<ULONGLONG>(markLine), szInt64, 10));
+					NppXml::Element markNode = NppXml::createChildElement(fileNameNode, "Mark");
+					NppXml::setAttribute(markNode, "line", markLine);
 				}
 
-				for (size_t j = 0, len = viewSessionFiles[i]._foldStates.size() ; j < len ; ++j)
+				for (const auto& foldLine : vsFile._foldStates)
 				{
-					size_t foldLine = viewSessionFiles[i]._foldStates[j];
-					TiXmlNode *foldNode = fileNameNode->InsertEndChild(TiXmlElement(TEXT("Fold")));
-					foldNode->ToElement()->SetAttribute(TEXT("line"), _ui64tot(static_cast<ULONGLONG>(foldLine), szInt64, 10));
+					NppXml::Element foldNode = NppXml::createChildElement(fileNameNode, "Fold");
+					NppXml::setAttribute(foldNode, "line", foldLine);
 				}
 			}
 		}
@@ -3747,12 +4931,18 @@ void NppParameters::writeSession(const Session & session, const TCHAR *fileName)
 		if (session._includeFileBrowser)
 		{
 			// Node structure and naming corresponds to config.xml
-			TiXmlNode* fileBrowserRootNode = sessionNode->InsertEndChild(TiXmlElement(TEXT("FileBrowser")));
-			fileBrowserRootNode->ToElement()->SetAttribute(TEXT("latestSelectedItem"), session._fileBrowserSelectedItem.c_str());
-			for (const auto& fbRoot : session._fileBrowserRoots)
+			NppXml::Element fileBrowserRootNode = NppXml::createChildElement(sessionNode, "FileBrowser");
+			NppXml::setAttribute(fileBrowserRootNode, "latestSelectedItem", wstring2string(session._fileBrowserSelectedItem));
+			for (const auto& fbRootInfo : session._fileBrowserRoots)
 			{
-				TiXmlNode *fileNameNode = fileBrowserRootNode->InsertEndChild(TiXmlElement(TEXT("root")));
-				(fileNameNode->ToElement())->SetAttribute(TEXT("foldername"), fbRoot.c_str());
+				NppXml::Element fileNameNode = NppXml::createChildElement(fileBrowserRootNode, "root");
+				NppXml::setAttribute(fileNameNode, "foldername", wstring2string(fbRootInfo._root));
+
+				for (const auto& i : fbRootInfo._expandedPaths)
+				{
+					NppXml::Element expNode = NppXml::createChildElement(fileNameNode, "expanded");
+					NppXml::setAttribute(expNode, "path", wstring2string(i));
+				}
 			}
 		}
 	}
@@ -3760,25 +4950,25 @@ void NppParameters::writeSession(const Session & session, const TCHAR *fileName)
 	//
 	// Write the session file
 	//
-	bool sessionSaveOK = pXmlSessionDoc->SaveFile();
+	bool sessionSaveOK = NppXml::saveFile(pXmlSessionDoc, sessionPathName);
 
 	//
 	// Double checking: prevent written session file corrupted while writting
 	//
 	if (sessionSaveOK)
 	{
-		TiXmlDocument* pXmlSessionCheck = new TiXmlDocument(sessionPathName);
-		sessionSaveOK = pXmlSessionCheck->LoadFile();
+		NppXml::Document pXmlSessionCheck = new NppXml::NewDocument();
+		sessionSaveOK = NppXml::loadFile(pXmlSessionCheck, sessionPathName);
 		if (sessionSaveOK)
 		{
 			Session sessionCheck;
-			sessionSaveOK = getSessionFromXmlTree(pXmlSessionCheck, sessionCheck);
+			sessionSaveOK = getSessionFromXmlTree(pXmlSessionCheck, sessionCheck); // test only
 		}
 		delete pXmlSessionCheck;
 	}
 	else if (!isEndSessionCritical())
 	{
-		::MessageBox(nullptr, sessionPathName, L"Error of saving session XML file", MB_OK | MB_APPLMODAL | MB_ICONWARNING);
+		NppDarkMode::darkMessageBoxW(nullptr, sessionPathName, L"Error of saving session XML file", MB_OK | MB_APPLMODAL | MB_ICONWARNING);
 	}
 
 	//
@@ -3789,16 +4979,16 @@ void NppParameters::writeSession(const Session & session, const TCHAR *fileName)
 		if (doesBackupCopyExist) // session backup file exists, restore it
 		{
 			if (!isEndSessionCritical())
-				::MessageBox(nullptr, backupPathName, L"Saving session error - restoring from the backup:", MB_OK | MB_APPLMODAL | MB_ICONWARNING);
+				NppDarkMode::darkMessageBoxW(nullptr, backupPathName.c_str(), L"Saving session error - restoring from the backup:", MB_OK | MB_APPLMODAL | MB_ICONWARNING);
 
-			wstring sessionPathNameFail2Load = sessionPathName;
+			std::wstring sessionPathNameFail2Load = sessionPathName;
 			sessionPathNameFail2Load += L".fail2Load";
-			ReplaceFile(sessionPathName, backupPathName, sessionPathNameFail2Load.c_str(), REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, 0, 0);
+			ReplaceFile(sessionPathName, backupPathName.c_str(), sessionPathNameFail2Load.c_str(), REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, 0, 0);
 		}
 	}
 	/*
 	 * Keep session backup file in case of corrupted session file
-	 * 
+	 *
 	else
 	{
 		if (backupPathName[0]) // session backup file not useful, delete it
@@ -3816,55 +5006,25 @@ void NppParameters::writeShortcuts()
 {
 	if (!_isAnyShortcutModified) return;
 
-	if (!_pXmlShortcutDocA)
+	if (!_pXmlShortcutDoc)
 	{
 		//do the treatment
-		_pXmlShortcutDocA = new TiXmlDocumentA();
-		TiXmlDeclarationA* decl = new TiXmlDeclarationA("1.0", "UTF-8", "");
-		_pXmlShortcutDocA->LinkEndChild(decl);
-	}
-	else
-	{
-		wchar_t v852NoNeedShortcutsBackup[MAX_PATH]{};
-		::wcscpy_s(v852NoNeedShortcutsBackup, _shortcutsPath.c_str());
-		::PathRemoveFileSpec(v852NoNeedShortcutsBackup);
-		::PathAppend(v852NoNeedShortcutsBackup, NONEEDSHORTCUTSXMLBACKUP_FILENAME);
-
-		if (!::PathFileExists(v852NoNeedShortcutsBackup))
-		{
-			// Creat empty file v852NoNeedShortcutsBackup.xml for not giving warning, neither doing backup, in future use.
-			HANDLE hFile = ::CreateFile(v852NoNeedShortcutsBackup, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-			::FlushFileBuffers(hFile);
-			::CloseHandle(hFile);
-
-			// backup shortcuts file "shortcuts.xml" to "shortcuts.xml.v8.5.2.backup"
-			// if the backup file already exists, it will not be overwritten.
-			wstring v852ShortcutsBackupPath = _shortcutsPath;
-			v852ShortcutsBackupPath += L".v8.5.2.backup";
-			::CopyFile(_shortcutsPath.c_str(), v852ShortcutsBackupPath.c_str(), TRUE);
-
-			// Warn User about the current shortcut will be changed and it has been backup. If users' the shortcuts.xml has been corrupted
-			// due to recoded macro under v8.5.2 (or previous versions) being modified by v8.5.3 (or later versions),
-			// user can always go back to Notepad++ v8.5.2 and use the backup of shortcuts.xml 
-			_pNativeLangSpeaker->messageBox("MacroAndRunCmdlWarning",
-				nullptr,
-				TEXT("Your Macro and Run commands saved in Notepad++ v.8.5.2 (or older) may not be compatible with the current version of Notepad++.\nPlease test those commands and, if needed, re-edit them.\n\nAlternatively, you can downgrade to Notepad++ v8.5.2 and restore your previous data.\nNotepad++ will backup your old \"shortcuts.xml\" and save it as \"shortcuts.xml.v8.5.2.backup\".\nRenaming \"shortcuts.xml.v8.5.2.backup\" -> \"shortcuts.xml\", your commands should be restored and work properly."),
-				TEXT("Macro and Run Commands Compatibility"),
-				MB_OK | MB_APPLMODAL | MB_ICONWARNING);
-		}
+		_pXmlShortcutDoc = new NppXml::NewDocument();
+		NppXml::createNewDeclaration(_pXmlShortcutDoc);
 	}
 
-	TiXmlNodeA *root = _pXmlShortcutDocA->FirstChild("NotepadPlus");
+	NppXml::Element root = NppXml::firstChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	if (!root)
 	{
-		root = _pXmlShortcutDocA->InsertEndChild(TiXmlElementA("NotepadPlus"));
+		root = NppXml::createChildElement(_pXmlShortcutDoc, "NotepadPlus");
 	}
 
-	TiXmlNodeA *cmdRoot = root->FirstChild("InternalCommands");
+	NppXml::Element cmdRoot = NppXml::firstChildElement(root, "InternalCommands");
 	if (cmdRoot)
-		root->RemoveChild(cmdRoot);
+		NppXml::deleteChild(root, cmdRoot);
 
-	cmdRoot = root->InsertEndChild(TiXmlElementA("InternalCommands"));
+	cmdRoot = NppXml::createChildElement(root, "InternalCommands");
+
 	for (size_t i = 0, len = _customizedShortcuts.size(); i < len ; ++i)
 	{
 		size_t index = _customizedShortcuts[i];
@@ -3872,66 +5032,82 @@ void NppParameters::writeShortcuts()
 		insertCmd(cmdRoot, csc);
 	}
 
-	TiXmlNodeA *macrosRoot = root->FirstChild("Macros");
+	NppXml::Element macrosRoot = NppXml::firstChildElement(root, "Macros");
 	if (macrosRoot)
-		root->RemoveChild(macrosRoot);
+		NppXml::deleteChild(root, macrosRoot);
 
-	macrosRoot = root->InsertEndChild(TiXmlElementA("Macros"));
+	macrosRoot = NppXml::createChildElement(root, "Macros");
 
 	for (size_t i = 0, len = _macros.size(); i < len ; ++i)
 	{
 		insertMacro(macrosRoot, _macros[i], wstring2string(_macroMenuItems.getItemFromIndex(i)._parentFolderName, CP_UTF8));
 	}
 
-	TiXmlNodeA *userCmdRoot = root->FirstChild("UserDefinedCommands");
+	NppXml::Element userCmdRoot = NppXml::firstChildElement(root, "UserDefinedCommands");
 	if (userCmdRoot)
-		root->RemoveChild(userCmdRoot);
+		NppXml::deleteChild(root, userCmdRoot);
 
-	userCmdRoot = root->InsertEndChild(TiXmlElementA("UserDefinedCommands"));
+	userCmdRoot = NppXml::createChildElement(root, "UserDefinedCommands");
 
 	for (size_t i = 0, len = _userCommands.size(); i < len ; ++i)
 	{
 		insertUserCmd(userCmdRoot, _userCommands[i], wstring2string(_runMenuItems.getItemFromIndex(i)._parentFolderName, CP_UTF8));
 	}
 
-	TiXmlNodeA *pluginCmdRoot = root->FirstChild("PluginCommands");
+	NppXml::Element pluginCmdRoot = NppXml::firstChildElement(root, "PluginCommands");
 	if (pluginCmdRoot)
-		root->RemoveChild(pluginCmdRoot);
+		NppXml::deleteChild(root, pluginCmdRoot);
 
-	pluginCmdRoot = root->InsertEndChild(TiXmlElementA("PluginCommands"));
+	pluginCmdRoot = NppXml::createChildElement(root, "PluginCommands");
+
 	for (size_t i = 0, len = _pluginCustomizedCmds.size(); i < len ; ++i)
 	{
 		insertPluginCmd(pluginCmdRoot, _pluginCommands[_pluginCustomizedCmds[i]]);
 	}
 
-	TiXmlNodeA *scitillaKeyRoot = root->FirstChild("ScintillaKeys");
+	NppXml::Element scitillaKeyRoot = NppXml::firstChildElement(root, "ScintillaKeys");
 	if (scitillaKeyRoot)
-		root->RemoveChild(scitillaKeyRoot);
+		NppXml::deleteChild(root, scitillaKeyRoot);
 
-	scitillaKeyRoot = root->InsertEndChild(TiXmlElementA("ScintillaKeys"));
+	scitillaKeyRoot = NppXml::createChildElement(root, "ScintillaKeys");
+
 	for (size_t i = 0, len = _scintillaModifiedKeyIndices.size(); i < len ; ++i)
 	{
 		insertScintKey(scitillaKeyRoot, _scintillaKeyCommands[_scintillaModifiedKeyIndices[i]]);
 	}
-	_pXmlShortcutDocA->SaveUnicodeFilePath(_shortcutsPath.c_str());
+
+	bool isSaveShortcutOK = NppXml::saveFileShortcut(_pXmlShortcutDoc, _shortcutsPath.c_str());
+
+	// Recalculate the hash of shortcuts file after saving it successfully, and write it into config.xml, to be used for next time shortcut file integrity check
+	if (isSaveShortcutOK)
+	{
+		// Read back the file content as bytes
+		std::string fileContent = getFileContent(_shortcutsPath.c_str());
+
+		// Compute HMAC
+		std::string machineGUID = getMachineGUID();
+		std::string hmac = computeHMAC(machineGUID, fileContent);
+
+		// Store in config.xml
+		_nppGUI._shortcutsXmlHmacInConfig = hmac;
+	}
 }
 
 
-int NppParameters::addUserLangToEnd(const UserLangContainer & userLang, const TCHAR *newName)
+int NppParameters::addUserLangToEnd(const UserLangContainer* userLang, const wchar_t *newName)
 {
 	if (isExistingUserLangName(newName))
 		return -1;
 	unsigned char iBegin = _nbUserLang;
-	_userLangArray[_nbUserLang] = new UserLangContainer();
-	*(_userLangArray[_nbUserLang]) = userLang;
+	_userLangArray[_nbUserLang] = std::make_unique<UserLangContainer>(*userLang);
 	_userLangArray[_nbUserLang]->_name = newName;
 	++_nbUserLang;
 	unsigned char iEnd = _nbUserLang;
 
-	_pXmlUserLangsDoc.push_back(UdlXmlFileState(nullptr, true, true, make_pair(iBegin, iEnd)));
+	_pXmlUserLangsDoc.emplace_back(nullptr, L"", true, true, std::pair(iBegin, iEnd));
 
 	// imported UDL from xml file will be added into default udl, so we should make default udl dirty
-	setUdlXmlDirtyFromXmlDoc(_pXmlUserLangDoc);
+	setUdlXmlDirtyFromXmlDoc(_pXmlUserLangDoc._doc);
 
 	return _nbUserLang-1;
 }
@@ -3939,141 +5115,128 @@ int NppParameters::addUserLangToEnd(const UserLangContainer & userLang, const TC
 
 void NppParameters::removeUserLang(size_t index)
 {
-	if (static_cast<int32_t>(index) >= _nbUserLang)
+	if (index >= _nbUserLang)
 		return;
-	delete _userLangArray[index];
+	_userLangArray[index].reset();
 
-	for (int32_t i = static_cast<int32_t>(index); i < (_nbUserLang - 1); ++i)
-		_userLangArray[i] = _userLangArray[i+1];
-	_nbUserLang--;
+	for (size_t i = index; i < (size_t{ _nbUserLang } - 1); ++i)
+		_userLangArray[i] = std::move(_userLangArray[i + 1]);
+	_userLangArray[_nbUserLang--].reset();
 
 	removeIndexFromXmlUdls(index);
 }
 
 
-void NppParameters::feedUserSettings(TiXmlNode *settingsRoot)
+void NppParameters::feedUserSettings(const NppXml::Element& settingsRoot)
 {
-	const TCHAR *boolStr;
-	TiXmlNode *globalSettingNode = settingsRoot->FirstChildElement(TEXT("Global"));
+	NppXml::Element globalSettingNode = NppXml::firstChildElement(settingsRoot, "Global");
 	if (globalSettingNode)
 	{
-		boolStr = (globalSettingNode->ToElement())->Attribute(TEXT("caseIgnored"));
-		if (boolStr)
-			_userLangArray[_nbUserLang - 1]->_isCaseIgnored = (lstrcmp(TEXT("yes"), boolStr) == 0);
+		_userLangArray[_nbUserLang - 1]->_isCaseIgnored = getBoolAttribute(globalSettingNode, "caseIgnored");
+		_userLangArray[_nbUserLang - 1]->_allowFoldOfComments = getBoolAttribute(globalSettingNode, "allowFoldOfComments");
 
-		boolStr = (globalSettingNode->ToElement())->Attribute(TEXT("allowFoldOfComments"));
-		if (boolStr)
-			_userLangArray[_nbUserLang - 1]->_allowFoldOfComments = (lstrcmp(TEXT("yes"), boolStr) == 0);
+		_userLangArray[_nbUserLang - 1]->_forcePureLC = NppXml::intAttribute(globalSettingNode, "forcePureLC", 0);
+		_userLangArray[_nbUserLang - 1]->_decimalSeparator = NppXml::intAttribute(globalSettingNode, "decimalSeparator", 0);
 
-		(globalSettingNode->ToElement())->Attribute(TEXT("forcePureLC"), &_userLangArray[_nbUserLang - 1]->_forcePureLC);
-		(globalSettingNode->ToElement())->Attribute(TEXT("decimalSeparator"), &_userLangArray[_nbUserLang - 1]->_decimalSeparator);
-
-		boolStr = (globalSettingNode->ToElement())->Attribute(TEXT("foldCompact"));
-		if (boolStr)
-			_userLangArray[_nbUserLang - 1]->_foldCompact = (lstrcmp(TEXT("yes"), boolStr) == 0);
+		_userLangArray[_nbUserLang - 1]->_foldCompact = getBoolAttribute(globalSettingNode, "foldCompact");
 	}
 
-	TiXmlNode *prefixNode = settingsRoot->FirstChildElement(TEXT("Prefix"));
+	NppXml::Element prefixNode = NppXml::firstChildElement(settingsRoot, "Prefix");
 	if (prefixNode)
 	{
-		const TCHAR *udlVersion = _userLangArray[_nbUserLang - 1]->_udlVersion.c_str();
-		if (!lstrcmp(udlVersion, TEXT("2.1")) || !lstrcmp(udlVersion, TEXT("2.0")))
+		const char* udlVersion = _userLangArray[_nbUserLang - 1]->getUdlVersion();
+		if (std::strcmp(udlVersion, "2.1") == 0 || std::strcmp(udlVersion, "2.0") == 0)
 		{
 			for (int i = 0 ; i < SCE_USER_TOTAL_KEYWORD_GROUPS ; ++i)
 			{
-				boolStr = (prefixNode->ToElement())->Attribute(globalMappper().keywordNameMapper[i+SCE_USER_KWLIST_KEYWORDS1]);
-				if (boolStr)
-					_userLangArray[_nbUserLang - 1]->_isPrefix[i] = (lstrcmp(TEXT("yes"), boolStr) == 0);
+				_userLangArray[_nbUserLang - 1]->_isPrefix[i] = getBoolAttribute(prefixNode, globalMappper().keywordNameMapper[i + SCE_USER_KWLIST_KEYWORDS1].c_str());
 			}
 		}
 		else	// support for old style (pre 2.0)
 		{
-			TCHAR names[SCE_USER_TOTAL_KEYWORD_GROUPS][7] = {TEXT("words1"), TEXT("words2"), TEXT("words3"), TEXT("words4")};
+			static constexpr const char names[SCE_USER_TOTAL_KEYWORD_GROUPS][7] = { "words1", "words2", "words3", "words4" };
 			for (int i = 0 ; i < 4 ; ++i)
 			{
-				boolStr = (prefixNode->ToElement())->Attribute(names[i]);
-				if (boolStr)
-					_userLangArray[_nbUserLang - 1]->_isPrefix[i] = (lstrcmp(TEXT("yes"), boolStr) == 0);
+				_userLangArray[_nbUserLang - 1]->_isPrefix[i] = getBoolAttribute(prefixNode, names[i]);
 			}
 		}
 	}
 }
 
 
-void NppParameters::feedUserKeywordList(TiXmlNode *node)
+void NppParameters::feedUserKeywordList(const NppXml::Element& element)
 {
-	const TCHAR * udlVersion = _userLangArray[_nbUserLang - 1]->_udlVersion.c_str();
+	const char* udlVersion = _userLangArray[_nbUserLang - 1]->getUdlVersion();
 
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("Keywords"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("Keywords")))
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "Keywords");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Keywords"))
 	{
-		const TCHAR * keywordsName = (childNode->ToElement())->Attribute(TEXT("name"));
-		TiXmlNode *valueNode = childNode->FirstChild();
+		const char* keywordsName = NppXml::attribute(childNode, "name", "");
+		NppXml::Node valueNode = NppXml::firstChild(childNode);
 		if (valueNode)
 		{
-			const TCHAR *kwl = nullptr;
-			if (!lstrcmp(udlVersion, TEXT("")) && !lstrcmp(keywordsName, TEXT("Delimiters")))	// support for old style (pre 2.0)
+			const char* kwl = nullptr;
+			if (!udlVersion[0] && std::strcmp(keywordsName, "Delimiters") == 0) // support for old style (pre 2.0)
 			{
-				basic_string<TCHAR> temp;
-				kwl = valueNode->Value();
+				std::string temp;
+				kwl = NppXml::getValue(valueNode);
 
-				temp += TEXT("00");	 if (kwl[0] != '0') temp += kwl[0];	 temp += TEXT(" 01");
-				temp += TEXT(" 02");	if (kwl[3] != '0') temp += kwl[3];
-				temp += TEXT(" 03");	if (kwl[1] != '0') temp += kwl[1];	 temp += TEXT(" 04");
-				temp += TEXT(" 05");	if (kwl[4] != '0') temp += kwl[4];
-				temp += TEXT(" 06");	if (kwl[2] != '0') temp += kwl[2];	 temp += TEXT(" 07");
-				temp += TEXT(" 08");	if (kwl[5] != '0') temp += kwl[5];
+				temp += "00";  if (kwl[0] != '0') temp += kwl[0]; temp += " 01";
+				temp += " 02"; if (kwl[3] != '0') temp += kwl[3];
+				temp += " 03"; if (kwl[1] != '0') temp += kwl[1]; temp += " 04";
+				temp += " 05"; if (kwl[4] != '0') temp += kwl[4];
+				temp += " 06"; if (kwl[2] != '0') temp += kwl[2]; temp += " 07";
+				temp += " 08"; if (kwl[5] != '0') temp += kwl[5];
 
-				temp += TEXT(" 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23");
-				wcscpy_s(_userLangArray[_nbUserLang - 1]->_keywordLists[SCE_USER_KWLIST_DELIMITERS], temp.c_str());
+				temp += " 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23";
+				_userLangArray[_nbUserLang - 1]->_keywordLists[SCE_USER_KWLIST_DELIMITERS] = temp;
 			}
-			else if (!lstrcmp(keywordsName, TEXT("Comment")))
+			else if (std::strcmp(keywordsName, "Comment") == 0)
 			{
-				kwl = valueNode->Value();
-				basic_string<TCHAR> temp{TEXT(" ")};
+				kwl = NppXml::getValue(valueNode);
+				std::string temp{" "};
 
 				temp += kwl;
 				size_t pos = 0;
 
-				pos = temp.find(TEXT(" 0"));
-				while (pos != string::npos)
+				pos = temp.find(" 0");
+				while (pos != std::string::npos)
 				{
-					temp.replace(pos, 2, TEXT(" 00"));
-					pos = temp.find(TEXT(" 0"), pos+1);
+					temp.replace(pos, 2, " 00");
+					pos = temp.find(" 0", pos + 1);
 				}
-				pos = temp.find(TEXT(" 1"));
-				while (pos != string::npos)
+				pos = temp.find(" 1");
+				while (pos != std::string::npos)
 				{
-					temp.replace(pos, 2, TEXT(" 03"));
-					pos = temp.find(TEXT(" 1"));
+					temp.replace(pos, 2, " 03");
+					pos = temp.find(" 1");
 				}
-				pos = temp.find(TEXT(" 2"));
-				while (pos != string::npos)
+				pos = temp.find(" 2");
+				while (pos != std::string::npos)
 				{
-					temp.replace(pos, 2, TEXT(" 04"));
-					pos = temp.find(TEXT(" 2"));
+					temp.replace(pos, 2, " 04");
+					pos = temp.find(" 2");
 				}
 
-				temp += TEXT(" 01 02");
+				temp += " 01 02";
 				if (temp[0] == ' ')
 					temp.erase(0, 1);
-
-				wcscpy_s(_userLangArray[_nbUserLang - 1]->_keywordLists[SCE_USER_KWLIST_COMMENTS], temp.c_str());
+				_userLangArray[_nbUserLang - 1]->_keywordLists[SCE_USER_KWLIST_COMMENTS] = temp;
 			}
 			else
 			{
-				kwl = valueNode->Value();
+				kwl = NppXml::getValue(valueNode);
 				if (globalMappper().keywordIdMapper.find(keywordsName) != globalMappper().keywordIdMapper.end())
 				{
 					int id = globalMappper().keywordIdMapper[keywordsName];
-					if (wcslen(kwl) < max_char)
+					if (std::strlen(kwl) < max_char)
 					{
-						wcscpy_s(_userLangArray[_nbUserLang - 1]->_keywordLists[id], kwl);
+						_userLangArray[_nbUserLang - 1]->_keywordLists[id] = kwl;
 					}
 					else
 					{
-						wcscpy_s(_userLangArray[_nbUserLang - 1]->_keywordLists[id], TEXT("imported string too long, needs to be < max_char(30720)"));
+						_userLangArray[_nbUserLang - 1]->_keywordLists[id] = "imported string too long, needs to be < max_char(30720)";
 					}
 				}
 			}
@@ -4081,14 +5244,14 @@ void NppParameters::feedUserKeywordList(TiXmlNode *node)
 	}
 }
 
-void NppParameters::feedUserStyles(TiXmlNode *node)
+void NppParameters::feedUserStyles(const NppXml::Element& element)
 {
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("WordsStyle"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("WordsStyle")))
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "WordsStyle");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "WordsStyle"))
 	{
-		const TCHAR *styleName = (childNode->ToElement())->Attribute(TEXT("name"));
-		if (styleName)
+		const std::string styleName = NppXml::attribute(childNode, "name", "");
+		if (!styleName.empty())
 		{
 			if (globalMappper().styleIdMapper.find(styleName) != globalMappper().styleIdMapper.end())
 			{
@@ -4099,29 +5262,27 @@ void NppParameters::feedUserStyles(TiXmlNode *node)
 	}
 }
 
-bool NppParameters::feedStylerArray(TiXmlNode *node)
+bool NppParameters::feedStylerArray(const NppXml::Element& element)
 {
-	TiXmlNode *styleRoot = node->FirstChildElement(TEXT("LexerStyles"));
+	NppXml::Element styleRoot = NppXml::firstChildElement(element, "LexerStyles");
 	if (!styleRoot) return false;
 
 	// For each lexer
-	for (TiXmlNode *childNode = styleRoot->FirstChildElement(TEXT("LexerType"));
-		 childNode ;
-		 childNode = childNode->NextSibling(TEXT("LexerType")) )
+	for (NppXml::Element childNode = NppXml::firstChildElement(styleRoot, "LexerType");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "LexerType") )
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *lexerName = element->Attribute(TEXT("name"));
-		const TCHAR *lexerDesc = element->Attribute(TEXT("desc"));
-		const TCHAR *lexerUserExt = element->Attribute(TEXT("ext"));
-		const TCHAR *lexerExcluded = element->Attribute(TEXT("excluded"));
+		const char* lexerName = NppXml::attribute(childNode, "name");
+		const char* lexerDesc = NppXml::attribute(childNode, "desc");
+		const char* lexerUserExt = NppXml::attribute(childNode, "ext");
 		if (lexerName)
 		{
 			_lexerStylerVect.addLexerStyler(lexerName, lexerDesc, lexerUserExt, childNode);
-			if (lexerExcluded != NULL && (lstrcmp(lexerExcluded, TEXT("yes")) == 0))
+			if (getBoolAttribute(childNode, "excluded"))
 			{
-				int index = getExternalLangIndexFromName(lexerName);
+				int index = getExternalLangIndexFromName(string2wstring(lexerName).c_str());
 				if (index != -1)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)(index + L_EXTERNAL)));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(index + L_EXTERNAL));
 			}
 		}
 	}
@@ -4129,131 +5290,166 @@ bool NppParameters::feedStylerArray(TiXmlNode *node)
 	_lexerStylerVect.sort();
 
 	// The global styles for all lexers
-	TiXmlNode *globalStyleRoot = node->FirstChildElement(TEXT("GlobalStyles"));
+	NppXml::Element globalStyleRoot = NppXml::firstChildElement(element, "GlobalStyles");
 	if (!globalStyleRoot) return false;
 
-	for (TiXmlNode *childNode = globalStyleRoot->FirstChildElement(TEXT("WidgetStyle"));
-		 childNode ;
-		 childNode = childNode->NextSibling(TEXT("WidgetStyle")) )
+	for (NppXml::Element childNode = NppXml::firstChildElement(globalStyleRoot, "WidgetStyle");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "WidgetStyle") )
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *styleIDStr = element->Attribute(TEXT("styleID"));
+		const char* name = NppXml::attribute(childNode, "name");
+		if (name && _widgetStyleArray.findByName(string2wstring(name)))
+			continue;
 
-		int styleID = -1;
-		if ((styleID = decStrVal(styleIDStr)) != -1)
+		const int styleID = NppXml::intAttribute(childNode, "styleID", -1);
+		if (styleID != -1)
 		{
 			_widgetStyleArray.addStyler(styleID, childNode);
 		}
 	}
 
-	constexpr auto rgbhex = [](COLORREF bbggrr) -> int {
-		return
-			((bbggrr & 0xFF0000) >> 16) |
-			((bbggrr & 0x00FF00)) |
-			((bbggrr & 0x0000FF) << 16);
-	};
-
-	auto addStyle = [&](const std::wstring& name,
-		const std::wstring& fgColor = L"",
-		const std::wstring& bgColor = L"",
-		const std::wstring& fromStyle = L"",
-		const std::wstring& styleID = L"0") -> int
-		{
-			int result = 0;
-			const Style* pStyle = _widgetStyleArray.findByName(name);
-			if (pStyle == nullptr)
-			{
-				TiXmlNode* newStyle = globalStyleRoot->InsertEndChild(TiXmlElement(L"WidgetStyle"));
-				newStyle->ToElement()->SetAttribute(L"name", name);
-				newStyle->ToElement()->SetAttribute(L"styleID", styleID);
-
-				const Style* pStyleFrom = fromStyle.empty() ? nullptr : _widgetStyleArray.findByName(fromStyle);
-				if (pStyleFrom != nullptr)
-				{
-					constexpr size_t bufSize = 7;
-					if (!fgColor.empty())
-					{
-						wchar_t strColor[bufSize] = { '\0' };
-						swprintf(strColor, bufSize, L"%6X", rgbhex(pStyleFrom->_fgColor));
-						newStyle->ToElement()->SetAttribute(L"fgColor", strColor);
-					}
-
-					if (!bgColor.empty())
-					{
-						wchar_t strColor[bufSize] = { '\0' };
-						swprintf(strColor, bufSize, L"%6X", rgbhex(pStyleFrom->_bgColor));
-						newStyle->ToElement()->SetAttribute(L"bgColor", strColor);
-					}
-
-					result = 2;
-				}
-				else
-				{
-					if (!fgColor.empty())
-					{
-						newStyle->ToElement()->SetAttribute(L"fgColor", fgColor);
-					}
-
-					if (!bgColor.empty())
-					{
-						newStyle->ToElement()->SetAttribute(L"bgColor", bgColor);
-					}
-
-					result = 1;
-				}
-
-
-				if (!fgColor.empty() || !bgColor.empty())
-				{
-					_widgetStyleArray.addStyler(0, newStyle);
-					return result;
-				}
-				return -1;
-			}
-			return result;
-		};
-
-	addStyle(L"Change History modified", L"FF8000", L"FF8000");
-	addStyle(L"Change History revert modified", L"A0C000", L"A0C000");
-	addStyle(L"Change History revert origin", L"40A0BF", L"40A0BF");
-	addStyle(L"Change History saved", L"00A000", L"00A000");
-
-	addStyle(L"EOL custom color", L"DADADA");
-	addStyle(g_npcStyleName, L"DADADA", L"", L"White space symbol");
-
 	return true;
 }
 
-void LexerStylerArray::addLexerStyler(const TCHAR *lexerName, const TCHAR *lexerDesc, const TCHAR *lexerUserExt , TiXmlNode *lexerNode)
+
+int NppParameters::addStyleDefaultColors(
+	NppXml::Element& globalStyleRoot,
+	const std::wstring& name,
+	const std::string& fgColor,
+	const std::string& bgColor,
+	const std::wstring& fromStyle,
+	const std::string& styleID
+)
+{
+	int result = 0;
+	const Style* pStyle = _widgetStyleArray.findByName(name);
+	if (!pStyle)
+	{
+		NppXml::Element newStyle = NppXml::createChildElement(globalStyleRoot, "WidgetStyle");
+		NppXml::setAttribute(newStyle, "name", wstring2string(name));
+		NppXml::setAttribute(newStyle, "styleID", styleID);
+
+		const Style* pStyleFrom = fromStyle.empty() ? nullptr : _widgetStyleArray.findByName(fromStyle);
+		if (pStyleFrom)
+		{
+			static constexpr size_t bufSize = 7;
+			if (!fgColor.empty())
+			{
+				char strColor[bufSize] = { '\0' };
+				std::snprintf(strColor, bufSize, "%.6lX", RGBHEX(pStyleFrom->_fgColor));
+				NppXml::setAttribute(newStyle, "fgColor", strColor);
+			}
+
+			if (!bgColor.empty())
+			{
+				char strColor[bufSize] = { '\0' };
+				std::snprintf(strColor, bufSize, "%.6lX", RGBHEX(pStyleFrom->_bgColor));
+				NppXml::setAttribute(newStyle, "bgColor", strColor);
+			}
+
+			result = 2;
+		}
+		else
+		{
+			if (!fgColor.empty())
+			{
+				NppXml::setAttribute(newStyle, "fgColor", fgColor);
+			}
+
+			if (!bgColor.empty())
+			{
+				NppXml::setAttribute(newStyle, "bgColor", bgColor);
+			}
+
+			result = 1;
+		}
+
+
+		if (!fgColor.empty() || !bgColor.empty())
+		{
+			_widgetStyleArray.addStyler(0, newStyle);
+			return result;
+		}
+		return -1;
+	}
+	return result;
+}
+
+void NppParameters::addDefaultStyles(const NppXml::Element& element)
+{
+	// check void ScintillaEditView::performGlobalStyles() for default colors
+
+	NppXml::Element globalStyleRoot = NppXml::firstChildElement(element, "GlobalStyles");
+	if (!globalStyleRoot) return;
+
+	for (NppXml::Element childNode = NppXml::firstChildElement(globalStyleRoot, "WidgetStyle");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "WidgetStyle"))
+	{
+		const int styleID = NppXml::intAttribute(childNode, "styleID", -1);
+		if (styleID != -1)
+		{
+			_widgetStyleArray.addStyler(styleID, childNode);
+		}
+	}
+
+	addStyleDefaultColors(globalStyleRoot, L"Multi-selected text color", "", "C0C0C0", L"Selected text colour"); // liteGrey
+	addStyleDefaultColors(globalStyleRoot, L"Multi-edit carets color", "404040", "", L"Caret colour"); // darkGrey
+
+	addStyleDefaultColors(globalStyleRoot, L"Bookmark margin", "", "C0C0C0", L"Line number margin");
+	addStyleDefaultColors(globalStyleRoot, L"Change History margin", "", "C0C0C0", L"Line number margin");
+
+	addStyleDefaultColors(globalStyleRoot, L"Change History modified", "FF8000", "FF8000");
+	addStyleDefaultColors(globalStyleRoot, L"Change History revert modified", "A0C000", "A0C000");
+	addStyleDefaultColors(globalStyleRoot, L"Change History revert origin", "40A0BF", "40A0BF");
+	addStyleDefaultColors(globalStyleRoot, L"Change History saved", "00A000", "00A000");
+
+	addStyleDefaultColors(globalStyleRoot, FINDDLG_STAUSNOTFOUND_COLOR, "FF0000", "");
+	addStyleDefaultColors(globalStyleRoot, FINDDLG_STAUSMESSAGE_COLOR, "0000FF", "");
+	addStyleDefaultColors(globalStyleRoot, FINDDLG_STAUSREACHED_COLOR, "008000", "");
+
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_1, "", "F3F0CB");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_2, "", "DBF3CB");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_3, "", "CBDBF3");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_4, "", "F3DBCB");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_5, "", "F3CBEE");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_DM_1, "", "807848");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_DM_2, "", "568048");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_DM_3, "", "507094");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_DM_4, "", "804849");
+	addStyleDefaultColors(globalStyleRoot, TABBAR_INDIVIDUALCOLOR_DM_5, "", "754880");
+
+	addStyleDefaultColors(globalStyleRoot, L"EOL custom color", "DADADA");
+	addStyleDefaultColors(globalStyleRoot, g_npcStyleName, "DADADA", "", L"White space symbol");
+}
+
+void LexerStylerArray::addLexerStyler(const char* lexerName, const char* lexerDesc, const char* lexerUserExt, const NppXml::Element& lexerNode)
 {
 	_lexerStylerVect.emplace_back();
-	LexerStyler & ls = _lexerStylerVect.back();
-	ls.setLexerName(lexerName);
+	LexerStyler& ls = _lexerStylerVect.back();
+
+	if (lexerName)
+		ls.setLexerName(string2wstring(lexerName).c_str());
+
 	if (lexerDesc)
-		ls.setLexerDesc(lexerDesc);
+		ls.setLexerDesc(string2wstring(lexerDesc).c_str());
 
 	if (lexerUserExt)
-		ls.setLexerUserExt(lexerUserExt);
+		ls.setLexerUserExt(string2wstring(lexerUserExt).c_str());
 
-	for (TiXmlNode *childNode = lexerNode->FirstChildElement(TEXT("WordsStyle"));
-		 childNode ;
-		 childNode = childNode->NextSibling(TEXT("WordsStyle")) )
+	for (NppXml::Element childNode = NppXml::firstChildElement(lexerNode, "WordsStyle");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "WordsStyle"))
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *styleIDStr = element->Attribute(TEXT("styleID"));
-
-		if (styleIDStr)
+		const int styleID = NppXml::intAttribute(childNode, "styleID", -1);
+		if (styleID != -1)
 		{
-			int styleID = -1;
-			if ((styleID = decStrVal(styleIDStr)) != -1)
-			{
-				ls.addStyler(styleID, childNode);
-			}
+			ls.addStyler(styleID, childNode);
 		}
 	}
 }
 
-void StyleArray::addStyler(int styleID, TiXmlNode *styleNode)
+void StyleArray::addStyler(int styleID, const NppXml::Element& styleNode)
 {
 	bool isUser = styleID >> 16 == L_USER;
 	if (isUser)
@@ -4264,292 +5460,316 @@ void StyleArray::addStyler(int styleID, TiXmlNode *styleNode)
 	}
 
 	_styleVect.emplace_back();
-	Style & s = _styleVect.back();
+	Style& s = _styleVect.back();
 	s._styleID = styleID;
 
 	if (styleNode)
 	{
-		TiXmlElement *element = styleNode->ToElement();
-
-		// TODO: translate to English
-		// Pour _fgColor, _bgColor :
-		// RGB() | (result & 0xFF000000) c'est pour le cas de -1 (0xFFFFFFFF)
-		// retourné par hexStrVal(str)
-		const TCHAR *str = element->Attribute(TEXT("name"));
+		// For _fgColor & _bgColor :
+		// RGB() | (result & 0xFF000000): it's for the case of -1 (0xFFFFFFFF) returned by "hexStrVal(str)"
+		const char* str = NppXml::attribute(styleNode, "name");
 		if (str)
 		{
 			if (isUser)
-				s._styleDesc = globalMappper().styleNameMapper[styleID];
+				s._styleDesc = string2wstring(globalMappper().styleNameMapper[styleID]);
 			else
-				s._styleDesc = str;
+				s._styleDesc = string2wstring(str);
 		}
 
-		str = element->Attribute(TEXT("fgColor"));
+		str = NppXml::attribute(styleNode, "fgColor");
 		if (str)
 		{
 			unsigned long result = hexStrVal(str);
 			s._fgColor = (RGB((result >> 16) & 0xFF, (result >> 8) & 0xFF, result & 0xFF)) | (result & 0xFF000000);
-
 		}
 
-		str = element->Attribute(TEXT("bgColor"));
+		str = NppXml::attribute(styleNode, "bgColor");
 		if (str)
 		{
 			unsigned long result = hexStrVal(str);
 			s._bgColor = (RGB((result >> 16) & 0xFF, (result >> 8) & 0xFF, result & 0xFF)) | (result & 0xFF000000);
 		}
 
-		str = element->Attribute(TEXT("colorStyle"));
-		if (str)
-		{
-			s._colorStyle = decStrVal(str);
-		}
+		s._colorStyle = NppXml::intAttribute(styleNode, "colorStyle", COLORSTYLE_ALL);
 
-		str = element->Attribute(TEXT("fontName"));
+		str = NppXml::attribute(styleNode, "fontName");
 		if (str)
 		{
-			s._fontName = str;
+			s._fontName = string2wstring(str);
 			s._isFontEnabled = true;
 		}
 
-		str = element->Attribute(TEXT("fontStyle"));
-		if (str)
-		{
-			s._fontStyle = decStrVal(str);
-		}
+		s._fontStyle = NppXml::intAttribute(styleNode, "fontStyle", STYLE_NOT_USED);
+		s._fontSize = NppXml::intAttribute(styleNode, "fontSize", STYLE_NOT_USED);
 
-		str = element->Attribute(TEXT("fontSize"));
-		if (str)
-		{
-			s._fontSize = decStrVal(str);
-		}
-		str = element->Attribute(TEXT("nesting"));
+		s._nesting = NppXml::intAttribute(styleNode, "nesting", static_cast<int>(FontStyle::FONTSTYLE_NONE));
 
-		if (str)
-		{
-			s._nesting = decStrVal(str);
-		}
-
-		str = element->Attribute(TEXT("keywordClass"));
+		str = NppXml::attribute(styleNode, "keywordClass");
 		if (str)
 		{
 			s._keywordClass = getKwClassFromName(str);
 		}
 
-		TiXmlNode *v = styleNode->FirstChild();
+		NppXml::Node v = NppXml::firstChild(styleNode);
 		if (v)
 		{
-			s._keywords = v->Value();
+			s._keywords = NppXml::getValue(v);
 		}
 	}
 }
 
-bool NppParameters::writeRecentFileHistorySettings(int nbMaxFile) const
+bool NppParameters::writeRecentFileHistorySettings(int nbMaxFile)
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *historyNode = nppRoot->FirstChildElement(TEXT("History"));
+	NppXml::Element historyNode = NppXml::firstChildElement(nppRoot, "History");
 	if (!historyNode)
 	{
-		historyNode = nppRoot->InsertEndChild(TiXmlElement(TEXT("History")));
+		historyNode = NppXml::createChildElement(nppRoot, "History");
 	}
 
-	(historyNode->ToElement())->SetAttribute(TEXT("nbMaxFile"), nbMaxFile!=-1?nbMaxFile:_nbMaxRecentFile);
-	(historyNode->ToElement())->SetAttribute(TEXT("inSubMenu"), _putRecentFileInSubMenu?TEXT("yes"):TEXT("no"));
-	(historyNode->ToElement())->SetAttribute(TEXT("customLength"), _recentFileCustomLength);
+	NppXml::setAttribute(historyNode, "nbMaxFile", nbMaxFile != -1 ? nbMaxFile : _nbMaxRecentFile);
+	setBoolAttribute(historyNode, "inSubMenu", _putRecentFileInSubMenu);
+	NppXml::setAttribute(historyNode, "customLength", _recentFileCustomLength);
 	return true;
 }
 
-bool NppParameters::writeColumnEditorSettings() const
+bool NppParameters::writeColumnEditorSettings()
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *oldColumnEditorNode = nppRoot->FirstChildElement(TEXT("ColumnEditor"));
+	NppXml::Element oldColumnEditorNode = NppXml::firstChildElement(nppRoot, "ColumnEditor");
 	if (oldColumnEditorNode)
 	{
 		// Erase the Project Panel root
-		nppRoot->RemoveChild(oldColumnEditorNode);
+		NppXml::deleteChild(nppRoot, oldColumnEditorNode);
 	}
 
 	// Create the new ColumnEditor root
-	TiXmlElement columnEditorRootNode{TEXT("ColumnEditor")};
-	(columnEditorRootNode.ToElement())->SetAttribute(TEXT("choice"), _columnEditParam._mainChoice == activeNumeric ? L"number" : L"text");
+	NppXml::Element columnEditorRootNode = NppXml::createChildElement(nppRoot, "ColumnEditor");
+	NppXml::setAttribute(columnEditorRootNode, "choice", _columnEditParam._mainChoice == activeNumeric ? "number" : "text");
 
-	TiXmlElement textNode{ TEXT("text") };
-	(textNode.ToElement())->SetAttribute(TEXT("content"), _columnEditParam._insertedTextContent.c_str());
-	(columnEditorRootNode.ToElement())->InsertEndChild(textNode);
+	NppXml::Element textNode = NppXml::createChildElement(columnEditorRootNode, "text");
+	NppXml::setAttribute(textNode, "content", wstring2string(_columnEditParam._insertedTextContent));
 
-	TiXmlElement numberNode{ TEXT("number") };
-	(numberNode.ToElement())->SetAttribute(TEXT("initial"), _columnEditParam._initialNum);
-	(numberNode.ToElement())->SetAttribute(TEXT("increase"), _columnEditParam._increaseNum);
-	(numberNode.ToElement())->SetAttribute(TEXT("repeat"), _columnEditParam._repeatNum);
-	wstring format = TEXT("dec");
-	if (_columnEditParam._formatChoice == 1)
-		format = TEXT("hex");
-	else if (_columnEditParam._formatChoice == 2)
-		format = TEXT("oct");
-	else if (_columnEditParam._formatChoice == 3)
-		format = TEXT("bin");
-	(numberNode.ToElement())->SetAttribute(TEXT("formatChoice"), format);
-	wstring leading = TEXT("none");
-	if (_columnEditParam._leadingChoice == ColumnEditorParam::zeroLeading)
-		leading = TEXT("zeros");
-	else if (_columnEditParam._leadingChoice == ColumnEditorParam::spaceLeading)
-		leading = TEXT("spaces");
-	(numberNode.ToElement())->SetAttribute(TEXT("leadingChoice"), leading);
-	(columnEditorRootNode.ToElement())->InsertEndChild(numberNode);
+	NppXml::Element numberNode = NppXml::createChildElement(columnEditorRootNode, "number");
+	NppXml::setAttribute(numberNode, "initial", _columnEditParam._initialNum);
+	NppXml::setAttribute(numberNode, "increase", _columnEditParam._increaseNum);
+	NppXml::setAttribute(numberNode, "repeat", _columnEditParam._repeatNum);
 
-	// (Re)Insert the Project Panel root
-	(nppRoot->ToElement())->InsertEndChild(columnEditorRootNode);
+	std::string format;
+	switch (_columnEditParam._formatChoice)
+	{
+		using enum NumBase;
+		case BASE_10:
+		{
+			format = "dec";
+			break;
+		}
+
+		case BASE_16:
+		{
+			format = "hex";
+			break;
+		}
+
+		case BASE_08:
+		{
+			format = "oct";
+			break;
+		}
+
+		case BASE_02:
+		{
+			format = "bin";
+			break;
+		}
+
+		case BASE_16_UPPERCASE:
+		{
+			format = "hexuc";
+			break;
+		}
+	}
+	NppXml::setAttribute(numberNode, "formatChoice", format);
+
+	std::string leading;
+	switch (_columnEditParam._leadingChoice)
+	{
+		using enum ColumnEditorParam::leadingChoice;
+		case noneLeading:
+		{
+			leading = "none";
+			break;
+		}
+
+		case zeroLeading:
+		{
+			leading = "zeros";
+			break;
+		}
+
+		case spaceLeading:
+		{
+			leading = "spaces";
+			break;
+		}
+	}
+	NppXml::setAttribute(numberNode, "leadingChoice", leading);
+
 	return true;
 }
 
-bool NppParameters::writeProjectPanelsSettings() const
+bool NppParameters::writeProjectPanelsSettings()
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *oldProjPanelRootNode = nppRoot->FirstChildElement(TEXT("ProjectPanels"));
+	NppXml::Element oldProjPanelRootNode = NppXml::firstChildElement(nppRoot, "ProjectPanels");
 	if (oldProjPanelRootNode)
 	{
 		// Erase the Project Panel root
-		nppRoot->RemoveChild(oldProjPanelRootNode);
+		NppXml::deleteChild(nppRoot, oldProjPanelRootNode);
 	}
 
 	// Create the Project Panel root
-	TiXmlElement projPanelRootNode{TEXT("ProjectPanels")};
+	NppXml::Element projPanelRootNode = NppXml::createChildElement(nppRoot, "ProjectPanels");
 
 	// Add 3 Project Panel parameters
-	for (int32_t i = 0 ; i < 3 ; ++i)
+	for (int i = 0; i < 3; ++i)
 	{
-		TiXmlElement projPanelNode{TEXT("ProjectPanel")};
-		(projPanelNode.ToElement())->SetAttribute(TEXT("id"), i);
-		(projPanelNode.ToElement())->SetAttribute(TEXT("workSpaceFile"), _workSpaceFilePathes[i]);
-
-		(projPanelRootNode.ToElement())->InsertEndChild(projPanelNode);
+		NppXml::Element projPanelNode = NppXml::createChildElement(projPanelRootNode, "ProjectPanel");
+		NppXml::setAttribute(projPanelNode, "id", i);
+		NppXml::setAttribute(projPanelNode, "workSpaceFile", wstring2string(_workSpaceFilePaths[i]));
 	}
 
-	// (Re)Insert the Project Panel root
-	(nppRoot->ToElement())->InsertEndChild(projPanelRootNode);
 	return true;
 }
 
-bool NppParameters::writeFileBrowserSettings(const vector<std::wstring> & rootPaths, const std::wstring & latestSelectedItemPath) const
+bool NppParameters::writeFileBrowserSettings(const std::vector<std::wstring>& rootPaths, const std::wstring& latestSelectedItemPath, const std::unordered_set<std::wstring>& expandedPaths)
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *oldFileBrowserRootNode = nppRoot->FirstChildElement(TEXT("FileBrowser"));
+	NppXml::Element oldFileBrowserRootNode = NppXml::firstChildElement(nppRoot, "FileBrowser");
 	if (oldFileBrowserRootNode)
 	{
-		// Erase the file broser root
-		nppRoot->RemoveChild(oldFileBrowserRootNode);
+		// Erase the file browser root
+		NppXml::deleteChild(nppRoot, oldFileBrowserRootNode);
 	}
 
 	// Create the file browser root
-	TiXmlElement fileBrowserRootNode{ TEXT("FileBrowser") };
+	NppXml::Element fileBrowserRootNode = NppXml::createChildElement(nppRoot, "FileBrowser");
 
-	if (rootPaths.size() != 0)
+	if (!rootPaths.empty())
 	{
-		fileBrowserRootNode.SetAttribute(TEXT("latestSelectedItem"), latestSelectedItemPath.c_str());
+		NppXml::setAttribute(fileBrowserRootNode, "latestSelectedItem", wstring2string(latestSelectedItemPath));
 
 		// add roots
-		size_t len = rootPaths.size();
-		for (size_t i = 0; i < len; ++i)
+		for (const auto& rootPath : rootPaths)
 		{
-			TiXmlElement fbRootNode{ TEXT("root") };
-			(fbRootNode.ToElement())->SetAttribute(TEXT("foldername"), rootPaths[i].c_str());
+			NppXml::Element fbRootNode = NppXml::createChildElement(fileBrowserRootNode, "root");
+			NppXml::setAttribute(fbRootNode, "foldername", wstring2string(rootPath));
 
-			(fileBrowserRootNode.ToElement())->InsertEndChild(fbRootNode);
+			std::vector<std::wstring> sortedExpanded;
+			for (const auto& ep : expandedPaths)
+			{
+				std::wstring lowerEp = stringToLower(ep);
+				std::wstring lowerRoot = stringToLower(rootPath);
+				if (lowerEp.rfind(lowerRoot, 0) == 0)
+				{
+					sortedExpanded.push_back(ep);
+				}
+			}
+			std::sort(sortedExpanded.begin(), sortedExpanded.end());
+			for (const auto& ep : sortedExpanded)
+			{
+				NppXml::Element expNode = NppXml::createChildElement(fbRootNode, "expanded");
+				NppXml::setAttribute(expNode, "path", wstring2string(ep));
+			}
 		}
 	}
 
-	// (Re)Insert the file browser root
-	(nppRoot->ToElement())->InsertEndChild(fileBrowserRootNode);
 	return true;
 }
 
-bool NppParameters::writeHistory(const TCHAR *fullpath)
+bool NppParameters::writeHistory(const wchar_t* fullpath)
 {
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *historyNode = nppRoot->FirstChildElement(TEXT("History"));
+	NppXml::Element historyNode = NppXml::firstChildElement(nppRoot, "History");
 	if (!historyNode)
 	{
-		historyNode = nppRoot->InsertEndChild(TiXmlElement(TEXT("History")));
+		historyNode = NppXml::createChildElement(nppRoot, "History");
 	}
 
-	TiXmlElement recentFileNode(TEXT("File"));
-	(recentFileNode.ToElement())->SetAttribute(TEXT("filename"), fullpath);
+	NppXml::Element recentFileNode = NppXml::createChildElement(historyNode, "File");
+	NppXml::setAttribute(recentFileNode, "filename", wstring2string(fullpath));
 
-	(historyNode->ToElement())->InsertEndChild(recentFileNode);
 	return true;
 }
 
-TiXmlNode * NppParameters::getChildElementByAttribut(TiXmlNode *pere, const TCHAR *childName,\
-			const TCHAR *attributName, const TCHAR *attributVal) const
+NppXml::Element NppParameters::getChildElementByAttribute(const NppXml::Element& element, const char* childName,
+	const char* attributeName, const char* attributeVal)
 {
-	for (TiXmlNode *childNode = pere->FirstChildElement(childName);
-		childNode ;
-		childNode = childNode->NextSibling(childName))
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, childName);
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, childName))
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *val = element->Attribute(attributName);
-		if (val)
+		if (std::strcmp(NppXml::attribute(childNode, attributeName, ""), attributeVal) == 0)
 		{
-			if (!lstrcmp(val, attributVal))
-				return childNode;
+			return childNode;
 		}
 	}
-	return NULL;
+	return NppXml::Element{};
 }
 
 // 2 restes : L_H, L_USER
-LangType NppParameters::getLangIDFromStr(const TCHAR *langName)
+LangType NppParameters::getLangIDFromStr(const wchar_t *langName)
 {
-	int lang = static_cast<int32_t>(L_TEXT);
-	for (; lang < L_EXTERNAL; ++lang)
+	int lang = static_cast<int>(L_TEXT);
+	for (; lang < static_cast<int>(L_EXTERNAL); ++lang)
 	{
-		const TCHAR * name = ScintillaEditView::_langNameInfoArray[lang]._langName;
-		if (!lstrcmp(name, langName)) //found lang?
+		const wchar_t* name = ScintillaEditView::_langNameInfoArray[lang]._langName;
+		if (std::wcscmp(name, langName) == 0) //found lang?
 		{
-			return (LangType)lang;
+			return static_cast<LangType>(lang);
 		}
 	}
 
 	//Cannot find language, check if its an external one
 
-	LangType l = (LangType)lang;
+	auto l = static_cast<LangType>(lang);
 	if (l == L_EXTERNAL) //try find external lexer
 	{
 		int id = NppParameters::getInstance().getExternalLangIndexFromName(langName);
-		if (id != -1) return (LangType)(id + L_EXTERNAL);
+		if (id != -1) return static_cast<LangType>(id + static_cast<int>(L_EXTERNAL));
 	}
 
 	return L_TEXT;
@@ -4557,235 +5777,242 @@ LangType NppParameters::getLangIDFromStr(const TCHAR *langName)
 
 std::wstring NppParameters::getLocPathFromStr(const std::wstring & localizationCode)
 {
-	if (localizationCode == TEXT("en") || localizationCode == TEXT("en-au") || localizationCode == TEXT("en-bz") || localizationCode == TEXT("en-ca") || localizationCode == TEXT("en-cb") || localizationCode == TEXT("en-gb") || localizationCode == TEXT("en-ie") || localizationCode == TEXT("en-jm") || localizationCode == TEXT("en-nz") || localizationCode == TEXT("en-ph") || localizationCode == TEXT("en-tt") || localizationCode == TEXT("en-us") || localizationCode == TEXT("en-za") || localizationCode == TEXT("en-zw"))
-		return TEXT("english.xml");
-	if (localizationCode == TEXT("af"))
-		return TEXT("afrikaans.xml");
-	if (localizationCode == TEXT("sq"))
-		return TEXT("albanian.xml");
-	if (localizationCode == TEXT("ar") || localizationCode == TEXT("ar-dz") || localizationCode == TEXT("ar-bh") || localizationCode == TEXT("ar-eg") ||localizationCode == TEXT("ar-iq") || localizationCode == TEXT("ar-jo") || localizationCode == TEXT("ar-kw") || localizationCode == TEXT("ar-lb") || localizationCode == TEXT("ar-ly") || localizationCode == TEXT("ar-ma") || localizationCode == TEXT("ar-om") || localizationCode == TEXT("ar-qa") || localizationCode == TEXT("ar-sa") || localizationCode == TEXT("ar-sy") || localizationCode == TEXT("ar-tn") || localizationCode == TEXT("ar-ae") || localizationCode == TEXT("ar-ye"))
-		return TEXT("arabic.xml");
-	if (localizationCode == TEXT("an"))
-		return TEXT("aragonese.xml");
-	if (localizationCode == TEXT("az"))
-		return TEXT("azerbaijani.xml");
-	if (localizationCode == TEXT("eu"))
-		return TEXT("basque.xml");
-	if (localizationCode == TEXT("be"))
-		return TEXT("belarusian.xml");
-	if (localizationCode == TEXT("bn"))
-		return TEXT("bengali.xml");
-	if (localizationCode == TEXT("bs"))
-		return TEXT("bosnian.xml");
-	if (localizationCode == TEXT("pt-br"))
-		return TEXT("brazilian_portuguese.xml");
-	if (localizationCode == TEXT("br-fr"))
-		return TEXT("breton.xml");
-	if (localizationCode == TEXT("bg"))
-		return TEXT("bulgarian.xml");
-	if (localizationCode == TEXT("ca"))
-		return TEXT("catalan.xml");
-	if (localizationCode == TEXT("zh-tw") || localizationCode == TEXT("zh-hk") || localizationCode == TEXT("zh-sg"))
-		return TEXT("taiwaneseMandarin.xml");
-	if (localizationCode == TEXT("zh") || localizationCode == TEXT("zh-cn"))
-		return TEXT("chineseSimplified.xml");
-	if (localizationCode == TEXT("co") || localizationCode == TEXT("co-fr"))
-		return TEXT("corsican.xml");
-	if (localizationCode == TEXT("hr"))
-		return TEXT("croatian.xml");
-	if (localizationCode == TEXT("cs"))
-		return TEXT("czech.xml");
-	if (localizationCode == TEXT("da"))
-		return TEXT("danish.xml");
-	if (localizationCode == TEXT("nl") || localizationCode == TEXT("nl-be"))
-		return TEXT("dutch.xml");
-	if (localizationCode == TEXT("eo"))
-		return TEXT("esperanto.xml");
-	if (localizationCode == TEXT("et"))
-		return TEXT("estonian.xml");
-	if (localizationCode == TEXT("fa"))
-		return TEXT("farsi.xml");
-	if (localizationCode == TEXT("fi"))
-		return TEXT("finnish.xml");
-	if (localizationCode == TEXT("fr") || localizationCode == TEXT("fr-be") || localizationCode == TEXT("fr-ca") || localizationCode == TEXT("fr-fr") || localizationCode == TEXT("fr-lu") || localizationCode == TEXT("fr-mc") || localizationCode == TEXT("fr-ch"))
-		return TEXT("french.xml");
-	if (localizationCode == TEXT("fur"))
-		return TEXT("friulian.xml");
-	if (localizationCode == TEXT("gl"))
-		return TEXT("galician.xml");
-	if (localizationCode == TEXT("ka"))
-		return TEXT("georgian.xml");
-	if (localizationCode == TEXT("de") || localizationCode == TEXT("de-at") || localizationCode == TEXT("de-de") || localizationCode == TEXT("de-li") || localizationCode == TEXT("de-lu") || localizationCode == TEXT("de-ch"))
-		return TEXT("german.xml");
-	if (localizationCode == TEXT("el"))
-		return TEXT("greek.xml");
-	if (localizationCode == TEXT("gu"))
-		return TEXT("gujarati.xml");
-	if (localizationCode == TEXT("he"))
-		return TEXT("hebrew.xml");
-	if (localizationCode == TEXT("hi"))
-		return TEXT("hindi.xml");
-	if (localizationCode == TEXT("hu"))
-		return TEXT("hungarian.xml");
-	if (localizationCode == TEXT("id"))
-		return TEXT("indonesian.xml");
-	if (localizationCode == TEXT("it") || localizationCode == TEXT("it-ch"))
-		return TEXT("italian.xml");
-	if (localizationCode == TEXT("ja"))
-		return TEXT("japanese.xml");
-	if (localizationCode == TEXT("kn"))
-		return TEXT("kannada.xml");
-	if (localizationCode == TEXT("kk"))
-		return TEXT("kazakh.xml");
-	if (localizationCode == TEXT("ko") || localizationCode == TEXT("ko-kp") || localizationCode == TEXT("ko-kr"))
-		return TEXT("korean.xml");
-	if (localizationCode == TEXT("ku"))
-		return TEXT("kurdish.xml");
-	if (localizationCode == TEXT("ky"))
-		return TEXT("kyrgyz.xml");
-	if (localizationCode == TEXT("lv"))
-		return TEXT("latvian.xml");
-	if (localizationCode == TEXT("lt"))
-		return TEXT("lithuanian.xml");
-	if (localizationCode == TEXT("lb"))
-		return TEXT("luxembourgish.xml");
-	if (localizationCode == TEXT("mk"))
-		return TEXT("macedonian.xml");
-	if (localizationCode == TEXT("ms"))
-		return TEXT("malay.xml");
-	if (localizationCode == TEXT("mr"))
-		return TEXT("marathi.xml");
-	if (localizationCode == TEXT("mn"))
-		return TEXT("mongolian.xml");
-	if (localizationCode == TEXT("no") || localizationCode == TEXT("nb"))
-		return TEXT("norwegian.xml");
-	if (localizationCode == TEXT("nn"))
-		return TEXT("nynorsk.xml");
-	if (localizationCode == TEXT("oc"))
-		return TEXT("occitan.xml");
-	if (localizationCode == TEXT("pl"))
-		return TEXT("polish.xml");
-	if (localizationCode == TEXT("pt") || localizationCode == TEXT("pt-pt"))
-		return TEXT("portuguese.xml");
-	if (localizationCode == TEXT("pa") || localizationCode == TEXT("pa-in"))
-		return TEXT("punjabi.xml");
-	if (localizationCode == TEXT("ro") || localizationCode == TEXT("ro-mo"))
-		return TEXT("romanian.xml");
-	if (localizationCode == TEXT("ru") || localizationCode == TEXT("ru-mo"))
-		return TEXT("russian.xml");
-	if (localizationCode == TEXT("sc"))
-		return TEXT("sardinian.xml");
-	if (localizationCode == TEXT("sr"))
-		return TEXT("serbian.xml");
-	if (localizationCode == TEXT("sr-cyrl-ba") || localizationCode == TEXT("sr-cyrl-sp"))
-		return TEXT("serbianCyrillic.xml");
-	if (localizationCode == TEXT("si"))
-		return TEXT("sinhala.xml");
-	if (localizationCode == TEXT("sk"))
-		return TEXT("slovak.xml");
-	if (localizationCode == TEXT("sl"))
-		return TEXT("slovenian.xml");
-	if (localizationCode == TEXT("es") || localizationCode == TEXT("es-bo") || localizationCode == TEXT("es-cl") || localizationCode == TEXT("es-co") || localizationCode == TEXT("es-cr") || localizationCode == TEXT("es-do") || localizationCode == TEXT("es-ec") || localizationCode == TEXT("es-sv") || localizationCode == TEXT("es-gt") || localizationCode == TEXT("es-hn") || localizationCode == TEXT("es-mx") || localizationCode == TEXT("es-ni") || localizationCode == TEXT("es-pa") || localizationCode == TEXT("es-py") || localizationCode == TEXT("es-pe") || localizationCode == TEXT("es-pr") || localizationCode == TEXT("es-es") || localizationCode == TEXT("es-uy") || localizationCode == TEXT("es-ve"))
-		return TEXT("spanish.xml");
-	if (localizationCode == TEXT("es-ar"))
-		return TEXT("spanish_ar.xml");
-	if (localizationCode == TEXT("sv"))
-		return TEXT("swedish.xml");
-	if (localizationCode == TEXT("tl"))
-		return TEXT("tagalog.xml");
-	if (localizationCode == TEXT("tg-cyrl-tj"))
-		return TEXT("tajikCyrillic.xml");
-	if (localizationCode == TEXT("ta"))
-		return TEXT("tamil.xml");
-	if (localizationCode == TEXT("tt"))
-		return TEXT("tatar.xml");
-	if (localizationCode == TEXT("te"))
-		return TEXT("telugu.xml");
-	if (localizationCode == TEXT("th"))
-		return TEXT("thai.xml");
-	if (localizationCode == TEXT("tr"))
-		return TEXT("turkish.xml");
-	if (localizationCode == TEXT("uk"))
-		return TEXT("ukrainian.xml");
-	if (localizationCode == TEXT("ur") || localizationCode == TEXT("ur-pk"))
-		return TEXT("urdu.xml");
-	if (localizationCode == TEXT("ug-cn"))
-		return TEXT("uyghur.xml");
-	if (localizationCode == TEXT("uz"))
-		return TEXT("uzbek.xml");
-	if (localizationCode == TEXT("uz-cyrl-uz"))
-		return TEXT("uzbekCyrillic.xml");
-	if (localizationCode == TEXT("vec"))
-		return TEXT("venetian.xml");
-	if (localizationCode == TEXT("vi") || localizationCode == TEXT("vi-vn"))
-		return TEXT("vietnamese.xml");
-	if (localizationCode == TEXT("cy-gb"))
-		return TEXT("welsh.xml");
-	if (localizationCode == TEXT("zu") || localizationCode == TEXT("zu-za"))
-		return TEXT("zulu.xml");
-	if (localizationCode == TEXT("ne") || localizationCode == TEXT("nep"))
-		return TEXT("nepali.xml");
-	if (localizationCode == TEXT("oc-aranes"))
-		return TEXT("aranese.xml");
-	if (localizationCode == TEXT("exy"))
-		return TEXT("extremaduran.xml");
-	if (localizationCode == TEXT("keb"))
-		return TEXT("kabyle.xml");
-	if (localizationCode == TEXT("lij"))
-		return TEXT("ligurian.xml");
-	if (localizationCode == TEXT("ga"))
-		return TEXT("irish.xml");
-	if (localizationCode == TEXT("sgs"))
-		return TEXT("samogitian.xml");
-	if (localizationCode == TEXT("yue"))
-		return TEXT("hongKongCantonese.xml");
-	if (localizationCode == TEXT("ab") || localizationCode == TEXT("abk"))
-		return TEXT("abkhazian.xml");
+	if (localizationCode == L"en" || localizationCode == L"en-au" || localizationCode == L"en-bz" || localizationCode == L"en-ca" || localizationCode == L"en-cb" || localizationCode == L"en-gb" || localizationCode == L"en-ie" || localizationCode == L"en-jm" || localizationCode == L"en-nz" || localizationCode == L"en-ph" || localizationCode == L"en-tt" || localizationCode == L"en-us" || localizationCode == L"en-za" || localizationCode == L"en-zw")
+		return L"english.xml";
+	if (localizationCode == L"af")
+		return L"afrikaans.xml";
+	if (localizationCode == L"sq")
+		return L"albanian.xml";
+	if (localizationCode == L"ar" || localizationCode == L"ar-dz" || localizationCode == L"ar-bh" || localizationCode == L"ar-eg" ||localizationCode == L"ar-iq" || localizationCode == L"ar-jo" || localizationCode == L"ar-kw" || localizationCode == L"ar-lb" || localizationCode == L"ar-ly" || localizationCode == L"ar-ma" || localizationCode == L"ar-om" || localizationCode == L"ar-qa" || localizationCode == L"ar-sa" || localizationCode == L"ar-sy" || localizationCode == L"ar-tn" || localizationCode == L"ar-ae" || localizationCode == L"ar-ye")
+		return L"arabic.xml";
+	if (localizationCode == L"an")
+		return L"aragonese.xml";
+	if (localizationCode == L"az")
+		return L"azerbaijani.xml";
+	if (localizationCode == L"eu")
+		return L"basque.xml";
+	if (localizationCode == L"be")
+		return L"belarusian.xml";
+	if (localizationCode == L"bn")
+		return L"bengali.xml";
+	if (localizationCode == L"bs")
+		return L"bosnian.xml";
+	if (localizationCode == L"pt-br")
+		return L"brazilian_portuguese.xml";
+	if (localizationCode == L"br-fr")
+		return L"breton.xml";
+	if (localizationCode == L"bg")
+		return L"bulgarian.xml";
+	if (localizationCode == L"ca")
+		return L"catalan.xml";
+	if (localizationCode == L"zh-tw" || localizationCode == L"zh-hk" || localizationCode == L"zh-sg")
+		return L"taiwaneseMandarin.xml";
+	if (localizationCode == L"zh" || localizationCode == L"zh-cn")
+		return L"chineseSimplified.xml";
+	if (localizationCode == L"co" || localizationCode == L"co-fr")
+		return L"corsican.xml";
+	if (localizationCode == L"hr")
+		return L"croatian.xml";
+	if (localizationCode == L"cs")
+		return L"czech.xml";
+	if (localizationCode == L"da")
+		return L"danish.xml";
+	if (localizationCode == L"nl" || localizationCode == L"nl-be")
+		return L"dutch.xml";
+	if (localizationCode == L"eo")
+		return L"esperanto.xml";
+	if (localizationCode == L"et")
+		return L"estonian.xml";
+	if (localizationCode == L"fa")
+		return L"farsi.xml";
+	if (localizationCode == L"fi")
+		return L"finnish.xml";
+	if (localizationCode == L"fr" || localizationCode == L"fr-be" || localizationCode == L"fr-ca" || localizationCode == L"fr-fr" || localizationCode == L"fr-lu" || localizationCode == L"fr-mc" || localizationCode == L"fr-ch")
+		return L"french.xml";
+	if (localizationCode == L"fur")
+		return L"friulian.xml";
+	if (localizationCode == L"gl")
+		return L"galician.xml";
+	if (localizationCode == L"ka")
+		return L"georgian.xml";
+	if (localizationCode == L"de" || localizationCode == L"de-at" || localizationCode == L"de-de" || localizationCode == L"de-li" || localizationCode == L"de-lu" || localizationCode == L"de-ch")
+		return L"german.xml";
+	if (localizationCode == L"el")
+		return L"greek.xml";
+	if (localizationCode == L"gu")
+		return L"gujarati.xml";
+	if (localizationCode == L"he")
+		return L"hebrew.xml";
+	if (localizationCode == L"hi")
+		return L"hindi.xml";
+	if (localizationCode == L"hu")
+		return L"hungarian.xml";
+	if (localizationCode == L"id")
+		return L"indonesian.xml";
+	if (localizationCode == L"it" || localizationCode == L"it-ch")
+		return L"italian.xml";
+	if (localizationCode == L"ja")
+		return L"japanese.xml";
+	if (localizationCode == L"kn")
+		return L"kannada.xml";
+	if (localizationCode == L"kk")
+		return L"kazakh.xml";
+	if (localizationCode == L"ko" || localizationCode == L"ko-kp" || localizationCode == L"ko-kr")
+		return L"korean.xml";
+	if (localizationCode == L"ku")
+		return L"kurdish.xml";
+	if (localizationCode == L"ky")
+		return L"kyrgyz.xml";
+	if (localizationCode == L"lv")
+		return L"latvian.xml";
+	if (localizationCode == L"lt")
+		return L"lithuanian.xml";
+	if (localizationCode == L"lb")
+		return L"luxembourgish.xml";
+	if (localizationCode == L"mk")
+		return L"macedonian.xml";
+	if (localizationCode == L"ms")
+		return L"malay.xml";
+	if (localizationCode == L"mr")
+		return L"marathi.xml";
+	if (localizationCode == L"mn")
+		return L"mongolian.xml";
+	if (localizationCode == L"no" || localizationCode == L"nb")
+		return L"norwegian.xml";
+	if (localizationCode == L"nn")
+		return L"nynorsk.xml";
+	if (localizationCode == L"oc")
+		return L"occitan.xml";
+	if (localizationCode == L"pl")
+		return L"polish.xml";
+	if (localizationCode == L"pt" || localizationCode == L"pt-pt")
+		return L"portuguese.xml";
+	if (localizationCode == L"pa" || localizationCode == L"pa-in")
+		return L"punjabi.xml";
+	if (localizationCode == L"ro" || localizationCode == L"ro-mo")
+		return L"romanian.xml";
+	if (localizationCode == L"ru" || localizationCode == L"ru-mo")
+		return L"russian.xml";
+	if (localizationCode == L"sc")
+		return L"sardinian.xml";
+	if (localizationCode == L"sr")
+		return L"serbian.xml";
+	if (localizationCode == L"sr-cyrl-ba" || localizationCode == L"sr-cyrl-sp")
+		return L"serbianCyrillic.xml";
+	if (localizationCode == L"si")
+		return L"sinhala.xml";
+	if (localizationCode == L"sk")
+		return L"slovak.xml";
+	if (localizationCode == L"sl")
+		return L"slovenian.xml";
+	if (localizationCode == L"es" || localizationCode == L"es-bo" || localizationCode == L"es-cl" || localizationCode == L"es-co" || localizationCode == L"es-cr" || localizationCode == L"es-do" || localizationCode == L"es-ec" || localizationCode == L"es-sv" || localizationCode == L"es-gt" || localizationCode == L"es-hn" || localizationCode == L"es-mx" || localizationCode == L"es-ni" || localizationCode == L"es-pa" || localizationCode == L"es-py" || localizationCode == L"es-pe" || localizationCode == L"es-pr" || localizationCode == L"es-es" || localizationCode == L"es-uy" || localizationCode == L"es-ve")
+		return L"spanish.xml";
+	if (localizationCode == L"es-ar")
+		return L"spanish_ar.xml";
+	if (localizationCode == L"sv")
+		return L"swedish.xml";
+	if (localizationCode == L"tl")
+		return L"tagalog.xml";
+	if (localizationCode == L"tg-cyrl-tj")
+		return L"tajikCyrillic.xml";
+	if (localizationCode == L"ta")
+		return L"tamil.xml";
+	if (localizationCode == L"tt")
+		return L"tatar.xml";
+	if (localizationCode == L"te")
+		return L"telugu.xml";
+	if (localizationCode == L"th")
+		return L"thai.xml";
+	if (localizationCode == L"tr")
+		return L"turkish.xml";
+	if (localizationCode == L"uk")
+		return L"ukrainian.xml";
+	if (localizationCode == L"ur" || localizationCode == L"ur-pk")
+		return L"urdu.xml";
+	if (localizationCode == L"ug-cn")
+		return L"uyghur.xml";
+	if (localizationCode == L"uz")
+		return L"uzbek.xml";
+	if (localizationCode == L"uz-cyrl-uz")
+		return L"uzbekCyrillic.xml";
+	if (localizationCode == L"vec")
+		return L"venetian.xml";
+	if (localizationCode == L"vi" || localizationCode == L"vi-vn")
+		return L"vietnamese.xml";
+	if (localizationCode == L"cy-gb")
+		return L"welsh.xml";
+	if (localizationCode == L"zu" || localizationCode == L"zu-za")
+		return L"zulu.xml";
+	if (localizationCode == L"ne" || localizationCode == L"nep")
+		return L"nepali.xml";
+	if (localizationCode == L"oc-aranes")
+		return L"aranese.xml";
+	if (localizationCode == L"exy")
+		return L"extremaduran.xml";
+	if (localizationCode == L"kab")
+		return L"kabyle.xml";
+	if (localizationCode == L"lij")
+		return L"ligurian.xml";
+	if (localizationCode == L"ga")
+		return L"irish.xml";
+	if (localizationCode == L"sgs")
+		return L"samogitian.xml";
+	if (localizationCode == L"yue")
+		return L"hongKongCantonese.xml";
+	if (localizationCode == L"ab" || localizationCode == L"abk")
+		return L"abkhazian.xml";
 
 	return std::wstring();
 }
 
 
-void NppParameters::feedKeyWordsParameters(TiXmlNode *node)
+void NppParameters::feedKeyWordsParameters(const NppXml::Element& element)
 {
-	TiXmlNode *langRoot = node->FirstChildElement(TEXT("Languages"));
+	NppXml::Element langRoot = NppXml::firstChildElement(element, "Languages");
 	if (!langRoot)
 		return;
 
-	for (TiXmlNode *langNode = langRoot->FirstChildElement(TEXT("Language"));
-		langNode ;
-		langNode = langNode->NextSibling(TEXT("Language")) )
+	for (NppXml::Element langNode = NppXml::firstChildElement(langRoot, "Language");
+		langNode;
+		langNode = NppXml::nextSiblingElement(langNode, "Language"))
 	{
 		if (_nbLang < NB_LANG)
 		{
-			TiXmlElement* element = langNode->ToElement();
-			const TCHAR* name = element->Attribute(TEXT("name"));
+			const char* name = NppXml::attribute(langNode, "name");
 			if (name)
 			{
-				_langList[_nbLang] = new Lang(getLangIDFromStr(name), name);
-				_langList[_nbLang]->setDefaultExtList(element->Attribute(TEXT("ext")));
-				_langList[_nbLang]->setCommentLineSymbol(element->Attribute(TEXT("commentLine")));
-				_langList[_nbLang]->setCommentStart(element->Attribute(TEXT("commentStart")));
-				_langList[_nbLang]->setCommentEnd(element->Attribute(TEXT("commentEnd")));
+				const std::wstring wsName = string2wstring(name);
+				const std::wstring wsExt = string2wstring(NppXml::attribute(langNode, "ext", ""));
 
-				int tabSettings;
-				if (element->Attribute(TEXT("tabSettings"), &tabSettings))
-					_langList[_nbLang]->setTabInfo(tabSettings);
+				const int tabSettings = NppXml::intAttribute(langNode, "tabSettings", -1);
+				const bool isBackspaceUnindent = getBoolAttribute(langNode, "backspaceUnindent");
 
-				for (TiXmlNode *kwNode = langNode->FirstChildElement(TEXT("Keywords"));
-					kwNode ;
-					kwNode = kwNode->NextSibling(TEXT("Keywords")) )
+				_langList[_nbLang] = std::make_unique<Lang>(
+					getLangIDFromStr(wsName.c_str()),
+					wsName.c_str(),
+					wsExt.c_str(),
+					NppXml::attribute(langNode, "commentLine", ""),
+					NppXml::attribute(langNode, "commentStart", ""),
+					NppXml::attribute(langNode, "commentEnd", ""),
+					tabSettings,
+					isBackspaceUnindent);
+
+				for (NppXml::Element kwNode = NppXml::firstChildElement(langNode, "Keywords");
+					kwNode;
+					kwNode = NppXml::nextSiblingElement(kwNode, "Keywords"))
 				{
-					const TCHAR *indexName = (kwNode->ToElement())->Attribute(TEXT("name"));
-					TiXmlNode *kwVal = kwNode->FirstChild();
-					const TCHAR *keyWords = TEXT("");
-					if ((indexName) && (kwVal))
-						keyWords = kwVal->Value();
+					const char* indexName = NppXml::attribute(kwNode, "name");
+					NppXml::Node kwVal = NppXml::firstChild(kwNode);
+					std::string keyWords;
+					if (indexName && kwVal)
+						keyWords = NppXml::getValue(kwVal);
 
-					int i = getKwClassFromName(indexName);
+					const int i = getKwClassFromName(indexName);
 
-					if (i >= 0 && i <= KEYWORDSET_MAX)
-						_langList[_nbLang]->setWords(keyWords, i);
+					if (!keyWords.empty() && i >= 0 && i <= KEYWORDSET_MAX)
+					{
+						_langList[_nbLang]->setWords(keyWords.c_str(), i);
+					}
 				}
 				++_nbLang;
 			}
@@ -4793,598 +6020,432 @@ void NppParameters::feedKeyWordsParameters(TiXmlNode *node)
 	}
 }
 
-extern "C" {
-typedef DWORD (WINAPI * EESFUNC) (LPCTSTR, LPTSTR, DWORD);
-}
-
-void NppParameters::feedGUIParameters(TiXmlNode *node)
+void NppParameters::feedGUIParameters(const NppXml::Element& element)
 {
-	TiXmlNode *GUIRoot = node->FirstChildElement(TEXT("GUIConfigs"));
-	if (nullptr == GUIRoot)
+	NppXml::Element GUIRoot = NppXml::firstChildElement(element, "GUIConfigs");
+	if (!GUIRoot)
 		return;
 
-	for (TiXmlNode *childNode = GUIRoot->FirstChildElement(TEXT("GUIConfig"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("GUIConfig")) )
+	for (NppXml::Element childNode = NppXml::firstChildElement(GUIRoot, "GUIConfig");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "GUIConfig"))
 	{
-		TiXmlElement* element = childNode->ToElement();
-		const TCHAR* nm = element->Attribute(TEXT("name"));
-		if (nullptr == nm)
+		const char* nm = NppXml::attribute(childNode, "name");
+		if (!nm)
 			continue;
 
-		auto parseYesNoBoolAttribute = [&element](const TCHAR* name, bool defaultValue = false) -> bool {
-			const TCHAR* val = element->Attribute(name);
-			if (val != nullptr)
+		// <GUIConfig name="ColorPickerCustomColors" color0="..." ... color15="..." />
+		if (std::strcmp(nm, "ColorPickerCustomColors") == 0)
+		{
+			size_t i = 0;
+			for (auto &cc : _nppGUI._colorPickerCustomColors)
 			{
-				if (!lstrcmp(val, TEXT("yes")))
-					return true;
-				else if (!lstrcmp(val, TEXT("no")))
-					return false;
+				const std::string attrName = "color" + std::to_string(i++);
+				cc = static_cast<COLORREF>(NppXml::intAttribute(childNode, attrName.c_str(), static_cast<int>(cc)));
 			}
-			return defaultValue;
-		};
+		}
+		// <GUIConfig name="ToolBar" visible="yes" fluentColor="0" fluentCustomColor="0" fluentMono="no">standard</GUIConfig>
+		else if (std::strcmp(nm, "ToolBar") == 0)
+		{
+			_nppGUI._toolbarShow = getBoolAttribute(childNode, "visible", _nppGUI._toolbarShow);
 
-		if (!lstrcmp(nm, TEXT("ToolBar")))
-		{
-			const TCHAR* val = element->Attribute(TEXT("visible"));
-			if (val)
 			{
-				if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._toolbarShow = false;
-				else// if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._toolbarShow = true;
+				using enum FluentColor;
+				_nppGUI._tbIconInfo._tbColor = getRangeDefaultAttribute(childNode, "fluentColor", defaultColor, custom, _nppGUI._tbIconInfo._tbColor);
 			}
-			TiXmlNode *n = childNode->FirstChild();
+
+			_nppGUI._tbIconInfo._tbCustomColor = NppXml::intAttribute(childNode, "fluentCustomColor", _nppGUI._tbIconInfo._tbCustomColor);
+
+			_nppGUI._tbIconInfo._tbUseMono = getBoolAttribute(childNode, "fluentMono", _nppGUI._tbIconInfo._tbUseMono);
+
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					if (!lstrcmp(val, TEXT("small")))
-						_nppGUI._toolBarStatus = TB_SMALL;
-					else if (!lstrcmp(val, TEXT("large")))
-						_nppGUI._toolBarStatus = TB_LARGE;
-					else if (!lstrcmp(val, TEXT("small2")))
-						_nppGUI._toolBarStatus = TB_SMALL2;
-					else if (!lstrcmp(val, TEXT("large2")))
-						_nppGUI._toolBarStatus = TB_LARGE2;
-					else //if (!lstrcmp(val, TEXT("standard")))
-						_nppGUI._toolBarStatus = TB_STANDARD;
+					using enum toolBarStatusType;
+					auto& tbIconSet = _nppGUI._tbIconInfo._tbIconSet;
+					if (std::strcmp(val, "small") == 0)
+						tbIconSet = TB_SMALL;
+					else if (std::strcmp(val, "large") == 0)
+						tbIconSet = TB_LARGE;
+					else if (std::strcmp(val, "small2") == 0)
+						tbIconSet = TB_SMALL2;
+					else if (std::strcmp(val, "large2") == 0)
+						tbIconSet = TB_LARGE2;
+					else //if (std::strcmp(val, "standard") == 0)
+						tbIconSet = TB_STANDARD;
 				}
+
 			}
 		}
-		else if (!lstrcmp(nm, TEXT("StatusBar")))
+		// <GUIConfig name="StatusBar">show</GUIConfig>
+		else if (std::strcmp(nm, "StatusBar") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (!lstrcmp(val, TEXT("hide")))
-						_nppGUI._statusBarShow = false;
-					else if (!lstrcmp(val, TEXT("show")))
-						_nppGUI._statusBarShow = true;
-				}
-			}
+			_nppGUI._statusBarShow = getBoolChildTextNode(childNode, _nppGUI._statusBarShow, STR_BOOL_SHOWHIDE);
 		}
-		else if (!lstrcmp(nm, TEXT("MenuBar")))
+		// <GUIConfig name="MenuBar">show</GUIConfig>
+		else if (std::strcmp(nm, "MenuBar") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (!lstrcmp(val, TEXT("hide")))
-						_nppGUI._menuBarShow = false;
-					else if (!lstrcmp(val, TEXT("show")))
-						_nppGUI._menuBarShow = true;
-				}
-			}
+			_nppGUI._menuBarShow = getBoolChildTextNode(childNode, _nppGUI._menuBarShow, STR_BOOL_SHOWHIDE);
 		}
-		else if (!lstrcmp(nm, TEXT("TabBar")))
+		// <GUIConfig name="DialogFont" size="8" fontName="MS Shell Dlg" />
+		else if (std::strcmp(nm, "DialogFont") == 0)
+		{
+			_nppGUI._fontDlgSize = static_cast<WORD>(NppXml::uintAttribute(childNode, "size", _nppGUI._fontDlgSize));
+			_nppGUI._fontDlgName = NppXml::attributeW(childNode, "fontName", "MS Shell Dlg");
+		}
+		// <GUIConfig name="TabBar" dragAndDrop="yes" drawTopBar="yes" drawInactiveTab="yes" reduce="yes" closeButton="yes"
+		// pinButton="yes" showOnlyPinnedButton="no" buttonsOninactiveTabs="no" doubleClick2Close="no"
+		// vertical="no" multiLine="no" hide="no" quitOnEmpty="no" tabCompactLabelLen="0" />
+		else if (std::strcmp(nm, "TabBar") == 0)
 		{
 			bool isFailed = false;
-			int oldValue = _nppGUI._tabStatus;
-			const TCHAR* val = element->Attribute(TEXT("dragAndDrop"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus = TAB_DRAGNDROP;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus = 0;
-				else
-					isFailed = true;
-			}
+			const int oldValue = _nppGUI._tabStatus;
+			_nppGUI._tabStatus = 0;
 
-			val = element->Attribute(TEXT("drawTopBar"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_DRAWTOPBAR;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+			using enum XmlAttrResult;
 
-			val = element->Attribute(TEXT("drawInactiveTab"));
-			if (val)
+			auto setTabStatus = [&childNode, &isFailed, this](const char* name, int flag)
 			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_DRAWINACTIVETAB;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+				if (isFailed)
+					return;
 
-			val = element->Attribute(TEXT("reduce"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_REDUCE;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+				const XmlAttrResult val = getResultAttribute(childNode, name);
+				switch (val)
+				{
+					case isTrue:
+					{
+						_nppGUI._tabStatus |= flag;
+						break;
+					}
 
-			val = element->Attribute(TEXT("closeButton"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_CLOSEBUTTON;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+					case isFalse:
+					{
+						break;
+					}
 
-			val = element->Attribute(TEXT("doubleClick2Close"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_DBCLK2CLOSE;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
-			val = element->Attribute(TEXT("vertical"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_VERTICAL;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+					case failed:
+					{
+						isFailed = true;
+						break;
+					}
+				}
+			};
 
-			val = element->Attribute(TEXT("multiLine"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_MULTILINE;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
-
-			val = element->Attribute(TEXT("hide"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_HIDE;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
-
-			val = element->Attribute(TEXT("quitOnEmpty"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("yes")))
-					_nppGUI._tabStatus |= TAB_QUITONEMPTY;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
-
-			val = element->Attribute(TEXT("iconSetNumber"));
-			if (val)
-			{
-				if (!lstrcmp(val, TEXT("1")))
-					_nppGUI._tabStatus |= TAB_ALTICONS;
-				else if (!lstrcmp(val, TEXT("0")))
-					_nppGUI._tabStatus |= 0;
-				else
-					isFailed = true;
-			}
+			setTabStatus("dragAndDrop", TAB_DRAGNDROP);
+			setTabStatus("drawTopBar", TAB_DRAWTOPBAR);
+			setTabStatus("drawInactiveTab", TAB_DRAWINACTIVETAB);
+			setTabStatus("reduce", TAB_REDUCE);
+			setTabStatus("closeButton", TAB_CLOSEBUTTON);
+			setTabStatus("pinButton", TAB_PINBUTTON);
+			setTabStatus("buttonsOninactiveTabs", TAB_INACTIVETABSHOWBUTTON);
+			setTabStatus("showOnlyPinnedButton", TAB_SHOWONLYPINNEDBUTTON);
+			setTabStatus("doubleClick2Close", TAB_DBCLK2CLOSE);
+			setTabStatus("vertical", TAB_VERTICAL);
+			setTabStatus("multiLine", TAB_MULTILINE);
+			setTabStatus("hide", TAB_HIDE);
+			setTabStatus("quitOnEmpty", TAB_QUITONEMPTY);
 
 			if (isFailed)
 				_nppGUI._tabStatus = oldValue;
+
+			_nppGUI._tabCompactLabelLen = getRangeClampAttribute<UINT>(childNode, "tabCompactLabelLen", 0U, static_cast<UINT>(NB_MAX_TAB_COMPACT_LABEL_LEN), _nppGUI._tabCompactLabelLen);
 		}
-		else if (!lstrcmp(nm, TEXT("Auto-detection")))
+		// <GUIConfig name="Auto-detection">yes</GUIConfig>
+		else if (std::strcmp(nm, "Auto-detection") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					if (!lstrcmp(val, TEXT("yesOld")))
+					if (std::strcmp(val, "yesOld") == 0)
 						_nppGUI._fileAutoDetection = cdEnabledOld;
-					else if (!lstrcmp(val, TEXT("autoOld")))
+					else if (std::strcmp(val, "autoOld") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledOld | cdAutoUpdate);
-					else if (!lstrcmp(val, TEXT("Update2EndOld")))
+					else if (std::strcmp(val, "Update2EndOld") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledOld | cdGo2end);
-					else if (!lstrcmp(val, TEXT("autoUpdate2EndOld")))
+					else if (std::strcmp(val, "autoUpdate2EndOld") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledOld | cdAutoUpdate | cdGo2end);
-					else if (!lstrcmp(val, TEXT("yes")))
+					else if (std::strcmp(val, "yes") == 0)
 						_nppGUI._fileAutoDetection = cdEnabledNew;
-					else if (!lstrcmp(val, TEXT("auto")))
+					else if (std::strcmp(val, "auto") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledNew | cdAutoUpdate);
-					else if (!lstrcmp(val, TEXT("Update2End")))
+					else if (std::strcmp(val, "Update2End") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledNew | cdGo2end);
-					else if (!lstrcmp(val, TEXT("autoUpdate2End")))
+					else if (std::strcmp(val, "autoUpdate2End") == 0)
 						_nppGUI._fileAutoDetection = (cdEnabledNew | cdAutoUpdate | cdGo2end);
-					else //(!lstrcmp(val, TEXT("no")))
+					else //(std::strcmp(val, "no") == 0)
 						_nppGUI._fileAutoDetection = cdDisabled;
 				}
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("TrayIcon")))
+		// <GUIConfig name="TrayIcon">0</GUIConfig>
+		else if (std::strcmp(nm, "TrayIcon") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					_nppGUI._isMinimizedToTray = (lstrcmp(val, TEXT("yes")) == 0);
-				}
-			}
-		}
-		else if (!lstrcmp(nm, TEXT("RememberLastSession")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._rememberLastSession = true;
+					if (std::strcmp(val, "no") == 0 || std::strcmp(val, "0") == 0)
+						_nppGUI._isMinimizedToTray = sta_none;
+					else if (std::strcmp(val, "yes") == 0 || std::strcmp(val, "1") == 0)
+						_nppGUI._isMinimizedToTray = sta_minimize;
+					else if (std::strcmp(val, "2") == 0)
+						_nppGUI._isMinimizedToTray = sta_close;
+					else if (std::strcmp(val, "3") == 0)
+						_nppGUI._isMinimizedToTray = sta_minimize_close;
 					else
-						_nppGUI._rememberLastSession = false;
+						_nppGUI._isMinimizedToTray = sta_none;
 				}
 			}
 		}
-		else if (!lstrcmp(nm, TEXT("KeepSessionAbsentFileEntries")))
+		// <GUIConfig name="RememberLastSession">yes</GUIConfig>
+		else if (std::strcmp(nm, "RememberLastSession") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			_nppGUI._rememberLastSession = getBoolChildTextNode(childNode, _nppGUI._rememberLastSession);
+		}
+		// <GUIConfig name="KeepSessionAbsentFileEntries">no</GUIConfig>
+		else if (std::strcmp(nm, "KeepSessionAbsentFileEntries") == 0)
+		{
+			_nppGUI._keepSessionAbsentFileEntries = getBoolChildTextNode(childNode);
+		}
+		// <GUIConfig name="DetectEncoding">yes</GUIConfig>
+		else if (std::strcmp(nm, "DetectEncoding") == 0)
+		{
+			_nppGUI._detectEncoding = getBoolChildTextNode(childNode, _nppGUI._detectEncoding);
+		}
+		// <GUIConfig name="SaveAllConfirm">yes</GUIConfig>
+		else if (std::strcmp(nm, "SaveAllConfirm") == 0)
+		{
+			_nppGUI._saveAllConfirm = getBoolChildTextNode(childNode, _nppGUI._saveAllConfirm);
+		}
+		// <GUIConfig name="MaintainIndent">1</GUIConfig>
+		else if (std::strcmp(nm, "MaintainIndent") == 0 ||
+			std::strcmp(nm, "MaitainIndent") == 0) // typo - kept for the compatibility reason
+		{
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._keepSessionAbsentFileEntries = true;
-					else
-						_nppGUI._keepSessionAbsentFileEntries = false;
+					// the retro-compatibility with the old values
+					if (std::strcmp(val, "yes") == 0)
+						_nppGUI._maintainIndent = autoIndent_advanced;
+					else if (std::strcmp(val, "no") == 0)
+						_nppGUI._maintainIndent = autoIndent_none;
+
+					// the treatment of the new values
+					else if (std::strcmp(val, "0") == 0)
+						_nppGUI._maintainIndent = autoIndent_none;
+					else if (std::strcmp(val, "1") == 0)
+						_nppGUI._maintainIndent = autoIndent_advanced;
+					else if (std::strcmp(val, "2") == 0)
+						_nppGUI._maintainIndent = autoIndent_basic;
+					else // other values will be ignored - use the default value
+						_nppGUI._maintainIndent = autoIndent_advanced;
 				}
 			}
 		}
-		else if (!lstrcmp(nm, TEXT("DetectEncoding")))
+		// <GUIConfig name="MarkAll" matchCase="no" wholeWordOnly="yes" />
+		else if (std::strcmp(nm, "MarkAll") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			_nppGUI._markAllCaseSensitive = getBoolAttribute(childNode, "matchCase");
+			_nppGUI._markAllWordOnly = getBoolAttribute(childNode, "wholeWordOnly", _nppGUI._markAllWordOnly);
+		}
+		// <GUIConfig name="SmartHighLight" matchCase="no" wholeWordOnly="yes" useFindSettings="no" onAnotherView="no">yes</GUIConfig>
+		else if (std::strcmp(nm, "SmartHighLight") == 0)
+		{
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._detectEncoding = true;
-					else
-						_nppGUI._detectEncoding = false;
-				}
+				_nppGUI._enableSmartHilite = getBoolChildTextNode(childNode, _nppGUI._enableSmartHilite);
+
+				_nppGUI._smartHiliteCaseSensitive = getBoolAttribute(childNode, "matchCase");
+				_nppGUI._smartHiliteWordOnly = getBoolAttribute(childNode, "wholeWordOnly", _nppGUI._smartHiliteWordOnly);
+				_nppGUI._smartHiliteUseFindSettings = getBoolAttribute(childNode, "useFindSettings");
+				_nppGUI._smartHiliteOnAnotherView = getBoolAttribute(childNode, "onAnotherView");
 			}
 		}
-		else if (!lstrcmp(nm, TEXT("SaveAllConfirm")))
+		// <GUIConfig name="TagsMatchHighLight" TagAttrHighLight="yes" HighLightNonHtmlZone="no">yes</GUIConfig>
+		else if (std::strcmp(nm, "TagsMatchHighLight") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._saveAllConfirm = true;
-					else
-						_nppGUI._saveAllConfirm = false;
-				}
+				_nppGUI._enableTagsMatchHilite = getBoolChildTextNode(childNode, _nppGUI._enableTagsMatchHilite);
+				_nppGUI._enableTagAttrsHilite = getBoolAttribute(childNode, "TagAttrHighLight", _nppGUI._enableTagAttrsHilite);
+				_nppGUI._enableHiliteNonHTMLZone = getBoolAttribute(childNode, "HighLightNonHtmlZone");
 			}
 		}
-		else if (lstrcmp(nm, TEXT("MaitainIndent")) == 0)
+		// <GUIConfig name="TaskList">yes</GUIConfig>
+		else if (std::strcmp(nm, "TaskList") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			_nppGUI._doTaskList = getBoolChildTextNode(childNode, _nppGUI._doTaskList);
+		}
+		// <GUIConfig name="MRU">yes</GUIConfig>
+		else if (std::strcmp(nm, "MRU") == 0)
+		{
+			_nppGUI._styleMRU = getBoolChildTextNode(childNode, _nppGUI._styleMRU);
+		}
+		// <GUIConfig name="URL">2</GUIConfig>
+		else if (std::strcmp(nm, "URL") == 0)
+		{
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._maitainIndent = true;
-					else
-						_nppGUI._maitainIndent = false;
+					using enum urlMode;
+					try {
+						const int i = std::stoi(val);
+						if ((i >= static_cast<int>(urlMin)) && (i <= static_cast<int>(urlMax)))
+							_nppGUI._styleURL = static_cast<urlMode>(i);
+					}
+					catch (const std::invalid_argument&)
+					{
+						_nppGUI._styleURL = urlUnderLineFg;
+					}
+					catch (const std::out_of_range&)
+					{
+						_nppGUI._styleURL = urlUnderLineFg;
+					}
 				}
 			}
 		}
-		// <GUIConfig name="MarkAll" matchCase="yes" wholeWordOnly="yes" </GUIConfig>
-		else if (!lstrcmp(nm, TEXT("MarkAll")))
+		// <GUIConfig name="uriCustomizedSchemes">svn:// cvs:// git:// imap:// irc:// irc6:// ircs:// ldap:// ldaps:// news: telnet://
+		// gopher:// ssh:// sftp:// smb:// skype: snmp:// spotify: steam:// sms: slack:// chrome:// bitcoin:</GUIConfig>
+		else if (std::strcmp(nm, "uriCustomizedSchemes") == 0)
 		{
-			const TCHAR* val = element->Attribute(TEXT("matchCase"));
-			if (val)
-			{
-				if (lstrcmp(val, TEXT("yes")) == 0)
-					_nppGUI._markAllCaseSensitive = true;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._markAllCaseSensitive = false;
-			}
-
-			val = element->Attribute(TEXT("wholeWordOnly"));
-			if (val)
-			{
-				if (lstrcmp(val, TEXT("yes")) == 0)
-					_nppGUI._markAllWordOnly = true;
-				else if (!lstrcmp(val, TEXT("no")))
-					_nppGUI._markAllWordOnly = false;
-			}
-		}
-		// <GUIConfig name="SmartHighLight" matchCase="yes" wholeWordOnly="yes" useFindSettings="no">yes</GUIConfig>
-		else if (!lstrcmp(nm, TEXT("SmartHighLight")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._enableSmartHilite = true;
-					else
-						_nppGUI._enableSmartHilite = false;
-				}
-
-				val = element->Attribute(TEXT("matchCase"));
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._smartHiliteCaseSensitive = true;
-					else if (!lstrcmp(val, TEXT("no")))
-						_nppGUI._smartHiliteCaseSensitive = false;
-				}
-
-				val = element->Attribute(TEXT("wholeWordOnly"));
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._smartHiliteWordOnly = true;
-					else if (!lstrcmp(val, TEXT("no")))
-						_nppGUI._smartHiliteWordOnly = false;
-				}
-
-				val = element->Attribute(TEXT("useFindSettings"));
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._smartHiliteUseFindSettings = true;
-					else if (!lstrcmp(val, TEXT("no")))
-						_nppGUI._smartHiliteUseFindSettings = false;
-				}
-
-				val = element->Attribute(TEXT("onAnotherView"));
-				if (val)
-				{
-					if (lstrcmp(val, TEXT("yes")) == 0)
-						_nppGUI._smartHiliteOnAnotherView = true;
-					else if (!lstrcmp(val, TEXT("no")))
-						_nppGUI._smartHiliteOnAnotherView = false;
-				}
+					_nppGUI._uriSchemes = string2wstring(val);
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("TagsMatchHighLight")))
+		// <GUIConfig name="CheckHistoryFiles">no</GUIConfig>
+		else if (std::strcmp(nm, "CheckHistoryFiles") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			_nppGUI._checkHistoryFiles = getBoolChildTextNode(childNode);
+		}
+		// <GUIConfig name="ScintillaViewsSplitter">vertical</GUIConfig>
+		else if (std::strcmp(nm, "ScintillaViewsSplitter") == 0)
+		{
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
 				{
-					_nppGUI._enableTagsMatchHilite = !lstrcmp(val, TEXT("yes"));
-					const TCHAR *tahl = element->Attribute(TEXT("TagAttrHighLight"));
-					if (tahl)
-						_nppGUI._enableTagAttrsHilite = !lstrcmp(tahl, TEXT("yes"));
-
-					tahl = element->Attribute(TEXT("HighLightNonHtmlZone"));
-					if (tahl)
-						_nppGUI._enableHiliteNonHTMLZone = !lstrcmp(tahl, TEXT("yes"));
-				}
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("TaskList")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					_nppGUI._doTaskList = (!lstrcmp(val, TEXT("yes")))?true:false;
-				}
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("MRU")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-					_nppGUI._styleMRU = (!lstrcmp(val, TEXT("yes")));
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("URL")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					int const i = _wtoi (val);
-					if ((i >= urlMin) && (i <= urlMax))
-						_nppGUI._styleURL = urlMode(i);
-				}
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("uriCustomizedSchemes")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				_nppGUI._uriSchemes = val;
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("CheckHistoryFiles")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (!lstrcmp(val, TEXT("no")))
-						_nppGUI._checkHistoryFiles = false;
-					else if (!lstrcmp(val, TEXT("yes")))
-						_nppGUI._checkHistoryFiles = true;
-				}
-			}
-		}
-
-		else if (!lstrcmp(nm, TEXT("ScintillaViewsSplitter")))
-		{
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
-			{
-				const TCHAR* val = n->Value();
-				if (val)
-				{
-					if (!lstrcmp(val, TEXT("vertical")))
+					if (std::strcmp(val, "vertical") == 0)
 						_nppGUI._splitterPos = POS_VERTICAL;
-					else if (!lstrcmp(val, TEXT("horizontal")))
-						_nppGUI._splitterPos = POS_HORIZOTAL;
+					else if (std::strcmp(val, "horizontal") == 0)
+						_nppGUI._splitterPos = POS_HORIZONTAL;
 				}
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("UserDefineDlg")))
+		// <GUIConfig name="UserDefineDlg" position="undocked">hide</GUIConfig>
+		else if (std::strcmp(nm, "UserDefineDlg") == 0)
 		{
 			bool isFailed = false;
-			int oldValue = _nppGUI._userDefineDlgStatus;
+			const int oldValue = _nppGUI._userDefineDlgStatus;
 
-			TiXmlNode *n = childNode->FirstChild();
-			if (n)
+			using enum XmlAttrResult;
+			XmlAttrResult val = getResultChildTextNode(childNode, STR_BOOL_SHOWHIDE);
+			switch (val)
 			{
-				const TCHAR* val = n->Value();
-				if (val)
+				case isTrue:
 				{
-					if (!lstrcmp(val, TEXT("hide")))
-						_nppGUI._userDefineDlgStatus = 0;
-					else if (!lstrcmp(val, TEXT("show")))
-						_nppGUI._userDefineDlgStatus = UDD_SHOW;
-					else
-						isFailed = true;
+					_nppGUI._userDefineDlgStatus = UDD_SHOW;
+					break;
+				}
+
+				case isFalse:
+				{
+					_nppGUI._userDefineDlgStatus = 0;
+					break;
+				}
+
+				case failed:
+				{
+					isFailed = true;
+					break;
 				}
 			}
 
-			const TCHAR* val = element->Attribute(TEXT("position"));
-			if (val)
+			if (!isFailed)
 			{
-				if (!lstrcmp(val, TEXT("docked")))
-					_nppGUI._userDefineDlgStatus |= UDD_DOCKED;
-				else if (!lstrcmp(val, TEXT("undocked")))
-					_nppGUI._userDefineDlgStatus |= 0;
-				else
-					isFailed = true;
+				val = getResultAttribute(childNode, "position", { "docked", "undocked" });
+				switch (val)
+				{
+					case isTrue:
+					{
+						_nppGUI._userDefineDlgStatus |= UDD_DOCKED;
+						break;
+					}
+
+					case isFalse:
+					{
+						break;
+					}
+
+					case failed:
+					{
+						isFailed = true;
+						break;
+					}
+				}
 			}
+
 			if (isFailed)
 				_nppGUI._userDefineDlgStatus = oldValue;
 		}
-
-		else if (!lstrcmp(nm, TEXT("TabSetting")))
+		// <GUIConfig name="TabSetting" replaceBySpace="no" size="4" backspaceUnindent="no" />
+		else if (std::strcmp(nm, "TabSetting") == 0)
 		{
-			int i;
-			const TCHAR* val = element->Attribute(TEXT("size"), &i);
-			if (val)
-				_nppGUI._tabSize = i;
-
+			_nppGUI._tabSize = NppXml::intAttribute(childNode, "size", _nppGUI._tabSize);
 			if ((_nppGUI._tabSize == -1) || (_nppGUI._tabSize == 0))
 				_nppGUI._tabSize = 4;
 
-			val = element->Attribute(TEXT("replaceBySpace"));
-			if (val)
-				_nppGUI._tabReplacedBySpace = (!lstrcmp(val, TEXT("yes")));
+			_nppGUI._tabReplacedBySpace = getBoolAttribute(childNode, "replaceBySpace");
+			_nppGUI._backspaceUnindent = getBoolAttribute(childNode, "backspaceUnindent");
 		}
-
-		else if (!lstrcmp(nm, TEXT("Caret")))
+		// <GUIConfig name="Caret" width="1" blinkRate="600" />
+		else if (std::strcmp(nm, "Caret") == 0)
 		{
-			int i;
-			const TCHAR* val = element->Attribute(TEXT("width"), &i);
-			if (val)
-				_nppGUI._caretWidth = i;
-
-			val = element->Attribute(TEXT("blinkRate"), &i);
-			if (val)
-				_nppGUI._caretBlinkRate = i;
+			_nppGUI._caretWidth = NppXml::intAttribute(childNode, "width", _nppGUI._caretWidth);
+			_nppGUI._caretBlinkRate = NppXml::intAttribute(childNode, "blinkRate", _nppGUI._caretBlinkRate);
 		}
-
-		else if (!lstrcmp(nm, TEXT("AppPosition")))
+		// <GUIConfig name="AppPosition" x="0" y="0" width="1100" height="700" isMaximized="no" />
+		else if (std::strcmp(nm, "AppPosition") == 0)
 		{
 			RECT oldRect = _nppGUI._appPos;
 			bool fuckUp = true;
-			int i;
 
-			if (element->Attribute(TEXT("x"), &i))
+			if (const char* val = NppXml::attribute(childNode, "x"); val)
 			{
-				_nppGUI._appPos.left = i;
+				_nppGUI._appPos.left = std::stoi(val);
 
-				if (element->Attribute(TEXT("y"), &i))
+				if (val = NppXml::attribute(childNode, "y"); val)
 				{
-					_nppGUI._appPos.top = i;
+					_nppGUI._appPos.top = std::stoi(val);
 
-					if (element->Attribute(TEXT("width"), &i))
+					if (val = NppXml::attribute(childNode, "width"); val)
 					{
-						_nppGUI._appPos.right = i;
+						_nppGUI._appPos.right = std::stoi(val);
 
-						if (element->Attribute(TEXT("height"), &i))
+						if (val = NppXml::attribute(childNode, "height"); val)
 						{
-							_nppGUI._appPos.bottom = i;
+							_nppGUI._appPos.bottom = std::stoi(val);
 							fuckUp = false;
 						}
 					}
@@ -5393,32 +6454,29 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			if (fuckUp)
 				_nppGUI._appPos = oldRect;
 
-			const TCHAR* val = element->Attribute(TEXT("isMaximized"));
-			if (val)
-				_nppGUI._isMaximized = (lstrcmp(val, TEXT("yes")) == 0);
+			_nppGUI._isMaximized = getBoolAttribute(childNode, "isMaximized");
 		}
-
-		else if (!lstrcmp(nm, TEXT("FindWindowPosition")))
+		// <GUIConfig name="FindWindowPosition" left="0" top="0" right="0" bottom="0" isLessModeOn="no" />
+		else if (std::strcmp(nm, "FindWindowPosition") == 0)
 		{
 			RECT oldRect = _nppGUI._findWindowPos;
 			bool incomplete = true;
-			int i;
 
-			if (element->Attribute(TEXT("left"), &i))
+			if (const char* val = NppXml::attribute(childNode, "left"); val)
 			{
-				_nppGUI._findWindowPos.left = i;
+				_nppGUI._findWindowPos.left = std::stoi(val);
 
-				if (element->Attribute(TEXT("top"), &i))
+				if (val = NppXml::attribute(childNode, "top"); val)
 				{
-					_nppGUI._findWindowPos.top = i;
+					_nppGUI._findWindowPos.top = std::stoi(val);
 
-					if (element->Attribute(TEXT("right"), &i))
+					if (val = NppXml::attribute(childNode, "right"); val)
 					{
-						_nppGUI._findWindowPos.right = i;
+						_nppGUI._findWindowPos.right = std::stoi(val);
 
-						if (element->Attribute(TEXT("bottom"), &i))
+						if (val = NppXml::attribute(childNode, "bottom"); val)
 						{
-							_nppGUI._findWindowPos.bottom = i;
+							_nppGUI._findWindowPos.bottom = std::stoi(val);
 							incomplete = false;
 						}
 					}
@@ -5429,221 +6487,171 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 				_nppGUI._findWindowPos = oldRect;
 			}
 
-			const TCHAR* val = element->Attribute(TEXT("isLessModeOn"));
-			if (val)
-				_nppGUI._findWindowLessMode = (lstrcmp(val, TEXT("yes")) == 0);
+			_nppGUI._findWindowLessMode = getBoolAttribute(childNode, "isLessModeOn");
 		}
-
-		else if (!lstrcmp(nm, TEXT("FinderConfig")))
+		// <GUIConfig name="FinderConfig" wrappedLines="no" purgeBeforeEverySearch="no" showOnlyOneEntryPerFoundLine="yes" FiF_ignoreunsavedChangesInOpenedFiles="no" />
+		else if (std::strcmp(nm, "FinderConfig") == 0)
 		{
-			const TCHAR* val = element->Attribute(TEXT("wrappedLines"));
-			if (val)
-			{
-				_nppGUI._finderLinesAreCurrentlyWrapped = (!lstrcmp(val, TEXT("yes")));
-			}
-
-			val = element->Attribute(TEXT("purgeBeforeEverySearch"));
-			if (val)
-			{
-				_nppGUI._finderPurgeBeforeEverySearch = (!lstrcmp(val, TEXT("yes")));
-			}
-
-			val = element->Attribute(TEXT("showOnlyOneEntryPerFoundLine"));
-			if (val)
-			{
-				_nppGUI._finderShowOnlyOneEntryPerFoundLine = (!lstrcmp(val, TEXT("yes")));
-			}
+			_nppGUI._finderLinesAreCurrentlyWrapped = getBoolAttribute(childNode, "wrappedLines");
+			_nppGUI._finderPurgeBeforeEverySearch = getBoolAttribute(childNode, "purgeBeforeEverySearch");
+			_nppGUI._finderShowOnlyOneEntryPerFoundLine = getBoolAttribute(childNode, "showOnlyOneEntryPerFoundLine", _nppGUI._finderShowOnlyOneEntryPerFoundLine);
+			_nppGUI._fif_ignoreunsavedChangesInOpenedFiles = getBoolAttribute(childNode, "FiF_ignoreunsavedChangesInOpenedFiles", _nppGUI._fif_ignoreunsavedChangesInOpenedFiles);
 		}
-
-		else if (!lstrcmp(nm, TEXT("NewDocDefaultSettings")))
+		// <GUIConfig name="NewDocDefaultSettings" format="0" encoding="4" lang="0" codepage="-1" openAnsiAsUTF8="yes"
+		// addNewDocumentOnStartup="no" useContentAsTabName="no" />
+		else if (std::strcmp(nm, "NewDocDefaultSettings") == 0)
 		{
-			int i;
-			if (element->Attribute(TEXT("format"), &i))
 			{
-				EolType newFormat = EolType::osdefault;
+				using enum EolType;
+				const int i = NppXml::intAttribute(childNode, "format", static_cast<int>(osdefault));
+				EolType newFormat = osdefault;
 				switch (i)
 				{
-					case static_cast<LPARAM>(EolType::windows) :
-						newFormat = EolType::windows;
+					case static_cast<int>(windows):
+					{
+						newFormat = windows;
 						break;
-					case static_cast<LPARAM>(EolType::macos) :
-						newFormat = EolType::macos;
+					}
+
+					case static_cast<int>(macos):
+					{
+						newFormat = macos;
 						break;
-					case static_cast<LPARAM>(EolType::unix) :
-						newFormat = EolType::unix;
+					}
+
+					case static_cast<int>(unix):
+					{
+						newFormat = unix;
 						break;
+					}
+
 					default:
-						assert(false and "invalid buffer format - fallback to default");
+					{
+						assert(false && "invalid buffer format - fallback to default");
+						break;
+					}
 				}
 				_nppGUI._newDocDefaultSettings._format = newFormat;
 			}
 
-			if (element->Attribute(TEXT("encoding"), &i))
-				_nppGUI._newDocDefaultSettings._unicodeMode = (UniMode)i;
-
-			if (element->Attribute(TEXT("lang"), &i))
-				_nppGUI._newDocDefaultSettings._lang = (LangType)i;
-
-			if (element->Attribute(TEXT("codepage"), &i))
-				_nppGUI._newDocDefaultSettings._codepage = (LangType)i;
-
-			const TCHAR* val = element->Attribute(TEXT("openAnsiAsUTF8"));
-			if (val)
-				_nppGUI._newDocDefaultSettings._openAnsiAsUtf8 = (lstrcmp(val, TEXT("yes")) == 0);
-
-			val = element->Attribute(TEXT("addNewDocumentOnStartup"));
-			if (val)
-				_nppGUI._newDocDefaultSettings._addNewDocumentOnStartup = (lstrcmp(val, TEXT("yes")) == 0);
-		}
-
-		else if (!lstrcmp(nm, TEXT("langsExcluded")))
-		{
-			// TODO
-			int g0 = 0; // up to 8
-			int g1 = 0; // up to 16
-			int g2 = 0; // up to 24
-			int g3 = 0; // up to 32
-			int g4 = 0; // up to 40
-			int g5 = 0; // up to 48
-			int g6 = 0; // up to 56
-			int g7 = 0; // up to 64
-			int g8 = 0; // up to 72
-			int g9 = 0; // up to 80
-			int g10= 0; // up to 88
-			int g11= 0; // up to 96
-			int g12= 0; // up to 104
-
-			// TODO some refactoring needed here....
 			{
-				int i;
-				if (element->Attribute(TEXT("gr0"), &i))
+				using enum UniMode;
+				int i = NppXml::intAttribute(childNode, "encoding", static_cast<int>(uniUTF8_NoBOM));
+				if (isCurrentSystemCodepageUTF8() // "Beta: Use Unicode UTF-8 for worldwide language support" option is checked in Windows
+					&& static_cast<UniMode>(i) == uni8Bit) // Notepad++ default new document setting is ANSI
 				{
-					if (i <= 255)
-						g0 = i;
+					// Force Notepad++ default new document setting from ANSI to UTF-8
+					i = static_cast<int>(uniUTF8);
 				}
-				if (element->Attribute(TEXT("gr1"), &i))
+				_nppGUI._newDocDefaultSettings._unicodeMode = static_cast<UniMode>(i);
+			}
+
+			{
+				using enum LangType;
+				_nppGUI._newDocDefaultSettings._lang = static_cast<LangType>(NppXml::intAttribute(childNode, "lang", static_cast<int>(L_TEXT)));
+				_nppGUI._newDocDefaultSettings._codepage = NppXml::intAttribute(childNode, "codepage", _nppGUI._newDocDefaultSettings._codepage);
+			}
+
+			const bool isOpenAnsiAsUTF8 = !isCurrentSystemCodepageUTF8()
+				&& getBoolAttribute(childNode, "openAnsiAsUTF8", _nppGUI._newDocDefaultSettings._openAnsiAsUtf8);
+			_nppGUI._newDocDefaultSettings._openAnsiAsUtf8 = isOpenAnsiAsUTF8;
+			_nppGUI._newDocDefaultSettings._addNewDocumentOnStartup = getBoolAttribute(childNode, "addNewDocumentOnStartup");
+			_nppGUI._newDocDefaultSettings._useContentAsTabName = getBoolAttribute(childNode, "useContentAsTabName");
+		}
+		// <GUIConfig name="langsExcluded" gr0="0" gr1="0" gr2="0" gr3="0" gr4="0" gr5="0" gr6="0" gr7="0" gr8="0" gr9="0" gr10="0" gr11="0" gr12="0"
+		// langMenuCompact="yes" />
+		else if (std::strcmp(nm, "langsExcluded") == 0)
+		{
+			int g[13]{}; // Make all elements of array to hold g0 to g12 to zero
+			static constexpr const char* attributeNames[]{
+				"gr0", "gr1", "gr2", "gr3", "gr4", "gr5", "gr6",
+				"gr7", "gr8", "gr9", "gr10", "gr11", "gr12"
+			};
+
+			for (int j = 0; j < 13; ++j)
+			{
+				const int i = NppXml::intAttribute(childNode, attributeNames[j], -1);
+				if (i != -1 && i <= 255)
 				{
-					if (i <= 255)
-						g1 = i;
-				}
-				if (element->Attribute(TEXT("gr2"), &i))
-				{
-					if (i <= 255)
-						g2 = i;
-				}
-				if (element->Attribute(TEXT("gr3"), &i))
-				{
-					if (i <= 255)
-						g3 = i;
-				}
-				if (element->Attribute(TEXT("gr4"), &i))
-				{
-					if (i <= 255)
-						g4 = i;
-				}
-				if (element->Attribute(TEXT("gr5"), &i))
-				{
-					if (i <= 255)
-						g5 = i;
-				}
-				if (element->Attribute(TEXT("gr6"), &i))
-				{
-					if (i <= 255)
-						g6 = i;
-				}
-				if (element->Attribute(TEXT("gr7"), &i))
-				{
-					if (i <= 255)
-						g7 = i;
-				}
-				if (element->Attribute(TEXT("gr8"), &i))
-				{
-					if (i <= 255)
-						g8 = i;
-				}
-				if (element->Attribute(TEXT("gr9"), &i))
-				{
-					if (i <= 255)
-						g9 = i;
-				}
-				if (element->Attribute(TEXT("gr10"), &i))
-				{
-					if (i <= 255)
-						g10 = i;
-				}
-				if (element->Attribute(TEXT("gr11"), &i))
-				{
-					if (i <= 255)
-						g11 = i;
-				}
-				if (element->Attribute(TEXT("gr12"), &i))
-				{
-					if (i <= 255)
-						g12 = i;
+					g[j] = i;
 				}
 			}
+
+			int g0 = g[0];  // up to 8
+			int g1 = g[1];  // up to 16
+			int g2 = g[2];  // up to 24
+			int g3 = g[3];  // up to 32
+			int g4 = g[4];  // up to 40
+			int g5 = g[5];  // up to 48
+			int g6 = g[6];  // up to 56
+			int g7 = g[7];  // up to 64
+			int g8 = g[8];  // up to 72
+			int g9 = g[9];  // up to 80
+			int g10 = g[10]; // up to 88
+			int g11 = g[11]; // up to 96
+			int g12 = g[12]; // up to 104
 
 			UCHAR mask = 1;
-			for (int i = 0 ; i < 8 ; ++i)
+			for (int i = 0; i < 8; ++i)
 			{
 				if (mask & g0)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 8 ; i < 16 ; ++i)
+			for (int i = 8; i < 16; ++i)
 			{
 				if (mask & g1)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 16 ; i < 24 ; ++i)
+			for (int i = 16; i < 24; ++i)
 			{
 				if (mask & g2)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 24 ; i < 32 ; ++i)
+			for (int i = 24; i < 32; ++i)
 			{
 				if (mask & g3)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 32 ; i < 40 ; ++i)
+			for (int i = 32; i < 40; ++i)
 			{
 				if (mask & g4)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 40 ; i < 48 ; ++i)
+			for (int i = 40; i < 48; ++i)
 			{
 				if (mask & g5)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 48 ; i < 56 ; ++i)
+			for (int i = 48; i < 56; ++i)
 			{
 				if (mask & g6)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
 			mask = 1;
-			for (int i = 56 ; i < 64 ; ++i)
+			for (int i = 56; i < 64; ++i)
 			{
 				if (mask & g7)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
@@ -5651,7 +6659,7 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			for (int i = 64; i < 72; ++i)
 			{
 				if (mask & g8)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
@@ -5659,7 +6667,7 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			for (int i = 72; i < 80; ++i)
 			{
 				if (mask & g9)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
@@ -5667,7 +6675,7 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			for (int i = 80; i < 88; ++i)
 			{
 				if (mask & g10)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
@@ -5675,7 +6683,7 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			for (int i = 88; i < 96; ++i)
 			{
 				if (mask & g11)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
@@ -5683,656 +6691,399 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 			for (int i = 96; i < 104; ++i)
 			{
 				if (mask & g12)
-					_nppGUI._excludedLangList.push_back(LangMenuItem((LangType)i));
+					_nppGUI._excludedLangList.emplace_back(static_cast<LangType>(i));
 				mask <<= 1;
 			}
 
-			const TCHAR* val = element->Attribute(TEXT("langMenuCompact"));
-			if (val)
-				_nppGUI._isLangMenuCompact = (!lstrcmp(val, TEXT("yes")));
+			_nppGUI._isLangMenuCompact = getBoolAttribute(childNode, "langMenuCompact", _nppGUI._isLangMenuCompact);
 		}
-
-		else if (!lstrcmp(nm, TEXT("Print")))
+		// <GUIConfig name="Print" lineNumber="yes" formFeedPageBreak="no" printOption="3" headerLeft="" headerMiddle="" headerRight="" footerLeft=""
+		// footerMiddle="" footerRight="" headerFontName="" headerFontStyle="0" headerFontSize="0" footerFontName="" footerFontStyle="0"
+		// footerFontSize="0" margeLeft="0" margeRight="0" margeTop="0" margeBottom="0" />
+		else if (std::strcmp(nm, "Print") == 0)
 		{
-			const TCHAR* val = element->Attribute(TEXT("lineNumber"));
-			if (val)
-				_nppGUI._printSettings._printLineNumber = (!lstrcmp(val, TEXT("yes")));
+			_nppGUI._printSettings._printLineNumber = getBoolAttribute(childNode, "lineNumber", _nppGUI._printSettings._printLineNumber);
+			_nppGUI._printSettings._printFormFeedPageBreak = getBoolAttribute(childNode, "formFeedPageBreak", _nppGUI._printSettings._printFormFeedPageBreak);
 
-			int i;
-			if (element->Attribute(TEXT("printOption"), &i))
-				_nppGUI._printSettings._printOption = i;
+			_nppGUI._printSettings._printOption = getRangeDefaultAttribute<int>(childNode, "printOption", SC_PRINT_NORMAL, SC_PRINT_COLOURONWHITE, _nppGUI._printSettings._printOption);
 
-			val = element->Attribute(TEXT("headerLeft"));
-			if (val)
-				_nppGUI._printSettings._headerLeft = val;
+			_nppGUI._printSettings._headerLeft = string2wstring(NppXml::attribute(childNode, "headerLeft", ""));
+			_nppGUI._printSettings._headerMiddle = string2wstring(NppXml::attribute(childNode, "headerMiddle", ""));
+			_nppGUI._printSettings._headerRight = string2wstring(NppXml::attribute(childNode, "headerRight", ""));
 
-			val = element->Attribute(TEXT("headerMiddle"));
-			if (val)
-				_nppGUI._printSettings._headerMiddle = val;
+			_nppGUI._printSettings._footerLeft = string2wstring(NppXml::attribute(childNode, "footerLeft", ""));
+			_nppGUI._printSettings._footerMiddle = string2wstring(NppXml::attribute(childNode, "footerMiddle", ""));
+			_nppGUI._printSettings._footerRight = string2wstring(NppXml::attribute(childNode, "footerRight", ""));
 
-			val = element->Attribute(TEXT("headerRight"));
-			if (val)
-				_nppGUI._printSettings._headerRight = val;
+			_nppGUI._printSettings._headerFontName = string2wstring(NppXml::attribute(childNode, "headerFontName", ""));
+			_nppGUI._printSettings._footerFontName = string2wstring(NppXml::attribute(childNode, "footerFontName", ""));
 
+			_nppGUI._printSettings._headerFontStyle = NppXml::intAttribute(childNode, "headerFontStyle", 0);
+			_nppGUI._printSettings._footerFontStyle = NppXml::intAttribute(childNode, "footerFontStyle", 0);
+			_nppGUI._printSettings._headerFontSize = NppXml::intAttribute(childNode, "headerFontSize", 0);
+			_nppGUI._printSettings._footerFontSize = NppXml::intAttribute(childNode, "footerFontSize", 0);
 
-			val = element->Attribute(TEXT("footerLeft"));
-			if (val)
-				_nppGUI._printSettings._footerLeft = val;
-
-			val = element->Attribute(TEXT("footerMiddle"));
-			if (val)
-				_nppGUI._printSettings._footerMiddle = val;
-
-			val = element->Attribute(TEXT("footerRight"));
-			if (val)
-				_nppGUI._printSettings._footerRight = val;
-
-
-			val = element->Attribute(TEXT("headerFontName"));
-			if (val)
-				_nppGUI._printSettings._headerFontName = val;
-
-			val = element->Attribute(TEXT("footerFontName"));
-			if (val)
-				_nppGUI._printSettings._footerFontName = val;
-
-			if (element->Attribute(TEXT("headerFontStyle"), &i))
-				_nppGUI._printSettings._headerFontStyle = i;
-
-			if (element->Attribute(TEXT("footerFontStyle"), &i))
-				_nppGUI._printSettings._footerFontStyle = i;
-
-			if (element->Attribute(TEXT("headerFontSize"), &i))
-				_nppGUI._printSettings._headerFontSize = i;
-
-			if (element->Attribute(TEXT("footerFontSize"), &i))
-				_nppGUI._printSettings._footerFontSize = i;
-
-
-			if (element->Attribute(TEXT("margeLeft"), &i))
-				_nppGUI._printSettings._marge.left = i;
-
-			if (element->Attribute(TEXT("margeTop"), &i))
-				_nppGUI._printSettings._marge.top = i;
-
-			if (element->Attribute(TEXT("margeRight"), &i))
-				_nppGUI._printSettings._marge.right = i;
-
-			if (element->Attribute(TEXT("margeBottom"), &i))
-				_nppGUI._printSettings._marge.bottom = i;
+			_nppGUI._printSettings._marge.left = NppXml::intAttribute(childNode, "margeLeft", 0);
+			_nppGUI._printSettings._marge.top = NppXml::intAttribute(childNode, "margeTop", 0);
+			_nppGUI._printSettings._marge.right = NppXml::intAttribute(childNode, "margeRight", 0);
+			_nppGUI._printSettings._marge.bottom = NppXml::intAttribute(childNode, "margeBottom", 0);
 		}
-
-		else if (!lstrcmp(nm, TEXT("ScintillaPrimaryView")))
+		
+		else if (std::strcmp(nm, "ScintillaPrimaryView") == 0)
 		{
-			feedScintillaParam(element);
+			feedScintillaParam(childNode);
 		}
-
-		else if (!lstrcmp(nm, TEXT("Backup")))
+		// <GUIConfig name="Backup" action="0" useCustumDir="no" dir="" isSnapshotMode="yes" snapshotBackupTiming="7000" />
+		else if (std::strcmp(nm, "Backup") == 0)
 		{
-			int i;
-			if (element->Attribute(TEXT("action"), &i))
-				_nppGUI._backup = (BackupFeature)i;
-
-			const TCHAR *bDir = element->Attribute(TEXT("useCustumDir"));
-			if (bDir)
 			{
-				_nppGUI._useDir = (lstrcmp(bDir, TEXT("yes")) == 0);
+				using enum BackupFeature;
+				_nppGUI._backup = getRangeDefaultAttribute(childNode, "action", bak_none, bak_verbose, _nppGUI._backup);
 			}
-			const TCHAR *pDir = element->Attribute(TEXT("dir"));
-			if (pDir)
-				_nppGUI._backupDir = pDir;
 
-			const TCHAR *isSnapshotModeStr = element->Attribute(TEXT("isSnapshotMode"));
-			if (isSnapshotModeStr && !lstrcmp(isSnapshotModeStr, TEXT("no")))
-				_nppGUI._isSnapshotMode = false;
+			_nppGUI._useDir = getBoolAttribute(childNode, "useCustumDir");
+			_nppGUI._backupDir = string2wstring(NppXml::attribute(childNode, "dir", ""));
 
-			int timing;
-			if (element->Attribute(TEXT("snapshotBackupTiming"), &timing))
-				_nppGUI._snapshotBackupTiming = timing;
+			_nppGUI._isSnapshotMode = getBoolAttribute(childNode, "isSnapshotMode", _nppGUI._isSnapshotMode);
+			_nppGUI._snapshotBackupTiming = static_cast<size_t>(NppXml::uint64Attribute(childNode, "snapshotBackupTiming", _nppGUI._snapshotBackupTiming));
 
 		}
-		else if (!lstrcmp(nm, TEXT("DockingManager")))
+		
+		else if (std::strcmp(nm, "DockingManager") == 0)
 		{
-			feedDockingManager(element);
+			feedDockingManager(childNode);
 		}
-
-		else if (!lstrcmp(nm, TEXT("globalOverride")))
+		// <GUIConfig name="globalOverride" fg="no" bg="no" font="no" fontSize="no" bold="no" italic="no" underline="no" />
+		else if (std::strcmp(nm, "globalOverride") == 0)
 		{
-			const TCHAR *bDir = element->Attribute(TEXT("fg"));
-			if (bDir)
-				_nppGUI._globalOverride.enableFg = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("bg"));
-			if (bDir)
-				_nppGUI._globalOverride.enableBg = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("font"));
-			if (bDir)
-				_nppGUI._globalOverride.enableFont = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("fontSize"));
-			if (bDir)
-				_nppGUI._globalOverride.enableFontSize = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("bold"));
-			if (bDir)
-				_nppGUI._globalOverride.enableBold = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("italic"));
-			if (bDir)
-				_nppGUI._globalOverride.enableItalic = (lstrcmp(bDir, TEXT("yes")) == 0);
-
-			bDir = element->Attribute(TEXT("underline"));
-			if (bDir)
-				_nppGUI._globalOverride.enableUnderLine = (lstrcmp(bDir, TEXT("yes")) == 0);
+			_nppGUI._globalOverride.enableFg = getBoolAttribute(childNode, "fg");
+			_nppGUI._globalOverride.enableBg = getBoolAttribute(childNode, "bg");
+			_nppGUI._globalOverride.enableFont = getBoolAttribute(childNode, "font");
+			_nppGUI._globalOverride.enableFontSize = getBoolAttribute(childNode, "fontSize");
+			_nppGUI._globalOverride.enableBold = getBoolAttribute(childNode, "bold");
+			_nppGUI._globalOverride.enableItalic = getBoolAttribute(childNode, "italic");
+			_nppGUI._globalOverride.enableUnderLine = getBoolAttribute(childNode, "underline");
 		}
-		else if (!lstrcmp(nm, TEXT("auto-completion")))
+		// <GUIConfig name="auto-completion" autoCAction="3" triggerFromNbChar="1" autoCIgnoreNumbers="yes" insertSelectedItemUseENTER="yes"
+		// insertSelectedItemUseTAB="yes" autoCBrief="no" funcParams="yes" />
+		else if (std::strcmp(nm, "auto-completion") == 0)
 		{
-			int i;
-			if (element->Attribute(TEXT("autoCAction"), &i))
-				_nppGUI._autocStatus = static_cast<NppGUI::AutocStatus>(i);
-
-			if (element->Attribute(TEXT("triggerFromNbChar"), &i))
-				_nppGUI._autocFromLen = i;
-
-			const TCHAR * optName = element->Attribute(TEXT("autoCIgnoreNumbers"));
-			if (optName)
-				_nppGUI._autocIgnoreNumbers = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("insertSelectedItemUseENTER"));
-			if (optName)
-				_nppGUI._autocInsertSelectedUseENTER = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("insertSelectedItemUseTAB"));
-			if (optName)
-				_nppGUI._autocInsertSelectedUseTAB = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("autoCBrief"));
-			if (optName)
-				_nppGUI._autocBrief = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("funcParams"));
-			if (optName)
-				_nppGUI._funcParams = (lstrcmp(optName, TEXT("yes")) == 0);
-		}
-		else if (!lstrcmp(nm, TEXT("auto-insert")))
-		{
-			const TCHAR * optName = element->Attribute(TEXT("htmlXmlTag"));
-			if (optName)
-				_nppGUI._matchedPairConf._doHtmlXmlTag = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("parentheses"));
-			if (optName)
-				_nppGUI._matchedPairConf._doParentheses = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("brackets"));
-			if (optName)
-				_nppGUI._matchedPairConf._doBrackets = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("curlyBrackets"));
-			if (optName)
-				_nppGUI._matchedPairConf._doCurlyBrackets = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("quotes"));
-			if (optName)
-				_nppGUI._matchedPairConf._doQuotes = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			optName = element->Attribute(TEXT("doubleQuotes"));
-			if (optName)
-				_nppGUI._matchedPairConf._doDoubleQuotes = (lstrcmp(optName, TEXT("yes")) == 0);
-
-			for (TiXmlNode *subChildNode = childNode->FirstChildElement(TEXT("UserDefinePair"));
-				 subChildNode;
-				 subChildNode = subChildNode->NextSibling(TEXT("UserDefinePair")) )
 			{
-				int open = -1;
-				int openVal = 0;
-				const TCHAR *openValStr = (subChildNode->ToElement())->Attribute(TEXT("open"), &openVal);
-				if (openValStr && (openVal >= 0 && openVal < 128))
-					open = openVal;
+				using enum NppGUI::AutocStatus;
+				_nppGUI._autocStatus = getRangeDefaultAttribute(childNode, "autoCAction", autoc_none, autoc_both, _nppGUI._autocStatus);
+			}
 
-				int close = -1;
-				int closeVal = 0;
-				const TCHAR *closeValStr = (subChildNode->ToElement())->Attribute(TEXT("close"), &closeVal);
-				if (closeValStr && (closeVal >= 0 && closeVal <= 128))
-					close = closeVal;
+			// from preferenceDlg.cpp
+			// static constexpr int AUTOCOMPLETEFROMCHAR_SMALLEST = 1;
+			// static constexpr int AUTOCOMPLETEFROMCHAR_LARGEST = 9;
+			_nppGUI._autocFromLen = getRangeClampAttribute<UINT>(childNode, "triggerFromNbChar", 1U, 9U, _nppGUI._autocFromLen);
+
+			_nppGUI._autocIgnoreNumbers = getBoolAttribute(childNode, "autoCIgnoreNumbers", _nppGUI._autocIgnoreNumbers);
+			_nppGUI._autocInsertSelectedUseENTER = getBoolAttribute(childNode, "insertSelectedItemUseENTER", _nppGUI._autocInsertSelectedUseENTER);
+			_nppGUI._autocInsertSelectedUseTAB = getBoolAttribute(childNode, "insertSelectedItemUseTAB", _nppGUI._autocInsertSelectedUseTAB);
+			_nppGUI._autocBrief = getBoolAttribute(childNode, "autoCBrief");
+			_nppGUI._funcParams = getBoolAttribute(childNode, "funcParams", _nppGUI._funcParams);
+		}
+		// <GUIConfig name="auto-insert" parentheses="no" brackets="no" curlyBrackets="no" quotes="no" doubleQuotes="no" htmlXmlTag="no" />
+		else if (std::strcmp(nm, "auto-insert") == 0)
+		{
+			_nppGUI._matchedPairConf._doHtmlXmlTag = getBoolAttribute(childNode, "htmlXmlTag");
+			_nppGUI._matchedPairConf._doParentheses = getBoolAttribute(childNode, "parentheses");
+			_nppGUI._matchedPairConf._doBrackets = getBoolAttribute(childNode, "brackets");
+			_nppGUI._matchedPairConf._doCurlyBrackets = getBoolAttribute(childNode, "curlyBrackets");
+			_nppGUI._matchedPairConf._doQuotes = getBoolAttribute(childNode, "quotes");
+			_nppGUI._matchedPairConf._doDoubleQuotes = getBoolAttribute(childNode, "doubleQuotes");
+
+			for (NppXml::Element subChildNode = NppXml::firstChildElement(childNode, "UserDefinePair");
+				subChildNode;
+				subChildNode = NppXml::nextSiblingElement(subChildNode, "UserDefinePair"))
+			{
+				const int open = getRangeDefaultAttribute(subChildNode, "open", 0, 127, -1);
+				const int close = getRangeDefaultAttribute(subChildNode, "close", 0, 127, -1);
 
 				if (open != -1 && close != -1)
-					_nppGUI._matchedPairConf._matchedPairsInit.push_back(pair<char, char>(char(open), char(close)));
+					_nppGUI._matchedPairConf._matchedPairs.emplace_back(static_cast<char>(open), static_cast<char>(close));
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("sessionExt")))
+		// <GUIConfig name="sessionExt"></GUIConfig>
+		else if (std::strcmp(nm, "sessionExt") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
-					_nppGUI._definedSessionExt = val;
+					_nppGUI._definedSessionExt = string2wstring(val);
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("workspaceExt")))
+		// <GUIConfig name="workspaceExt"></GUIConfig>
+		else if (std::strcmp(nm, "workspaceExt") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				const char* val = NppXml::getValue(n);
 				if (val)
-					_nppGUI._definedWorkspaceExt = val;
+					_nppGUI._definedWorkspaceExt = string2wstring(val);
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("noUpdate")))
+		// <GUIConfig name="noUpdate" intervalDays="15" nextUpdateDate="20080426" autoUpdateMode="1">no</GUIConfig>
+		else if (std::strcmp(nm, "noUpdate") == 0)
 		{
-			TiXmlNode *n = childNode->FirstChild();
+			NppXml::Node n = NppXml::firstChild(childNode);
 			if (n)
 			{
-				const TCHAR* val = n->Value();
+				using enum NppGUI::AutoUpdateMode;
+				const char* val = NppXml::getValue(n);
 				if (val)
-					_nppGUI._autoUpdateOpt._doAutoUpdate = (!lstrcmp(val, TEXT("yes")))?false:true;
+				{
+					// for backward compatibility with older configs
+					_nppGUI._autoUpdateOpt._doAutoUpdate = (std::strcmp(val, "yes") == 0) ? autoupdate_disabled : autoupdate_on_startup;
+				}
 
-				int i;
-				val = element->Attribute(TEXT("intervalDays"), &i);
-				if (val)
-					_nppGUI._autoUpdateOpt._intervalDays = i;
+				_nppGUI._autoUpdateOpt._intervalDays = NppXml::intAttribute(childNode, "intervalDays", _nppGUI._autoUpdateOpt._intervalDays);
 
-				val = element->Attribute(TEXT("nextUpdateDate"));
-				if (val)
-					_nppGUI._autoUpdateOpt._nextUpdateDate = Date(val);
+				const char* attrVal = NppXml::attribute(childNode, "nextUpdateDate");
+				if (attrVal)
+					_nppGUI._autoUpdateOpt._nextUpdateDate = Date(attrVal);
+
+				const int iVal = NppXml::intAttribute(childNode, "autoUpdateMode", -1);
+				if (iVal != -1)
+					_nppGUI._autoUpdateOpt._doAutoUpdate = static_cast<NppGUI::AutoUpdateMode>(
+						std::max(static_cast<int>(autoupdate_disabled), std::min(iVal, static_cast<int>(autoupdate_on_exit)))); // newer config, so overwrite
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("openSaveDir")))
+		// <GUIConfig name="openSaveDir" value="0" defaultDirPath="" lastUsedDirPath="" />
+		else if (std::strcmp(nm, "openSaveDir") == 0)
 		{
-			const TCHAR * value = element->Attribute(TEXT("value"));
-			if (value && value[0])
-			{
-				if (lstrcmp(value, TEXT("1")) == 0)
-					_nppGUI._openSaveDir = dir_last;
-				else if (lstrcmp(value, TEXT("2")) == 0)
-					_nppGUI._openSaveDir = dir_userDef;
-				else
-					_nppGUI._openSaveDir = dir_followCurrent;
-			}
+			using enum OpenSaveDirSetting;
+			_nppGUI._openSaveDir = getRangeDefaultAttribute(childNode, "value", dir_followCurrent, dir_userDef, _nppGUI._openSaveDir);
 
-			const TCHAR * path = element->Attribute(TEXT("defaultDirPath"));
-			if (path && path[0])
+			const std::wstring path = string2wstring(NppXml::attribute(childNode, "defaultDirPath", ""));
+			if (!path.empty())
 			{
-				lstrcpyn(_nppGUI._defaultDir, path, MAX_PATH);
+				std::wcsncpy(_nppGUI._defaultDir, path.c_str(), MAX_PATH);
 				::ExpandEnvironmentStrings(_nppGUI._defaultDir, _nppGUI._defaultDirExp, MAX_PATH);
 			}
 
-			path = element->Attribute(TEXT("lastUsedDirPath"));
-			if (path && path[0])
+			const std::wstring lastPath = string2wstring(NppXml::attribute(childNode, "lastUsedDirPath", ""));
+			if (!lastPath.empty())
 			{
-				lstrcpyn(_nppGUI._lastUsedDir, path, MAX_PATH);
-			}
- 		}
-
-		else if (!lstrcmp(nm, TEXT("titleBar")))
-		{
-			const TCHAR * value = element->Attribute(TEXT("short"));
-			_nppGUI._shortTitlebar = false;	//default state
-			if (value && value[0])
-			{
-				if (lstrcmp(value, TEXT("yes")) == 0)
-					_nppGUI._shortTitlebar = true;
-				else if (lstrcmp(value, TEXT("no")) == 0)
-					_nppGUI._shortTitlebar = false;
+				std::wcsncpy(_nppGUI._lastUsedDir, lastPath.c_str(), MAX_PATH);
 			}
 		}
-
-		else if (!lstrcmp(nm, TEXT("insertDateTime")))
+		// <GUIConfig name="titleBar" short="no" />
+		else if (std::strcmp(nm, "titleBar") == 0)
 		{
-			const TCHAR* customFormat = element->Attribute(TEXT("customizedFormat"));
-			if (customFormat != NULL && customFormat[0])
-				_nppGUI._dateTimeFormat = customFormat;
-
-			const TCHAR* value = element->Attribute(TEXT("reverseDefaultOrder"));
-			if (value && value[0])
-			{
-				if (lstrcmp(value, TEXT("yes")) == 0)
-					_nppGUI._dateTimeReverseDefaultOrder = true;
-				else if (lstrcmp(value, TEXT("no")) == 0)
-					_nppGUI._dateTimeReverseDefaultOrder = false;
-			}
+			_nppGUI._shortTitlebar = getBoolAttribute(childNode, "short");
 		}
-
-		else if (!lstrcmp(nm, TEXT("wordCharList")))
+		// <GUIConfig name="insertDateTime" customizedFormat="yyyy-MM-dd HH:mm:ss" reverseDefaultOrder="no" />
+		else if (std::strcmp(nm, "insertDateTime") == 0)
 		{
-			const TCHAR * value = element->Attribute(TEXT("useDefault"));
-			if (value && value[0])
-			{
-				if (lstrcmp(value, TEXT("yes")) == 0)
-					_nppGUI._isWordCharDefault = true;
-				else if (lstrcmp(value, TEXT("no")) == 0)
-					_nppGUI._isWordCharDefault = false;
-			}
-
-			const TCHAR *charsAddedW = element->Attribute(TEXT("charsAdded"));
-			if (charsAddedW)
-			{
-				WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
-				_nppGUI._customWordChars = wmc.wchar2char(charsAddedW, SC_CP_UTF8);
-			}
+			_nppGUI._dateTimeFormat = string2wstring(NppXml::attribute(childNode, "customizedFormat", ""));
+			_nppGUI._dateTimeReverseDefaultOrder = getBoolAttribute(childNode, "reverseDefaultOrder");
 		}
-		else if (!lstrcmp(nm, TEXT("delimiterSelection")))
+		// <GUIConfig name="wordCharList" useDefault="yes" charsAdded="" />
+		else if (std::strcmp(nm, "wordCharList") == 0)
 		{
-			int leftmost = 0;
-			element->Attribute(TEXT("leftmostDelimiter"), &leftmost);
-			if (leftmost > 0 && leftmost < 256)
+			_nppGUI._isWordCharDefault = getBoolAttribute(childNode, "useDefault", _nppGUI._isWordCharDefault);
+			_nppGUI._customWordChars = NppXml::attribute(childNode, "charsAdded", "");
+		}
+		// <GUIConfig name="delimiterSelection" leftmostDelimiter="40" rightmostDelimiter="41" delimiterSelectionOnEntireDocument="no" />
+		else if (std::strcmp(nm, "delimiterSelection") == 0)
+		{
+			const int leftmost = getRangeDefaultAttribute(childNode, "leftmostDelimiter", 1, 255, -1);
+			if (leftmost != -1)
 				_nppGUI._leftmostDelimiter = static_cast<char>(leftmost);
 
-			int rightmost = 0;
-			element->Attribute(TEXT("rightmostDelimiter"), &rightmost);
-			if (rightmost > 0 && rightmost < 256)
+			const int rightmost = getRangeDefaultAttribute(childNode, "rightmostDelimiter", 1, 255, -1);
+			if (rightmost != -1)
 				_nppGUI._rightmostDelimiter = static_cast<char>(rightmost);
 
-			const TCHAR *delimiterSelectionOnEntireDocument = element->Attribute(TEXT("delimiterSelectionOnEntireDocument"));
-			if (delimiterSelectionOnEntireDocument != NULL && !lstrcmp(delimiterSelectionOnEntireDocument, TEXT("yes")))
-				_nppGUI._delimiterSelectionOnEntireDocument = true;
-			else
-				_nppGUI._delimiterSelectionOnEntireDocument = false;
+			_nppGUI._delimiterSelectionOnEntireDocument = getBoolAttribute(childNode, "delimiterSelectionOnEntireDocument");
 		}
-		else if (!lstrcmp(nm, TEXT("largeFileRestriction")))
+		// <GUIConfig name="largeFileRestriction" fileSizeMB="200" isEnabled="yes" allowAutoCompletion="no" allowBraceMatch="no" allowSmartHilite="no"
+		// allowClickableLink="no" deactivateWordWrap="yes" suppress2GBWarning="no" />
+		else if (std::strcmp(nm, "largeFileRestriction") == 0)
 		{
-			int fileSizeLimit4StylingMB = 0;
-			element->Attribute(TEXT("fileSizeMB"), &fileSizeLimit4StylingMB);
-			if (fileSizeLimit4StylingMB > 0 && fileSizeLimit4StylingMB <= 4096)
-				_nppGUI._largeFileRestriction._largeFileSizeDefInByte = (static_cast<int64_t>(fileSizeLimit4StylingMB) * 1024 * 1024);
+			const auto fileSizeLimit4StylingMB = getRangeDefaultAttribute(childNode, "fileSizeMB", 1LL, 4096LL, -1LL);
+			if (fileSizeLimit4StylingMB != -1LL)
+				_nppGUI._largeFileRestriction._largeFileSizeDefInByte = (fileSizeLimit4StylingMB * 1024 * 1024);
 
-			const TCHAR* boolVal = element->Attribute(TEXT("isEnabled"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("no")))
-				_nppGUI._largeFileRestriction._isEnabled = false;
-			else
-				_nppGUI._largeFileRestriction._isEnabled = true;
-
-			boolVal = element->Attribute(TEXT("allowAutoCompletion"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("yes")))
-				_nppGUI._largeFileRestriction._allowAutoCompletion = true;
-			else
-				_nppGUI._largeFileRestriction._allowAutoCompletion = false;
-
-			boolVal = element->Attribute(TEXT("allowBraceMatch"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("yes")))
-				_nppGUI._largeFileRestriction._allowBraceMatch = true;
-			else
-				_nppGUI._largeFileRestriction._allowBraceMatch = false;
-
-			boolVal = element->Attribute(TEXT("allowSmartHilite"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("yes")))
-				_nppGUI._largeFileRestriction._allowSmartHilite = true;
-			else
-				_nppGUI._largeFileRestriction._allowSmartHilite = false;
-
-			boolVal = element->Attribute(TEXT("allowClickableLink"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("yes")))
-				_nppGUI._largeFileRestriction._allowClickableLink = true;
-			else
-				_nppGUI._largeFileRestriction._allowClickableLink = false;
-
-			boolVal = element->Attribute(TEXT("deactivateWordWrap"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("no")))
-				_nppGUI._largeFileRestriction._deactivateWordWrap = false;
-			else
-				_nppGUI._largeFileRestriction._deactivateWordWrap = true;
-
-			boolVal = element->Attribute(TEXT("suppress2GBWarning"));
-			if (boolVal != NULL && !lstrcmp(boolVal, TEXT("yes")))
-				_nppGUI._largeFileRestriction._suppress2GBWarning = true;
-			else
-				_nppGUI._largeFileRestriction._suppress2GBWarning = false;
+			_nppGUI._largeFileRestriction._isEnabled = getBoolAttribute(childNode, "isEnabled", _nppGUI._largeFileRestriction._isEnabled);
+			_nppGUI._largeFileRestriction._allowAutoCompletion = getBoolAttribute(childNode, "allowAutoCompletion");
+			_nppGUI._largeFileRestriction._allowBraceMatch = getBoolAttribute(childNode, "allowBraceMatch");
+			_nppGUI._largeFileRestriction._allowSmartHilite = getBoolAttribute(childNode, "allowSmartHilite");
+			_nppGUI._largeFileRestriction._allowClickableLink = getBoolAttribute(childNode, "allowClickableLink");
+			_nppGUI._largeFileRestriction._deactivateWordWrap = getBoolAttribute(childNode, "deactivateWordWrap", _nppGUI._largeFileRestriction._deactivateWordWrap);
+			_nppGUI._largeFileRestriction._suppress2GBWarning = getBoolAttribute(childNode, "suppress2GBWarning");
 		}
-		else if (!lstrcmp(nm, TEXT("multiInst")))
-		{
-			int val = 0;
-			element->Attribute(TEXT("setting"), &val);
-			if (val < 0 || val > 2)
-				val = 0;
-			_nppGUI._multiInstSetting = (MultiInstSetting)val;
 
-			_nppGUI._clipboardHistoryPanelKeepState = parseYesNoBoolAttribute(TEXT("clipboardHistory"));
-			_nppGUI._docListKeepState = parseYesNoBoolAttribute(TEXT("documentList"));
-			_nppGUI._charPanelKeepState = parseYesNoBoolAttribute(TEXT("characterPanel"));
-			_nppGUI._fileBrowserKeepState = parseYesNoBoolAttribute(TEXT("folderAsWorkspace"));
-			_nppGUI._projectPanelKeepState = parseYesNoBoolAttribute(TEXT("projectPanels"));
-			_nppGUI._docMapKeepState = parseYesNoBoolAttribute(TEXT("documentMap"));
-			_nppGUI._funcListKeepState = parseYesNoBoolAttribute(TEXT("fuctionList"));
-			_nppGUI._pluginPanelKeepState = parseYesNoBoolAttribute(TEXT("pluginPanels"));
-		}
-		else if (!lstrcmp(nm, TEXT("searchEngine")))
-		{
-			int i;
-			if (element->Attribute(TEXT("searchEngineChoice"), &i))
-				_nppGUI._searchEngineChoice = static_cast<NppGUI::SearchEngineChoice>(i);
 
-			const TCHAR * searchEngineCustom = element->Attribute(TEXT("searchEngineCustom"));
-			if (searchEngineCustom && searchEngineCustom[0])
-				_nppGUI._searchEngineCustom = searchEngineCustom;
-		}
-		else if (!lstrcmp(nm, TEXT("Searching")))
+		else if (std::strcmp(nm, "shortcutsXmlHMAC") == 0)
 		{
-			const TCHAR* optNameMonoFont = element->Attribute(TEXT("monospacedFontFindDlg"));
-			if (optNameMonoFont)
-				_nppGUI._monospacedFontFindDlg = (lstrcmp(optNameMonoFont, TEXT("yes")) == 0);
-
-			//This is an option from previous versions of notepad++.  It is handled for compatibility with older settings.
-			const TCHAR* optStopFillingFindField = element->Attribute(TEXT("stopFillingFindField"));
-			if (optStopFillingFindField) 
+			const char* shortcutsXmlHmacValue = NppXml::attribute(childNode, "value");
+			if (shortcutsXmlHmacValue && shortcutsXmlHmacValue[0])
 			{
-				_nppGUI._fillFindFieldWithSelected = (lstrcmp(optStopFillingFindField, TEXT("no")) == 0);
+				_nppGUI._shortcutsXmlHmacInConfig = shortcutsXmlHmacValue;
+			}
+		}
+
+		// <GUIConfig name="multiInst" setting="0" clipboardHistory="no" documentList="no" characterPanel="no" folderAsWorkspace="no" projectPanels="no"
+		// documentMap="no" fuctionList="no" pluginPanels="no" />
+		else if (std::strcmp(nm, "multiInst") == 0)
+		{
+			using enum MultiInstSetting;
+			_nppGUI._multiInstSetting = getRangeDefaultAttribute(childNode, "setting", monoInst, multiInst, _nppGUI._multiInstSetting);
+
+			_nppGUI._clipboardHistoryPanelKeepState = getBoolAttribute(childNode, "clipboardHistory");
+			_nppGUI._docListKeepState = getBoolAttribute(childNode, "documentList");
+			_nppGUI._charPanelKeepState = getBoolAttribute(childNode, "characterPanel");
+			_nppGUI._fileBrowserKeepState = getBoolAttribute(childNode, "folderAsWorkspace");
+			_nppGUI._projectPanelKeepState = getBoolAttribute(childNode, "projectPanels");
+			_nppGUI._docMapKeepState = getBoolAttribute(childNode, "documentMap");
+			_nppGUI._funcListKeepState = getBoolAttribute(childNode, "fuctionList");
+			_nppGUI._pluginPanelKeepState = getBoolAttribute(childNode, "pluginPanels");
+		}
+		// <GUIConfig name="searchEngine" searchEngineChoice="2" searchEngineCustom="" />
+		else if (std::strcmp(nm, "searchEngine") == 0)
+		{
+			using enum NppGUI::SearchEngineChoice;
+			_nppGUI._searchEngineChoice = getRangeDefaultAttribute(childNode, "searchEngineChoice", se_custom, se_stackoverflow, _nppGUI._searchEngineChoice);
+
+			const char* searchEngineCustom = NppXml::attribute(childNode, "searchEngineCustom");
+			if (searchEngineCustom && searchEngineCustom[0])
+				_nppGUI._searchEngineCustom = string2wstring(searchEngineCustom);
+		}
+		// <GUIConfig name="Searching" monospacedFontFindDlg="no" fillFindFieldWithSelected="yes" fillFindFieldSelectCaret="yes"
+		// findDlgAlwaysVisible="no" confirmReplaceInAllOpenDocs="yes" replaceStopsWithoutFindingNext="no" inSelectionAutocheckThreshold="1024"
+		// fillFindWhatThreshold="1024" fillDirFieldFromActiveDoc="no" />
+		else if (std::strcmp(nm, "Searching") == 0)
+		{
+			_nppGUI._monospacedFontFindDlg = getBoolAttribute(childNode, "monospacedFontFindDlg");
+
+			//This is an option from previous versions of notepad++. It is handled for compatibility with older settings.
+			const char* optStopFillingFindField = NppXml::attribute(childNode, "stopFillingFindField");
+			if (optStopFillingFindField)
+			{
+				_nppGUI._fillFindFieldWithSelected = (std::strcmp(optStopFillingFindField, "no") == 0);
 				_nppGUI._fillFindFieldSelectCaret = _nppGUI._fillFindFieldWithSelected;
 			}
 
-			const TCHAR* optFillFindFieldWithSelected = element->Attribute(TEXT("fillFindFieldWithSelected"));
-			if (optFillFindFieldWithSelected)
-				_nppGUI._fillFindFieldWithSelected = (lstrcmp(optFillFindFieldWithSelected, TEXT("yes")) == 0);
+			_nppGUI._fillFindFieldWithSelected = getBoolAttribute(childNode, "fillFindFieldWithSelected", _nppGUI._fillFindFieldWithSelected);
+			_nppGUI._fillFindFieldSelectCaret = getBoolAttribute(childNode, "fillFindFieldSelectCaret", _nppGUI._fillFindFieldSelectCaret);
+			_nppGUI._findDlgAlwaysVisible = getBoolAttribute(childNode, "findDlgAlwaysVisible");
+			_nppGUI._confirmReplaceInAllOpenDocs = getBoolAttribute(childNode, "confirmReplaceInAllOpenDocs", _nppGUI._confirmReplaceInAllOpenDocs);
+			_nppGUI._replaceStopsWithoutFindingNext = getBoolAttribute(childNode, "replaceStopsWithoutFindingNext");
 
-			const TCHAR* optFillFindFieldSelectCaret = element->Attribute(TEXT("fillFindFieldSelectCaret"));
-			if (optFillFindFieldSelectCaret)
-				_nppGUI._fillFindFieldSelectCaret = (lstrcmp(optFillFindFieldSelectCaret, TEXT("yes")) == 0);
+			_nppGUI._inSelectionAutocheckThreshold = getRangeDefaultAttribute(childNode, "inSelectionAutocheckThreshold", 0, FINDREPLACE_INSELECTION_THRESHOLD_DEFAULT, _nppGUI._inSelectionAutocheckThreshold);
+			_nppGUI._fillFindWhatThreshold = getRangeDefaultAttribute(childNode, "fillFindWhatThreshold", 1, FINDREPLACE_MAXLENGTH - 1, _nppGUI._fillFindWhatThreshold);
 
-			const TCHAR* optFindDlgAlwaysVisible = element->Attribute(TEXT("findDlgAlwaysVisible"));
-			if (optFindDlgAlwaysVisible)
-				_nppGUI._findDlgAlwaysVisible = (lstrcmp(optFindDlgAlwaysVisible, TEXT("yes")) == 0);
+			_nppGUI._fillDirFieldFromActiveDoc = getBoolAttribute(childNode, "fillDirFieldFromActiveDoc");
+		}
+		// <GUIConfig name="MISC" fileSwitcherWithoutExtColumn="no" fileSwitcherExtWidth="50" fileSwitcherWithoutPathColumn="no" fileSwitcherPathWidth="50"
+		// fileSwitcherNoGroups="no" backSlashIsEscapeCharacterForSql="yes" writeTechnologyEngine="1" isFolderDroppedOpenFiles="no" docPeekOnTab="no"
+		// docPeekOnMap="no" sortFunctionList="no" saveDlgExtFilterToAllTypes="no" muteSounds="no" enableFoldCmdToggable="no" hideMenuRightShortcuts="no"  networkPathWarningMethod=0/>
+		else if (std::strcmp(nm, "MISC") == 0)
+		{
+			_nppGUI._fileSwitcherWithoutExtColumn = getBoolAttribute(childNode, "fileSwitcherWithoutExtColumn");
+			_nppGUI._fileSwitcherExtWidth = NppXml::intAttribute(childNode, "fileSwitcherExtWidth", _nppGUI._fileSwitcherExtWidth);
 
-			const TCHAR* optConfirmReplaceOpenDocs = element->Attribute(TEXT("confirmReplaceInAllOpenDocs"));
-			if (optConfirmReplaceOpenDocs)
-				_nppGUI._confirmReplaceInAllOpenDocs = (lstrcmp(optConfirmReplaceOpenDocs, TEXT("yes")) == 0);
+			_nppGUI._fileSwitcherWithoutPathColumn = getBoolAttribute(childNode, "fileSwitcherWithoutPathColumn");
+			_nppGUI._fileSwitcherPathWidth = NppXml::intAttribute(childNode, "fileSwitcherPathWidth", _nppGUI._fileSwitcherPathWidth);
 
-			const TCHAR* optReplaceStopsWithoutFindingNext = element->Attribute(TEXT("replaceStopsWithoutFindingNext"));
-			if (optReplaceStopsWithoutFindingNext)
-				_nppGUI._replaceStopsWithoutFindingNext = (lstrcmp(optReplaceStopsWithoutFindingNext, TEXT("yes")) == 0);
+			_nppGUI._fileSwitcherDisableListViewGroups = getBoolAttribute(childNode, "fileSwitcherNoGroups");
 
-			int inSelThresh;
-			if (element->Attribute(TEXT("inSelectionAutocheckThreshold"), &inSelThresh) &&
-				(inSelThresh >= 0 && inSelThresh <= FINDREPLACE_INSELECTION_THRESHOLD_DEFAULT))
+			_nppGUI._backSlashIsEscapeCharacterForSql = getBoolAttribute(childNode, "backSlashIsEscapeCharacterForSql", _nppGUI._backSlashIsEscapeCharacterForSql);
+
 			{
-				_nppGUI._inSelectionAutocheckThreshold = inSelThresh;
+				using enum writeTechnologyEngine;
+				_nppGUI._writeTechnologyEngine = getRangeDefaultAttribute(childNode, "writeTechnologyEngine", defaultTechnology, directWriteTechnologyUnavailable, _nppGUI._writeTechnologyEngine);
+			}
+
+			_nppGUI._isFolderDroppedOpenFiles = getBoolAttribute(childNode, "isFolderDroppedOpenFiles");
+			_nppGUI._isDocPeekOnTab = getBoolAttribute(childNode, "docPeekOnTab");
+			_nppGUI._isDocPeekOnMap = getBoolAttribute(childNode, "docPeekOnMap");
+			_nppGUI._shouldSortFunctionList = getBoolAttribute(childNode, "sortFunctionList");
+			_nppGUI._setSaveDlgExtFiltToAllTypes = getBoolAttribute(childNode, "saveDlgExtFilterToAllTypes");
+			_nppGUI._muteSounds = getBoolAttribute(childNode, "muteSounds");
+			_nppGUI._enableFoldCmdToggable = getBoolAttribute(childNode, "enableFoldCmdToggable");
+			_nppGUI._hideMenuRightShortcuts = getBoolAttribute(childNode, "hideMenuRightShortcuts");
+
+			// ex _nppGUI member, for the compatibility reason
+			/*_nppGUI.*/_networkPathAlwaysAction = static_cast<NetworkPathAlwaysAction>(NppXml::intAttribute(childNode, "networkPathWarningMethod", _networkPathAlwaysAction));
+			// the value of _networkPathAlwaysAction will be overrided if the value exists in serverWhiteList
+
+			_nppGUI._isFawSymlinkAllowed = getBoolAttribute(childNode, "isFawSymlinkAllowed", _nppGUI._isFawSymlinkAllowed);
+		}
+		// <GUIConfig name="DarkMode" enable="no" colorTone="0" customColorTop="2105376" customColorMenuHotTrack="4539717" customColorActive="3684408"
+		// customColorMain="2105376" customColorError="176" customColorText="14737632" customColorDarkText="12632256" customColorDisabledText="8421504"
+		// customColorLinkText="65535" customColorEdge="6579300" customColorHotEdge="10197915" customColorDisabledEdge="4737096" enableWindowsMode="no"
+		// darkThemeName="DarkModeDefault.xml" darkToolBarIconSet="0" darkTbFluentColor="0" darkTbFluentCustomColor="0" darkTbFluentMono="no" darkTabIconSet="2"
+		// darkTabUseTheme="no" lightThemeName="" lightToolBarIconSet="4" lightTbFluentColor="0" lightTbFluentCustomColor="33024" lightTbFluentMono="no"
+		// lightTabIconSet="0" lightTabUseTheme="yes" />
+		else if (std::strcmp(nm, "DarkMode") == 0)
+		{
+			_nppGUI._darkmode._isEnabled = getBoolAttribute(childNode, "enable");
+
+			using enum NppDarkMode::ColorTone;
+			const int clrTone = NppXml::intAttribute(childNode, "colorTone", 0);
+			if (clrTone == static_cast<int>(customizedTone)
+				|| (clrTone >= static_cast<int>(blackTone)
+					&& clrTone <= static_cast<int>(oliveTone)))
+			{
+				_nppGUI._darkmode._colorTone = static_cast<NppDarkMode::ColorTone>(clrTone);
 			}
 			else
 			{
-				_nppGUI._inSelectionAutocheckThreshold = FINDREPLACE_INSELECTION_THRESHOLD_DEFAULT;
+				_nppGUI._darkmode._colorTone = blackTone;
 			}
-		}
-		else if (!lstrcmp(nm, TEXT("MISC")))
-		{
-			const TCHAR * optName = element->Attribute(TEXT("fileSwitcherWithoutExtColumn"));
-			if (optName)
-				_nppGUI._fileSwitcherWithoutExtColumn = (lstrcmp(optName, TEXT("yes")) == 0);
-			
-			int i = 0;
-			if (element->Attribute(TEXT("fileSwitcherExtWidth"), &i))
-				_nppGUI._fileSwitcherExtWidth = i;
+			_nppGUI._darkmode._customColors.pureBackground = NppXml::intAttribute(childNode, "customColorTop", 0x202020);
+			_nppGUI._darkmode._customColors.hotBackground = NppXml::intAttribute(childNode, "customColorMenuHotTrack", 0x454545);
+			_nppGUI._darkmode._customColors.softerBackground = NppXml::intAttribute(childNode, "customColorActive", 0x383838);
+			_nppGUI._darkmode._customColors.background = NppXml::intAttribute(childNode, "customColorMain", 0x202020);
+			_nppGUI._darkmode._customColors.errorBackground = NppXml::intAttribute(childNode, "customColorError", 0x0000B0);
 
-			const TCHAR * optNamePath = element->Attribute(TEXT("fileSwitcherWithoutPathColumn"));
-			if (optNamePath)
-				_nppGUI._fileSwitcherWithoutPathColumn = (lstrcmp(optNamePath, TEXT("yes")) == 0);
+			_nppGUI._darkmode._customColors.text = NppXml::intAttribute(childNode, "customColorText", 0xE0E0E0);
+			_nppGUI._darkmode._customColors.darkerText = NppXml::intAttribute(childNode, "customColorDarkText", 0xC0C0C0);
+			_nppGUI._darkmode._customColors.disabledText = NppXml::intAttribute(childNode, "customColorDisabledText", 0x808080);
+			_nppGUI._darkmode._customColors.linkText = NppXml::intAttribute(childNode, "customColorLinkText", 0x00FFFF);
 
-			if (element->Attribute(TEXT("fileSwitcherPathWidth"), &i))
-				_nppGUI._fileSwitcherPathWidth = i;
-
-			_nppGUI._fileSwitcherDisableListViewGroups = parseYesNoBoolAttribute(TEXT("fileSwitcherNoGroups"));
-
-			const TCHAR * optNameBackSlashEscape = element->Attribute(TEXT("backSlashIsEscapeCharacterForSql"));
-			if (optNameBackSlashEscape && !lstrcmp(optNameBackSlashEscape, TEXT("no")))
-				_nppGUI._backSlashIsEscapeCharacterForSql = false;
-
-			const TCHAR * optNameWriteTechnologyEngine = element->Attribute(TEXT("writeTechnologyEngine"));
-			if (optNameWriteTechnologyEngine)
-				_nppGUI._writeTechnologyEngine = (lstrcmp(optNameWriteTechnologyEngine, TEXT("1")) == 0) ? directWriteTechnology : defaultTechnology;
-
-			const TCHAR * optNameFolderDroppedOpenFiles = element->Attribute(TEXT("isFolderDroppedOpenFiles"));
-			if (optNameFolderDroppedOpenFiles)
-				_nppGUI._isFolderDroppedOpenFiles = (lstrcmp(optNameFolderDroppedOpenFiles, TEXT("yes")) == 0);
-
-			const TCHAR * optDocPeekOnTab = element->Attribute(TEXT("docPeekOnTab"));
-			if (optDocPeekOnTab)
-				_nppGUI._isDocPeekOnTab = (lstrcmp(optDocPeekOnTab, TEXT("yes")) == 0);
-
-			const TCHAR * optDocPeekOnMap = element->Attribute(TEXT("docPeekOnMap"));
-			if (optDocPeekOnMap)
-				_nppGUI._isDocPeekOnMap = (lstrcmp(optDocPeekOnMap, TEXT("yes")) == 0);
-
-			const TCHAR* optSortFunctionList = element->Attribute(TEXT("sortFunctionList"));
-			if (optSortFunctionList)
-				_nppGUI._shouldSortFunctionList = (lstrcmp(optSortFunctionList, TEXT("yes")) == 0);
-
-			const TCHAR* saveDlgExtFilterToAllTypes = element->Attribute(TEXT("saveDlgExtFilterToAllTypes"));
-			if (saveDlgExtFilterToAllTypes)
-				_nppGUI._setSaveDlgExtFiltToAllTypes = (lstrcmp(saveDlgExtFilterToAllTypes, TEXT("yes")) == 0);
-
-			const TCHAR * optMuteSounds = element->Attribute(TEXT("muteSounds"));
-			if (optMuteSounds)
-				_nppGUI._muteSounds = lstrcmp(optMuteSounds, TEXT("yes")) == 0;
-
-			const TCHAR * optEnableFoldCmdToggable = element->Attribute(TEXT("enableFoldCmdToggable"));
-			if (optEnableFoldCmdToggable)
-				_nppGUI._enableFoldCmdToggable = lstrcmp(optEnableFoldCmdToggable, TEXT("yes")) == 0;
-
-			const TCHAR * hideMenuRightShortcuts = element->Attribute(TEXT("hideMenuRightShortcuts"));
-			if (hideMenuRightShortcuts)
-				_nppGUI._hideMenuRightShortcuts = lstrcmp(hideMenuRightShortcuts, TEXT("yes")) == 0;
-		}
-		else if (!lstrcmp(nm, TEXT("commandLineInterpreter")))
-		{
-			TiXmlNode *node = childNode->FirstChild();
-			if (node)
-			{
-				const TCHAR *cli = node->Value();
-				if (cli && cli[0])
-					_nppGUI._commandLineInterpreter.assign(cli);
-			}
-		}
-		else if (!lstrcmp(nm, TEXT("DarkMode")))
-		{
-			_nppGUI._darkmode._isEnabled = parseYesNoBoolAttribute(TEXT("enable"));
-
-			//_nppGUI._darkmode._isEnabledPlugin = parseYesNoBoolAttribute(TEXT("enablePlugin", true));
-
-			int i;
-			const TCHAR* val;
-			val = element->Attribute(TEXT("colorTone"), &i);
-			if (val)
-				_nppGUI._darkmode._colorTone = static_cast<NppDarkMode::ColorTone>(i);
-
-
-			val = element->Attribute(TEXT("customColorTop"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.pureBackground = i;
-
-			val = element->Attribute(TEXT("customColorMenuHotTrack"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.hotBackground = i;
-
-			val = element->Attribute(TEXT("customColorActive"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.softerBackground = i;
-
-			val = element->Attribute(TEXT("customColorMain"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.background = i;
-
-			val = element->Attribute(TEXT("customColorError"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.errorBackground = i;
-
-			val = element->Attribute(TEXT("customColorText"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.text = i;
-
-			val = element->Attribute(TEXT("customColorDarkText"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.darkerText = i;
-
-			val = element->Attribute(TEXT("customColorDisabledText"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.disabledText = i;
-
-			val = element->Attribute(TEXT("customColorLinkText"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.linkText = i;
-
-			val = element->Attribute(TEXT("customColorEdge"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.edge = i;
-
-			val = element->Attribute(TEXT("customColorHotEdge"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.hotEdge = i;
-
-			val = element->Attribute(TEXT("customColorDisabledEdge"), &i);
-			if (val)
-				_nppGUI._darkmode._customColors.disabledEdge = i;
+			_nppGUI._darkmode._customColors.edge = NppXml::intAttribute(childNode, "customColorEdge", 0x646464);
+			_nppGUI._darkmode._customColors.hotEdge = NppXml::intAttribute(childNode, "customColorHotEdge", 0x9B9B9B);
+			_nppGUI._darkmode._customColors.disabledEdge = NppXml::intAttribute(childNode, "customColorDisabledEdge", 0x484848);
 
 			// advanced options section
-			auto parseStringAttribute = [&element](const TCHAR* name, const TCHAR* defaultName = TEXT("")) -> const TCHAR* {
-				const TCHAR* val = element->Attribute(name);
-				if (val != nullptr && val[0])
-				{
-					return element->Attribute(name);
-				}
-				return defaultName;
-			};
 
-			auto parseToolBarIconsAttribute = [&element](const TCHAR* name, int defaultValue = -1) -> int {
-				int val;
-				const TCHAR* valStr = element->Attribute(name, &val);
-				if (valStr != nullptr && (val >= 0 && val <= 4))
-				{
-					return val;
-				}
-				return defaultValue;
-			};
-
-			auto parseTabIconsAttribute = [&element](const TCHAR* name, int defaultValue = -1) -> int {
-				int val;
-				const TCHAR* valStr = element->Attribute(name, &val);
-				if (valStr != nullptr && (val >= 0 && val <= 2))
-				{
-					return val;
-				}
-				return defaultValue;
-			};
+			using enum toolBarStatusType;
+			using enum FluentColor;
 
 			auto& windowsMode = _nppGUI._darkmode._advOptions._enableWindowsMode;
-			windowsMode = parseYesNoBoolAttribute(TEXT("enableWindowsMode"));
+			windowsMode = getBoolAttribute(childNode, "enableWindowsMode");
 
 			auto& darkDefaults = _nppGUI._darkmode._advOptions._darkDefaults;
 			auto& darkThemeName = darkDefaults._xmlFileName;
-			darkThemeName = parseStringAttribute(TEXT("darkThemeName"), TEXT("DarkModeDefault.xml"));
-			darkDefaults._toolBarIconSet = parseToolBarIconsAttribute(TEXT("darkToolBarIconSet"), 0);
-			darkDefaults._tabIconSet = parseTabIconsAttribute(TEXT("darkTabIconSet"), 2);
-			darkDefaults._tabUseTheme = parseYesNoBoolAttribute(TEXT("darkTabUseTheme"));
+			auto& darkTbInfo = darkDefaults._tbIconInfo;
+			darkThemeName = string2wstring(NppXml::attribute(childNode, "darkThemeName", "DarkModeDefault.xml"));
+			if (darkThemeName.empty())
+				darkThemeName = L"DarkModeDefault.xml";
+			darkTbInfo._tbIconSet = getRangeDefaultAttribute(childNode, "darkToolBarIconSet", TB_SMALL, TB_STANDARD, darkTbInfo._tbIconSet);
+			darkTbInfo._tbColor = getRangeDefaultAttribute(childNode, "darkTbFluentColor", defaultColor, custom, darkTbInfo._tbColor);
+			darkTbInfo._tbCustomColor = NppXml::intAttribute(childNode, "darkTbFluentCustomColor", darkTbInfo._tbCustomColor);
+			darkTbInfo._tbUseMono = getBoolAttribute(childNode, "darkTbFluentMono");
+			darkDefaults._tabIconSet = getRangeDefaultAttribute(childNode, "darkTabIconSet", 0, 2, darkDefaults._tabIconSet);
+			darkDefaults._tabUseTheme = getBoolAttribute(childNode, "darkTabUseTheme");
 
 			auto& lightDefaults = _nppGUI._darkmode._advOptions._lightDefaults;
 			auto& lightThemeName = lightDefaults._xmlFileName;
-			lightThemeName = parseStringAttribute(TEXT("lightThemeName"));
-			lightDefaults._toolBarIconSet = parseToolBarIconsAttribute(TEXT("lightToolBarIconSet"), 4);
-			lightDefaults._tabIconSet = parseTabIconsAttribute(TEXT("lightTabIconSet"), 0);
-			lightDefaults._tabUseTheme = parseYesNoBoolAttribute(TEXT("lightTabUseTheme"), true);
+			auto& lightTbInfo = lightDefaults._tbIconInfo;
+			lightThemeName = string2wstring(NppXml::attribute(childNode, "lightThemeName", ""));
+			lightTbInfo._tbIconSet = getRangeDefaultAttribute(childNode, "lightToolBarIconSet", TB_SMALL, TB_STANDARD, lightTbInfo._tbIconSet);
+			lightTbInfo._tbColor = getRangeDefaultAttribute(childNode, "lightTbFluentColor", defaultColor, custom, lightTbInfo._tbColor);
+			lightTbInfo._tbCustomColor = NppXml::intAttribute(childNode, "lightTbFluentCustomColor", lightTbInfo._tbCustomColor);
+			lightTbInfo._tbUseMono = getBoolAttribute(childNode, "lightTbFluentMono");
+			lightDefaults._tabIconSet = getRangeDefaultAttribute(childNode, "lightTabIconSet", 0, 2, lightDefaults._tabIconSet);
+			lightDefaults._tabUseTheme = getBoolAttribute(childNode, "lightTabUseTheme", lightDefaults._tabUseTheme);
 
 			// Windows mode is handled later in Notepad_plus_Window::init from Notepad_plus_Window.cpp
 			if (!windowsMode)
@@ -6341,32 +7092,32 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 				std::wstring xmlFileName = _nppGUI._darkmode._isEnabled ? darkThemeName : lightThemeName;
 				const bool isLocalOnly = _isLocal && !_isCloud;
 
-				if (!xmlFileName.empty() && lstrcmp(xmlFileName.c_str(), TEXT("stylers.xml")) != 0)
+				if (!xmlFileName.empty() && std::wcscmp(xmlFileName.c_str(), L"stylers.xml") != 0)
 				{
 					themePath = isLocalOnly ? _nppPath : _userPath;
-					pathAppend(themePath, TEXT("themes\\"));
+					pathAppend(themePath, L"themes\\");
 					pathAppend(themePath, xmlFileName);
 
-					if (!isLocalOnly && ::PathFileExists(themePath.c_str()) == FALSE)
+					if (!isLocalOnly && !doesFileExist(themePath.c_str()))
 					{
 						themePath = _nppPath;
-						pathAppend(themePath, TEXT("themes\\"));
+						pathAppend(themePath, L"themes\\");
 						pathAppend(themePath, xmlFileName);
 					}
 				}
 				else
 				{
 					themePath = isLocalOnly ? _nppPath : _userPath;
-					pathAppend(themePath, TEXT("stylers.xml"));
+					pathAppend(themePath, L"stylers.xml");
 
-					if (!isLocalOnly && ::PathFileExists(themePath.c_str()) == FALSE)
+					if (!isLocalOnly && !doesFileExist(themePath.c_str()))
 					{
 						themePath = _nppPath;
-						pathAppend(themePath, TEXT("stylers.xml"));
+						pathAppend(themePath, L"stylers.xml");
 					}
 				}
 
-				if (::PathFileExists(themePath.c_str()) == TRUE)
+				if (doesFileExist(themePath.c_str()))
 				{
 					_nppGUI._themeName.assign(themePath);
 				}
@@ -6375,691 +7126,509 @@ void NppParameters::feedGUIParameters(TiXmlNode *node)
 	}
 }
 
-void NppParameters::feedScintillaParam(TiXmlNode *node)
+// <GUIConfig name="ScintillaPrimaryView" lineNumberMargin="show" lineNumberDynamicWidth="yes" bookMarkMargin="show" indentGuideLine="show"
+// folderMarkStyle="box" isChangeHistoryEnabled="1" lineWrapMethod="aligned" currentLineIndicator="1" currentLineFrameWidth="1"
+// virtualSpace="no" scrollBeyondLastLine="yes" rightClickKeepsSelection="no" selectedTextForegroundSingleColor="no" disableAdvancedScrolling="no"
+// wrapSymbolShow="hide" Wrap="no" borderEdge="yes" isEdgeBgMode="no" edgeMultiColumnPos="" zoom="0" zoom2="0" whiteSpaceShow="hide"
+// eolShow="hide" eolMode="1" npcShow="hide" npcMode="1" npcCustomColor="no" npcIncludeCcUniEOL="no" npcNoInputC0="yes" ccShow="yes"
+// borderWidth="2" smoothFont="no" paddingLeft="0" paddingRight="0" distractionFreeDivPart="4" lineCopyCutWithoutSelection="yes"
+// multiSelection="yes" columnSel2MultiEdit="yes" disableSelectedTextDragDrop="no" />
+void NppParameters::feedScintillaParam(const NppXml::Element& element)
 {
-	TiXmlElement* element = node->ToElement();
-
-	auto parseYesNoBoolAttribute = [&element](const TCHAR* name, bool defaultValue = false) -> bool {
-		const TCHAR* nm = element->Attribute(name);
-		if (nm)
-		{
-			if (!lstrcmp(nm, TEXT("yes")))
-				return true;
-			else if (!lstrcmp(nm, TEXT("no")))
-				return false;
-		}
-		return defaultValue;
-	};
-
-	auto parseShowHideBoolAttribute = [&element](const TCHAR* name, bool defaultValue = false) -> bool {
-		const TCHAR* nm = element->Attribute(name);
-		if (nm)
-		{
-			if (!lstrcmp(nm, TEXT("show")))
-				return true;
-			else if (!lstrcmp(nm, TEXT("hide")))
-				return false;
-		}
-		return defaultValue;
-	};
-
 	// Line Number Margin
-	const TCHAR *nm = element->Attribute(TEXT("lineNumberMargin"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._lineNumberMarginShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._lineNumberMarginShow = false;
-	}
-
+	_svp._lineNumberMarginShow = getBoolAttribute(element, "lineNumberMargin", _svp._lineNumberMarginShow, STR_BOOL_SHOWHIDE);
 	// Line Number Margin dynamic width
-	nm = element->Attribute(TEXT("lineNumberDynamicWidth"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._lineNumberMarginDynamicWidth = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._lineNumberMarginDynamicWidth = false;
-	}
-
+	_svp._lineNumberMarginDynamicWidth = getBoolAttribute(element, "lineNumberDynamicWidth", _svp._lineNumberMarginDynamicWidth);
 	// Bookmark Margin
-	nm = element->Attribute(TEXT("bookMarkMargin"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._bookMarkMarginShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._bookMarkMarginShow = false;
-	}
+	_svp._bookMarkMarginShow = getBoolAttribute(element, "bookMarkMargin", _svp._bookMarkMarginShow, STR_BOOL_SHOWHIDE);
 
 	// Change History Margin
-	int chState = 0;
-	nm = element->Attribute(TEXT("isChangeHistoryEnabled"), &chState);
-	if (nm)
 	{
-		if (!lstrcmp(nm, TEXT("yes"))) // for the retro-compatibility
-			chState = 1;
-
-		_svp._isChangeHistoryEnabled4NextSession = static_cast<changeHistoryState>(chState);
-		switch (chState)
+		using enum changeHistoryState;
+		if (const char* nm = NppXml::attribute(element, "isChangeHistoryEnabled");
+			nm && std::strcmp(nm, "yes") == 0) // for the retro-compatibility
 		{
-			case changeHistoryState::disable:
+			_svp._isChangeHistoryEnabled4NextSession = margin;
+		}
+		else
+		{
+			_svp._isChangeHistoryEnabled4NextSession = getRangeDefaultAttribute(element, "isChangeHistoryEnabled", disable, marginIndicator, _svp._isChangeHistoryEnabled4NextSession);
+		}
+
+		switch (_svp._isChangeHistoryEnabled4NextSession)
+		{
+			case disable:
+			{
 				_svp._isChangeHistoryMarginEnabled = false;
 				_svp._isChangeHistoryIndicatorEnabled = false;
 				break;
-			case changeHistoryState::margin:
+			}
+
+			case margin:
+			{
 				_svp._isChangeHistoryMarginEnabled = true;
 				_svp._isChangeHistoryIndicatorEnabled = false;
 				break;
-			case changeHistoryState::indicator:
+			}
+
+			case indicator:
+			{
 				_svp._isChangeHistoryMarginEnabled = false;
 				_svp._isChangeHistoryIndicatorEnabled = true;
 				break;
-			case changeHistoryState::marginIndicator:
+			}
+
+			case marginIndicator:
+			{
 				_svp._isChangeHistoryMarginEnabled = true;
 				_svp._isChangeHistoryIndicatorEnabled = true;
 				break;
-			default:
-			_svp._isChangeHistoryMarginEnabled = true;
-			_svp._isChangeHistoryIndicatorEnabled = false;
-			_svp._isChangeHistoryEnabled4NextSession = changeHistoryState::marginIndicator;
+			}
+
+			default: // should not happen
+			{
+				_svp._isChangeHistoryMarginEnabled = true;
+				_svp._isChangeHistoryIndicatorEnabled = false;
+				_svp._isChangeHistoryEnabled4NextSession = margin;
+				break;
+			}
 		}
 	}
 
 	// Indent GuideLine
-	nm = element->Attribute(TEXT("indentGuideLine"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._indentGuideLineShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._indentGuideLineShow= false;
-	}
+	_svp._indentGuideLineShow = getBoolAttribute(element, "indentGuideLine", _svp._indentGuideLineShow, STR_BOOL_SHOWHIDE);
 
 	// Folder Mark Style
-	nm = element->Attribute(TEXT("folderMarkStyle"));
+	const char* nm = NppXml::attribute(element, "folderMarkStyle");
 	if (nm)
 	{
-		if (!lstrcmp(nm, TEXT("box")))
+		using enum folderStyle;
+		if (std::strcmp(nm, "box") == 0)
 			_svp._folderStyle = FOLDER_STYLE_BOX;
-		else if (!lstrcmp(nm, TEXT("circle")))
+		else if (std::strcmp(nm, "circle") == 0)
 			_svp._folderStyle = FOLDER_STYLE_CIRCLE;
-		else if (!lstrcmp(nm, TEXT("arrow")))
+		else if (std::strcmp(nm, "arrow") == 0)
 			_svp._folderStyle = FOLDER_STYLE_ARROW;
-		else if (!lstrcmp(nm, TEXT("simple")))
+		else if (std::strcmp(nm, "simple") == 0)
 			_svp._folderStyle = FOLDER_STYLE_SIMPLE;
-		else if (!lstrcmp(nm, TEXT("none")))
+		else if (std::strcmp(nm, "none") == 0)
 			_svp._folderStyle = FOLDER_STYLE_NONE;
+		else
+			_svp._folderStyle = FOLDER_STYLE_BOX;
 	}
 
 	// Line Wrap method
-	nm = element->Attribute(TEXT("lineWrapMethod"));
+	nm = NppXml::attribute(element, "lineWrapMethod");
 	if (nm)
 	{
-		if (!lstrcmp(nm, TEXT("default")))
+		using enum lineWrapMethod;
+		if (std::strcmp(nm, "default") == 0)
 			_svp._lineWrapMethod = LINEWRAP_DEFAULT;
-		else if (!lstrcmp(nm, TEXT("aligned")))
+		else if (std::strcmp(nm, "aligned") == 0)
 			_svp._lineWrapMethod = LINEWRAP_ALIGNED;
-		else if (!lstrcmp(nm, TEXT("indent")))
+		else if (std::strcmp(nm, "indent") == 0)
 			_svp._lineWrapMethod = LINEWRAP_INDENT;
+		else
+			_svp._lineWrapMethod = LINEWRAP_ALIGNED;
 	}
 
 	// Current Line Highlighting State
-	nm = element->Attribute(TEXT("currentLineHilitingShow"));
-	if (nm)
 	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._currentLineHiliteMode = LINEHILITE_HILITE;
-		else
-			_svp._currentLineHiliteMode = LINEHILITE_NONE;
-	}
-	else
-	{
-		const TCHAR* currentLineModeStr = element->Attribute(TEXT("currentLineIndicator"));
-		if (currentLineModeStr && currentLineModeStr[0])
+		nm = NppXml::attribute(element, "currentLineHilitingShow");
+		using enum lineHiliteMode;
+		if (nm)
 		{
-			if (lstrcmp(currentLineModeStr, TEXT("1")) == 0)
+			if (std::strcmp(nm, "show") == 0)
 				_svp._currentLineHiliteMode = LINEHILITE_HILITE;
-			else if (lstrcmp(currentLineModeStr, TEXT("2")) == 0)
-				_svp._currentLineHiliteMode = LINEHILITE_FRAME;
 			else
 				_svp._currentLineHiliteMode = LINEHILITE_NONE;
+		}
+		else
+		{
+			_svp._currentLineHiliteMode = getRangeDefaultAttribute(element, "currentLineIndicator", LINEHILITE_NONE, LINEHILITE_FRAME, _svp._currentLineHiliteMode);
 		}
 	}
 
 	// Current Line Frame Width
-	nm = element->Attribute(TEXT("currentLineFrameWidth"));
-	if (nm)
 	{
-		unsigned char frameWidth{ 1 };
-		try
-		{
-			frameWidth = static_cast<unsigned char>(std::stoi(nm));
-		}
-		catch (...)
-		{
-			// do nothing. frameWidth is already set to '1'.
-		}
-		_svp._currentLineFrameWidth = (frameWidth < 1) ? 1 : (frameWidth > 6) ? 6 : frameWidth;
+		_svp._currentLineFrameWidth = getRangeClampAttribute<unsigned char>(element, "currentLineFrameWidth", 1U, 6U, _svp._currentLineFrameWidth);
 	}
 
 	// Virtual Space
-	nm = element->Attribute(TEXT("virtualSpace"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._virtualSpace = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._virtualSpace = false;
-	}
+	_svp._virtualSpace = getBoolAttribute(element, "virtualSpace");
 
 	// Scrolling Beyond Last Line State
-	nm = element->Attribute(TEXT("scrollBeyondLastLine"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._scrollBeyondLastLine = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._scrollBeyondLastLine = false;
-	}
+	_svp._scrollBeyondLastLine = getBoolAttribute(element, "scrollBeyondLastLine", _svp._scrollBeyondLastLine);
 
 	// Do not change selection or caret position when right-clicking with mouse
-	nm = element->Attribute(TEXT("rightClickKeepsSelection"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._rightClickKeepsSelection = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._rightClickKeepsSelection = false;
-	}
+	_svp._rightClickKeepsSelection = getBoolAttribute(element, "rightClickKeepsSelection");
+
+	// Make selected text foreground single color
+	_svp._selectedTextForegroundSingleColor = getBoolAttribute(element, "selectedTextForegroundSingleColor");
 
 	// Disable Advanced Scrolling
-	nm = element->Attribute(TEXT("disableAdvancedScrolling"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._disableAdvancedScrolling = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._disableAdvancedScrolling = false;
-	}
+	_svp._disableAdvancedScrolling = getBoolAttribute(element, "disableAdvancedScrolling");
 
 	// Current wrap symbol visibility State
-	nm = element->Attribute(TEXT("wrapSymbolShow"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._wrapSymbolShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._wrapSymbolShow = false;
-	}
+	_svp._wrapSymbolShow = getBoolAttribute(element, "wrapSymbolShow", _svp._wrapSymbolShow, STR_BOOL_SHOWHIDE);
 
 	// Do Wrap
-	nm = element->Attribute(TEXT("Wrap"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._doWrap = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._doWrap = false;
-	}
+	_svp._doWrap = getBoolAttribute(element, "Wrap");
 
 	// Do Edge
-	nm = element->Attribute(TEXT("isEdgeBgMode"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._isEdgeBgMode = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._isEdgeBgMode = false;
-	}
+	_svp._isEdgeBgMode = getBoolAttribute(element, "isEdgeBgMode");
 
 	// Do Scintilla border edge
-	nm = element->Attribute(TEXT("borderEdge"));
+	_svp._showBorderEdge = getBoolAttribute(element, "borderEdge", _svp._showBorderEdge);
+
+	nm = NppXml::attribute(element, "edgeMultiColumnPos");
 	if (nm)
 	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._showBorderEdge = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._showBorderEdge = false;
+		str2numberVector(string2wstring(nm), _svp._edgeMultiColumnPos);
 	}
 
-	nm = element->Attribute(TEXT("edgeMultiColumnPos"));
-	if (nm)
-	{
-		str2numberVector(nm, _svp._edgeMultiColumnPos);
-	}
-
-	int val;
-	nm = element->Attribute(TEXT("zoom"), &val);
-	if (nm)
-	{
-		_svp._zoom = val;
-	}
-
-	nm = element->Attribute(TEXT("zoom2"), &val);
-	if (nm)
-	{
-		_svp._zoom2 = val;
-	}
+	_svp._zoom = static_cast<intptr_t>(NppXml::int64Attribute(element, "zoom", _svp._zoom));
+	_svp._zoom2 = static_cast<intptr_t>(NppXml::int64Attribute(element, "zoom2", _svp._zoom2));
+	_svp._zoomSync = getBoolAttribute(element, "zoomSync", _svp._zoomSync);
 
 	// White Space visibility State
-	nm = element->Attribute(TEXT("whiteSpaceShow"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._whiteSpaceShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._whiteSpaceShow = false;
-	}
+	_svp._whiteSpaceShow = getBoolAttribute(element, "whiteSpaceShow", _svp._whiteSpaceShow, STR_BOOL_SHOWHIDE);
 
 	// EOL visibility State
-	nm = element->Attribute(TEXT("eolShow"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("show")))
-			_svp._eolShow = true;
-		else if (!lstrcmp(nm, TEXT("hide")))
-			_svp._eolShow = false;
-	}
+	_svp._eolShow = getBoolAttribute(element, "eolShow", _svp._eolShow, STR_BOOL_SHOWHIDE);
 
-	nm = element->Attribute(TEXT("eolMode"), &val);
-	if (nm)
 	{
-		if (val >= 0 && val <= 3)
-			_svp._eolMode = static_cast<ScintillaViewParams::crlfMode>(val);
+		using enum ScintillaViewParams::crlfMode;
+		_svp._eolMode = getRangeDefaultAttribute(element, "eolMode", plainText, roundedRectangleTextCustomColor, _svp._eolMode);
 	}
 
 	// Unicode control and ws characters visibility state
-	_svp._npcShow = parseShowHideBoolAttribute(TEXT("npcShow"), true);
+	_svp._npcShow = getBoolAttribute(element, "npcShow", _svp._npcShow, STR_BOOL_SHOWHIDE);
 
-	nm = element->Attribute(TEXT("npcMode"), &val);
-	if (nm)
 	{
-		if (val >= 1 && val <= 2)
-			_svp._npcMode = static_cast<ScintillaViewParams::npcMode>(val);
+		using enum ScintillaViewParams::npcMode;
+		_svp._npcMode = getRangeDefaultAttribute(element, "npcMode", identity, codepoint, _svp._npcMode);
 	}
 
-	_svp._npcCustomColor = parseYesNoBoolAttribute(TEXT("npcCustomColor"));
-	_svp._npcIncludeCcUniEol = parseYesNoBoolAttribute(TEXT("npcIncludeCcUniEOL"));
-	_svp._npcNoInputC0 = parseYesNoBoolAttribute(TEXT("npcNoInputC0"));
+	_svp._npcCustomColor = getBoolAttribute(element, "npcCustomColor");
+	_svp._npcIncludeCcUniEol = getBoolAttribute(element, "npcIncludeCcUniEOL");
+	_svp._npcNoInputC0 = getBoolAttribute(element, "npcNoInputC0", _svp._npcNoInputC0);
 
 	// C0, C1 control and Unicode EOL visibility state
-	_svp._ccUniEolShow = parseYesNoBoolAttribute(TEXT("ccShow"), true);
+	_svp._ccUniEolShow = getBoolAttribute(element, "ccShow", _svp._ccUniEolShow);
 
-	nm = element->Attribute(TEXT("borderWidth"), &val);
-	if (nm)
-	{
-		if (val >= 0 && val <= 30)
-			_svp._borderWidth = val;
-	}
+	_svp._borderWidth = getRangeClampAttribute(element, "borderWidth", 0, 30, _svp._borderWidth);
 
 	// Do antialiased font
-	nm = element->Attribute(TEXT("smoothFont"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._doSmoothFont = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._doSmoothFont = false;
-	}
+	_svp._doSmoothFont = getBoolAttribute(element, "smoothFont");
 
-	nm = element->Attribute(TEXT("paddingLeft"), &val);
-	if (nm)
-	{
-		if (val >= 0 && val <= 30)
-			_svp._paddingLeft = static_cast<unsigned char>(val);
-	}
+	_svp._paddingLeft = getRangeClampAttribute<unsigned char>(element, "paddingLeft", 0U, 30U, _svp._paddingLeft);
+	_svp._paddingRight = getRangeClampAttribute<unsigned char>(element, "paddingRight", 0U, 30U, _svp._paddingRight);
 
-	nm = element->Attribute(TEXT("paddingRight"), &val);
-	if (nm)
-	{
-		if (val >= 0 && val <= 30)
-			_svp._paddingRight = static_cast<unsigned char>(val);
-	}
+	_svp._distractionFreeDivPart = getRangeClampAttribute<unsigned char>(element, "distractionFreeDivPart", 3U, 9U, _svp._distractionFreeDivPart);
 
-	nm = element->Attribute(TEXT("distractionFreeDivPart"), &val);
-	if (nm)
-	{
-		if (val >= 3 && val <= 9)
-			_svp._distractionFreeDivPart = static_cast<unsigned char>(val);
-	}
-
-	nm = element->Attribute(TEXT("lineCopyCutWithoutSelection"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._lineCopyCutWithoutSelection = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._lineCopyCutWithoutSelection = false;
-	}
-
-	nm = element->Attribute(TEXT("multiSelection"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")))
-			_svp._multiSelection = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._multiSelection = false;
-	}
-
-	nm = element->Attribute(TEXT("columnSel2MultiEdit"));
-	if (nm)
-	{
-		if (!lstrcmp(nm, TEXT("yes")) && _svp._multiSelection)
-			_svp._columnSel2MultiEdit = true;
-		else if (!lstrcmp(nm, TEXT("no")))
-			_svp._columnSel2MultiEdit = false;
-	}
+	_svp._lineCopyCutWithoutSelection = getBoolAttribute(element, "lineCopyCutWithoutSelection", _svp._lineCopyCutWithoutSelection);
+	_svp._disableSelectedTextDragDrop = getBoolAttribute(element, "disableSelectedTextDragDrop", _svp._disableSelectedTextDragDrop);
+	_svp._multiSelection = getBoolAttribute(element, "multiSelection", _svp._multiSelection);
+	_svp._columnSel2MultiEdit = getBoolAttribute(element, "columnSel2MultiEdit", _svp._columnSel2MultiEdit);
 }
 
-
-void NppParameters::feedDockingManager(TiXmlNode *node)
+// <GUIConfig name="DockingManager" leftWidth="200" rightWidth="200" topHeight="200" bottomHeight="200">
+//     <ActiveTabs cont="0" activeTab="-1" />
+//     <ActiveTabs cont="1" activeTab="-1" />
+//     <ActiveTabs cont="2" activeTab="-1" />
+//     <ActiveTabs cont="3" activeTab="-1" />
+// </GUIConfig>
+void NppParameters::feedDockingManager(const NppXml::Element& element)
 {
-	TiXmlElement *element = node->ToElement();
-
-	int i;
-	if (element->Attribute(TEXT("leftWidth"), &i))
-		_nppGUI._dockingData._leftWidth = i;
-
-	if (element->Attribute(TEXT("rightWidth"), &i))
-		_nppGUI._dockingData._rightWidth = i;
-
-	if (element->Attribute(TEXT("topHeight"), &i))
-		_nppGUI._dockingData._topHeight = i;
-
-	if (element->Attribute(TEXT("bottomHeight"), &i))
-		_nppGUI._dockingData._bottomHight = i;
-
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("FloatingWindow"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("FloatingWindow")) )
+	SIZE maxMonitorSize{ ::GetSystemMetrics(SM_CXSCREEN), ::GetSystemMetrics(SM_CYSCREEN) }; // use primary monitor as the default
+	SIZE nppSize = maxMonitorSize;
+	HWND hwndNpp = ::FindWindow(Notepad_plus_Window::getClassName(), NULL);
+	if (hwndNpp)
 	{
-		TiXmlElement *floatElement = childNode->ToElement();
-		int cont;
-		if (floatElement->Attribute(TEXT("cont"), &cont))
-		{
-			int x = 0;
-			int y = 0;
-			int w = 100;
-			int h = 100;
+		// this code-branch is currently reached only if the Notepad++ multi-instance mode is ON and it is not the 1st Notepad++ instance
+		// (the feedDockingManager() is called at the Notepad++ init via the wWinMain nppParameters.load()))
 
-			floatElement->Attribute(TEXT("x"), &x);
-			floatElement->Attribute(TEXT("y"), &y);
-			floatElement->Attribute(TEXT("width"), &w);
-			floatElement->Attribute(TEXT("height"), &h);
-			_nppGUI._dockingData._flaotingWindowInfo.push_back(FloatingWindowInfo(cont, x, y, w, h));
+		HMONITOR hCurMon = ::MonitorFromWindow(hwndNpp, MONITOR_DEFAULTTONEAREST);
+		if (hCurMon)
+		{
+			MONITORINFO mi{};
+			mi.cbSize = sizeof(MONITORINFO);
+			if (::GetMonitorInfo(hCurMon, &mi))
+			{
+				maxMonitorSize.cx = mi.rcMonitor.right - mi.rcMonitor.left;
+				maxMonitorSize.cy = mi.rcMonitor.bottom - mi.rcMonitor.top;
+				nppSize = maxMonitorSize;
+			}
+		}
+
+		RECT rcNpp{};
+		if (::GetClientRect(hwndNpp, &rcNpp))
+		{
+			// rcNpp RECT could have zero size here! (if the 1st instance of Notepad++ is minimized to the task-bar (systray is ok))
+			if ((rcNpp.right > _nppGUI._dockingData._minDockedPanelVisibility) && (rcNpp.bottom > _nppGUI._dockingData._minDockedPanelVisibility))
+			{
+				// adjust according to the current Notepad++ client-wnd area
+				nppSize.cx = rcNpp.right;
+				nppSize.cy = rcNpp.bottom;
+			}
+		}
+	}
+	else
+	{
+		// no real Notepad++ wnd available, so try to use the previously saved config.xml data instead
+		if (!_nppGUI._isMaximized)
+		{
+			if (((_nppGUI._appPos.right > DMD_PANEL_WH_DEFAULT) && (_nppGUI._appPos.right < maxMonitorSize.cx))
+				&& ((_nppGUI._appPos.bottom > DMD_PANEL_WH_DEFAULT) && (_nppGUI._appPos.bottom < maxMonitorSize.cy)))
+			{
+				nppSize.cx = _nppGUI._appPos.right;
+				nppSize.cy = _nppGUI._appPos.bottom;
+			}
 		}
 	}
 
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("PluginDlg"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("PluginDlg")) )
+	auto setPanelSize = [&element, &nppSize, this](int& size2set, const char* attrName)
 	{
-		TiXmlElement *dlgElement = childNode->ToElement();
-		const TCHAR *name = dlgElement->Attribute(TEXT("pluginName"));
-
-		int id;
-		const TCHAR *idStr = dlgElement->Attribute(TEXT("id"), &id);
-		if (name && idStr)
+		const int panelSize = NppXml::intAttribute(element, attrName, DMD_PANEL_WH_DEFAULT);
+		if (panelSize > _nppGUI._dockingData._minDockedPanelVisibility)
 		{
-			int current = 0; // on left
-			int prev = 0; // on left
+			if (panelSize < (nppSize.cx - _nppGUI._dockingData._minDockedPanelVisibility))
+				size2set = panelSize;
+			else
+				size2set = nppSize.cx - _nppGUI._dockingData._minDockedPanelVisibility; // invalid, reset
+		}
+		else
+		{
+			// invalid, reset
+			size2set = _nppGUI._dockingData._minDockedPanelVisibility;
+		}
+	};
 
-			dlgElement->Attribute(TEXT("curr"), &current);
-			dlgElement->Attribute(TEXT("prev"), &prev);
-			bool isVisible = false;
-			const TCHAR *val = dlgElement->Attribute(TEXT("isVisible"));
-			if (val)
+	setPanelSize(_nppGUI._dockingData._leftWidth, "leftWidth");
+	setPanelSize(_nppGUI._dockingData._rightWidth, "rightWidth");
+	setPanelSize(_nppGUI._dockingData._topHeight, "topHeight");
+	setPanelSize(_nppGUI._dockingData._bottomHeight, "bottomHeight");
+
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "FloatingWindow");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "FloatingWindow"))
+	{
+		const int cont = NppXml::intAttribute(childNode, "cont", -1);
+		if (cont > -1)
+		{
+			int x = NppXml::intAttribute(childNode, "x", 0);
+			int y = NppXml::intAttribute(childNode, "y", 0);
+			int w = NppXml::intAttribute(childNode, "width", FWI_PANEL_WH_DEFAULT);
+			int h = NppXml::intAttribute(childNode, "height", FWI_PANEL_WH_DEFAULT);
+
+			if (!isWindowVisibleOnAnyMonitor(RECT{ x,y,w,h }))
 			{
-				isVisible = (lstrcmp(val, TEXT("yes")) == 0);
+				// reset to adjusted factory defaults
+				// (and the panel will automatically be on the current primary monitor due to the x,y == 0,0)
+				x = 0;
+				y = 0;
+				w = _nppGUI._dockingData._minFloatingPanelSize.cx;
+				h = _nppGUI._dockingData._minFloatingPanelSize.cy + FWI_PANEL_WH_DEFAULT;
 			}
 
-			_nppGUI._dockingData._pluginDockInfo.push_back(PluginDlgDockingInfo(name, id, current, prev, isVisible));
+			_nppGUI._dockingData._floatingWindowInfo.emplace_back(cont, x, y, w, h);
 		}
 	}
 
-	for (TiXmlNode *childNode = node->FirstChildElement(TEXT("ActiveTabs"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("ActiveTabs")) )
-	{
-		TiXmlElement *dlgElement = childNode->ToElement();
-
-		int cont;
-		if (dlgElement->Attribute(TEXT("cont"), &cont))
-		{
-			int activeTab = 0;
-			dlgElement->Attribute(TEXT("activeTab"), &activeTab);
-			_nppGUI._dockingData._containerTabInfo.push_back(ContainerTabInfo(cont, activeTab));
-		}
-	}
-}
-
-void NppParameters::duplicateDockingManager(TiXmlNode* dockMngNode, TiXmlElement* dockMngElmt2Clone)
-{
-	if (!dockMngNode || !dockMngElmt2Clone) return;
-
-	TiXmlElement *dockMngElmt = dockMngNode->ToElement();
-	
-	int i;
-	if (dockMngElmt->Attribute(TEXT("leftWidth"), &i))
-		dockMngElmt2Clone->SetAttribute(TEXT("leftWidth"), i);
-
-	if (dockMngElmt->Attribute(TEXT("rightWidth"), &i))
-		dockMngElmt2Clone->SetAttribute(TEXT("rightWidth"), i);
-
-	if (dockMngElmt->Attribute(TEXT("topHeight"), &i))
-		dockMngElmt2Clone->SetAttribute(TEXT("topHeight"), i);
-
-	if (dockMngElmt->Attribute(TEXT("bottomHeight"), &i))
-		dockMngElmt2Clone->SetAttribute(TEXT("bottomHeight"), i);
-
-
-	for (TiXmlNode *childNode = dockMngNode->FirstChildElement(TEXT("FloatingWindow"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "PluginDlg");
 		childNode;
-		childNode = childNode->NextSibling(TEXT("FloatingWindow")))
+		childNode = NppXml::nextSiblingElement(childNode, "PluginDlg"))
 	{
-		TiXmlElement *floatElement = childNode->ToElement();
-		int cont;
-		if (floatElement->Attribute(TEXT("cont"), &cont))
+		const char* name = NppXml::attribute(childNode, "pluginName");
+
+		const int id = NppXml::intAttribute(childNode, "id", -1);
+		if (name && id > -1)
 		{
-			TiXmlElement FWNode(TEXT("FloatingWindow"));
-			FWNode.SetAttribute(TEXT("cont"), cont);
+			const int current = NppXml::intAttribute(childNode, "curr", 0); // on left
+			const int prev = NppXml::intAttribute(childNode, "prev", 0); // on left
+			const bool isVisible = getBoolAttribute(childNode, "isVisible");
 
-			int x = 0;
-			int y = 0;
-			int w = 100;
-			int h = 100;
-
-			floatElement->Attribute(TEXT("x"), &x);
-			FWNode.SetAttribute(TEXT("x"), x);
-
-			floatElement->Attribute(TEXT("y"), &y);
-			FWNode.SetAttribute(TEXT("y"), y);
-			
-			floatElement->Attribute(TEXT("width"), &w);
-			FWNode.SetAttribute(TEXT("width"), w);
-			
-			floatElement->Attribute(TEXT("height"), &h);
-			FWNode.SetAttribute(TEXT("height"), h);
-
-			dockMngElmt2Clone->InsertEndChild(FWNode);
+			_nppGUI._dockingData._pluginDockInfo.emplace_back(string2wstring(name).c_str(), id, current, prev, isVisible);
 		}
 	}
 
-	for (TiXmlNode *childNode = dockMngNode->FirstChildElement(TEXT("PluginDlg"));
+	for (NppXml::Element childNode = NppXml::firstChildElement(element, "ActiveTabs");
 		childNode;
-		childNode = childNode->NextSibling(TEXT("PluginDlg")))
+		childNode = NppXml::nextSiblingElement(childNode, "ActiveTabs"))
 	{
-		TiXmlElement *dlgElement = childNode->ToElement();
-		const TCHAR *name = dlgElement->Attribute(TEXT("pluginName"));
-		TiXmlElement PDNode(TEXT("PluginDlg"));
-
-		int id;
-		const TCHAR *idStr = dlgElement->Attribute(TEXT("id"), &id);
-		if (name && idStr)
+		const int cont = NppXml::intAttribute(childNode, "cont", -1);
+		if (cont > -1)
 		{
-			int curr = 0; // on left
-			int prev = 0; // on left
-
-			dlgElement->Attribute(TEXT("curr"), &curr);
-			dlgElement->Attribute(TEXT("prev"), &prev);
-
-			bool isVisible = false;
-			const TCHAR *val = dlgElement->Attribute(TEXT("isVisible"));
-			if (val)
-			{
-				isVisible = (lstrcmp(val, TEXT("yes")) == 0);
-			}
-
-			PDNode.SetAttribute(TEXT("pluginName"), name);
-			PDNode.SetAttribute(TEXT("id"), idStr);
-			PDNode.SetAttribute(TEXT("curr"), curr);
-			PDNode.SetAttribute(TEXT("prev"), prev);
-			PDNode.SetAttribute(TEXT("isVisible"), isVisible ? TEXT("yes") : TEXT("no"));
-
-			dockMngElmt2Clone->InsertEndChild(PDNode);
-		}
-	}
-
-	for (TiXmlNode *childNode = dockMngNode->FirstChildElement(TEXT("ActiveTabs"));
-		childNode;
-		childNode = childNode->NextSibling(TEXT("ActiveTabs")))
-	{
-		TiXmlElement *dlgElement = childNode->ToElement();
-		TiXmlElement CTNode(TEXT("ActiveTabs"));
-		int cont;
-		if (dlgElement->Attribute(TEXT("cont"), &cont))
-		{
-			int activeTab = 0;
-			dlgElement->Attribute(TEXT("activeTab"), &activeTab);
-
-			CTNode.SetAttribute(TEXT("cont"), cont);
-			CTNode.SetAttribute(TEXT("activeTab"), activeTab);
-
-			dockMngElmt2Clone->InsertEndChild(CTNode);
+			const int activeTab = NppXml::intAttribute(childNode, "activeTab", 0);
+			_nppGUI._dockingData._containerTabInfo.emplace_back(cont, activeTab);
 		}
 	}
 }
 
 bool NppParameters::writeScintillaParams()
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	const TCHAR *pViewName = TEXT("ScintillaPrimaryView");
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	const char* pViewName = "ScintillaPrimaryView";
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *configsRoot = nppRoot->FirstChildElement(TEXT("GUIConfigs"));
+	NppXml::Element configsRoot = NppXml::firstChildElement(nppRoot, "GUIConfigs");
 	if (!configsRoot)
 	{
-		configsRoot = nppRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfigs")));
+		configsRoot = NppXml::createChildElement(nppRoot, "GUIConfigs");
 	}
 
-	TiXmlNode *scintNode = getChildElementByAttribut(configsRoot, TEXT("GUIConfig"), TEXT("name"), pViewName);
+	NppXml::Element scintNode = getChildElementByAttribute(configsRoot, "GUIConfig", "name", pViewName);
 	if (!scintNode)
 	{
-		scintNode = configsRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig")));
-		(scintNode->ToElement())->SetAttribute(TEXT("name"), pViewName);
+		scintNode = NppXml::createChildElement(configsRoot, "GUIConfig");
+		NppXml::setAttribute(scintNode, "name", pViewName);
 	}
 
-	auto setYesNoBoolAttribute = [&scintNode](const TCHAR* name, bool value) -> void {
-		const TCHAR* pStr = value ? TEXT("yes") : TEXT("no");
-		(scintNode->ToElement())->SetAttribute(name, pStr);
-	};
+	setBoolAttribute(scintNode, "lineNumberMargin", _svp._lineNumberMarginShow, STR_BOOL_SHOWHIDE);
+	setBoolAttribute(scintNode, "lineNumberDynamicWidth", _svp._lineNumberMarginDynamicWidth);
+	setBoolAttribute(scintNode, "bookMarkMargin", _svp._bookMarkMarginShow, STR_BOOL_SHOWHIDE);
+	setBoolAttribute(scintNode, "indentGuideLine", _svp._indentGuideLineShow, STR_BOOL_SHOWHIDE);
 
-	auto setShowHideBoolAttribute = [&scintNode](const TCHAR* name, bool value) -> void {
-		const TCHAR* pStr = value ? TEXT("show") : TEXT("hide");
-		(scintNode->ToElement())->SetAttribute(name, pStr);
-	};
-
-	(scintNode->ToElement())->SetAttribute(TEXT("lineNumberMargin"), _svp._lineNumberMarginShow?TEXT("show"):TEXT("hide"));
-	(scintNode->ToElement())->SetAttribute(TEXT("lineNumberDynamicWidth"), _svp._lineNumberMarginDynamicWidth ?TEXT("yes"):TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("bookMarkMargin"), _svp._bookMarkMarginShow?TEXT("show"):TEXT("hide"));
-	(scintNode->ToElement())->SetAttribute(TEXT("indentGuideLine"), _svp._indentGuideLineShow?TEXT("show"):TEXT("hide"));
-	const TCHAR *pFolderStyleStr = (_svp._folderStyle == FOLDER_STYLE_SIMPLE)?TEXT("simple"):
-									(_svp._folderStyle == FOLDER_STYLE_ARROW)?TEXT("arrow"):
-										(_svp._folderStyle == FOLDER_STYLE_CIRCLE)?TEXT("circle"):
-										(_svp._folderStyle == FOLDER_STYLE_NONE)?TEXT("none"):TEXT("box");
-	(scintNode->ToElement())->SetAttribute(TEXT("folderMarkStyle"), pFolderStyleStr);
-	
-	(scintNode->ToElement())->SetAttribute(TEXT("isChangeHistoryEnabled"), _svp._isChangeHistoryEnabled4NextSession); // no -> 0 (disable), yes -> 1 (margin), yes ->2 (indicator), yes-> 3 (margin + indicator)
-
-	const TCHAR *pWrapMethodStr = (_svp._lineWrapMethod == LINEWRAP_ALIGNED)?TEXT("aligned"):
-								(_svp._lineWrapMethod == LINEWRAP_INDENT)?TEXT("indent"):TEXT("default");
-	(scintNode->ToElement())->SetAttribute(TEXT("lineWrapMethod"), pWrapMethodStr);
-
-	(scintNode->ToElement())->SetAttribute(TEXT("currentLineIndicator"), _svp._currentLineHiliteMode);
-	(scintNode->ToElement())->SetAttribute(TEXT("currentLineFrameWidth"), _svp._currentLineFrameWidth);
-
-	(scintNode->ToElement())->SetAttribute(TEXT("virtualSpace"), _svp._virtualSpace?TEXT("yes"):TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("scrollBeyondLastLine"), _svp._scrollBeyondLastLine?TEXT("yes"):TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("rightClickKeepsSelection"), _svp._rightClickKeepsSelection ? TEXT("yes") : TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("disableAdvancedScrolling"), _svp._disableAdvancedScrolling?TEXT("yes"):TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("wrapSymbolShow"), _svp._wrapSymbolShow?TEXT("show"):TEXT("hide"));
-	(scintNode->ToElement())->SetAttribute(TEXT("Wrap"), _svp._doWrap?TEXT("yes"):TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("borderEdge"), _svp._showBorderEdge ? TEXT("yes") : TEXT("no"));
-
-	std::wstring edgeColumnPosStr;
-	for (auto i : _svp._edgeMultiColumnPos)
+	const char* pFolderStyleStr = nullptr;
+	switch (_svp._folderStyle)
 	{
-		std::string s = std::to_string(i);
-		edgeColumnPosStr += std::wstring(s.begin(), s.end());
-		edgeColumnPosStr += TEXT(" ");
-	}
-	(scintNode->ToElement())->SetAttribute(TEXT("isEdgeBgMode"), _svp._isEdgeBgMode ? TEXT("yes") : TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("edgeMultiColumnPos"), edgeColumnPosStr);
-	(scintNode->ToElement())->SetAttribute(TEXT("zoom"), static_cast<int>(_svp._zoom));
-	(scintNode->ToElement())->SetAttribute(TEXT("zoom2"), static_cast<int>(_svp._zoom2));
-	(scintNode->ToElement())->SetAttribute(TEXT("whiteSpaceShow"), _svp._whiteSpaceShow?TEXT("show"):TEXT("hide"));
-	(scintNode->ToElement())->SetAttribute(TEXT("eolShow"), _svp._eolShow?TEXT("show"):TEXT("hide"));
-	(scintNode->ToElement())->SetAttribute(TEXT("eolMode"), _svp._eolMode);
-	setShowHideBoolAttribute(TEXT("npcShow"), _svp._npcShow);
-	(scintNode->ToElement())->SetAttribute(TEXT("npcMode"), static_cast<int>(_svp._npcMode));
-	setYesNoBoolAttribute(TEXT("npcCustomColor"), _svp._npcCustomColor);
-	setYesNoBoolAttribute(TEXT("npcIncludeCcUniEOL"), _svp._npcIncludeCcUniEol);
-	setYesNoBoolAttribute(TEXT("npcNoInputC0"), _svp._npcNoInputC0);
-	setYesNoBoolAttribute(TEXT("ccShow"), _svp._ccUniEolShow);
-	(scintNode->ToElement())->SetAttribute(TEXT("borderWidth"), _svp._borderWidth);
-	(scintNode->ToElement())->SetAttribute(TEXT("smoothFont"), _svp._doSmoothFont ? TEXT("yes") : TEXT("no"));
-	(scintNode->ToElement())->SetAttribute(TEXT("paddingLeft"), _svp._paddingLeft);
-	(scintNode->ToElement())->SetAttribute(TEXT("paddingRight"), _svp._paddingRight);
-	(scintNode->ToElement())->SetAttribute(TEXT("distractionFreeDivPart"), _svp._distractionFreeDivPart);
-	(scintNode->ToElement())->SetAttribute(TEXT("lineCopyCutWithoutSelection"), _svp._lineCopyCutWithoutSelection ? TEXT("yes") : TEXT("no"));
+		using enum folderStyle;
+		case FOLDER_TYPE:
+		case FOLDER_STYLE_BOX:
+		{
+			pFolderStyleStr = "box";
+			break;
+		}
 
-	(scintNode->ToElement())->SetAttribute(TEXT("multiSelection"), _svp._multiSelection ? TEXT("yes") : TEXT("no"));
-	bool canEnableColumnSel2MultiEdit = _svp._multiSelection && _svp._columnSel2MultiEdit;
-	(scintNode->ToElement())->SetAttribute(TEXT("columnSel2MultiEdit"), canEnableColumnSel2MultiEdit ? TEXT("yes") : TEXT("no"));
+		case FOLDER_STYLE_SIMPLE:
+		{
+			pFolderStyleStr = "simple";
+			break;
+		}
+
+		case FOLDER_STYLE_ARROW:
+		{
+			pFolderStyleStr = "arrow";
+			break;
+		}
+
+		case FOLDER_STYLE_CIRCLE:
+		{
+			pFolderStyleStr = "circle";
+			break;
+		}
+
+		case FOLDER_STYLE_NONE:
+		{
+			pFolderStyleStr = "none";
+			break;
+		}
+	}
+
+	NppXml::setAttribute(scintNode, "folderMarkStyle", pFolderStyleStr);
+	NppXml::setAttribute(scintNode, "isChangeHistoryEnabled", _svp._isChangeHistoryEnabled4NextSession); // no -> 0 (disable), yes -> 1 (margin), yes -> 2 (indicator), yes-> 3 (margin + indicator)
+
+	const char* pWrapMethodStr = nullptr;
+	switch (_svp._lineWrapMethod)
+	{
+		using enum lineWrapMethod;
+		case LINEWRAP_DEFAULT:
+		{
+			pWrapMethodStr = "default";
+			break;
+		}
+
+		case LINEWRAP_ALIGNED:
+		{
+			pWrapMethodStr = "aligned";
+			break;
+		}
+
+		case LINEWRAP_INDENT:
+		{
+			pWrapMethodStr = "indent";
+			break;
+		}
+	}
+
+	NppXml::setAttribute(scintNode, "lineWrapMethod", pWrapMethodStr);
+
+	NppXml::setAttribute(scintNode, "currentLineIndicator", _svp._currentLineHiliteMode);
+	NppXml::setAttribute(scintNode, "currentLineFrameWidth", _svp._currentLineFrameWidth);
+
+	setBoolAttribute(scintNode, "virtualSpace", _svp._virtualSpace);
+	setBoolAttribute(scintNode, "scrollBeyondLastLine", _svp._scrollBeyondLastLine);
+	setBoolAttribute(scintNode, "rightClickKeepsSelection", _svp._rightClickKeepsSelection);
+	setBoolAttribute(scintNode, "selectedTextForegroundSingleColor", _svp._selectedTextForegroundSingleColor);
+	setBoolAttribute(scintNode, "disableAdvancedScrolling", _svp._disableAdvancedScrolling);
+	setBoolAttribute(scintNode, "wrapSymbolShow", _svp._wrapSymbolShow, STR_BOOL_SHOWHIDE);
+	setBoolAttribute(scintNode, "Wrap", _svp._doWrap);
+	setBoolAttribute(scintNode, "borderEdge", _svp._showBorderEdge);
+
+	std::string edgeColumnPosStr;
+	for (const auto& i : _svp._edgeMultiColumnPos)
+	{
+		edgeColumnPosStr += std::to_string(i);
+		edgeColumnPosStr += " ";
+	}
+	setBoolAttribute(scintNode, "isEdgeBgMode", _svp._isEdgeBgMode);
+	NppXml::setAttribute(scintNode, "edgeMultiColumnPos", edgeColumnPosStr);
+	NppXml::setAttribute(scintNode, "zoom", _svp._zoom);
+	NppXml::setAttribute(scintNode, "zoom2", _svp._zoom2);
+	setBoolAttribute(scintNode, "zoomSync", _svp._zoomSync);
+	setBoolAttribute(scintNode, "whiteSpaceShow", _svp._whiteSpaceShow, STR_BOOL_SHOWHIDE);
+	setBoolAttribute(scintNode, "eolShow", _svp._eolShow, STR_BOOL_SHOWHIDE);
+	NppXml::setAttribute(scintNode, "eolMode", _svp._eolMode);
+	setBoolAttribute(scintNode, "npcShow", _svp._npcShow, STR_BOOL_SHOWHIDE);
+	NppXml::setAttribute(scintNode, "npcMode", _svp._npcMode);
+	setBoolAttribute(scintNode, "npcCustomColor", _svp._npcCustomColor);
+	setBoolAttribute(scintNode, "npcIncludeCcUniEOL", _svp._npcIncludeCcUniEol);
+	setBoolAttribute(scintNode, "npcNoInputC0", _svp._npcNoInputC0);
+	setBoolAttribute(scintNode, "ccShow", _svp._ccUniEolShow);
+	NppXml::setAttribute(scintNode, "borderWidth", _svp._borderWidth);
+	setBoolAttribute(scintNode, "smoothFont", _svp._doSmoothFont);
+	NppXml::setAttribute(scintNode, "paddingLeft", _svp._paddingLeft);
+	NppXml::setAttribute(scintNode, "paddingRight", _svp._paddingRight);
+	NppXml::setAttribute(scintNode, "distractionFreeDivPart", _svp._distractionFreeDivPart);
+	setBoolAttribute(scintNode, "lineCopyCutWithoutSelection", _svp._lineCopyCutWithoutSelection);
+	setBoolAttribute(scintNode, "disableSelectedTextDragDrop", _svp._disableSelectedTextDragDrop);
+
+	setBoolAttribute(scintNode, "multiSelection", _svp._multiSelection);
+	const bool canEnableColumnSel2MultiEdit = _svp._multiSelection && _svp._columnSel2MultiEdit;
+	setBoolAttribute(scintNode, "columnSel2MultiEdit", canEnableColumnSel2MultiEdit);
 
 	return true;
 }
 
 void NppParameters::createXmlTreeFromGUIParams()
 {
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *oldGUIRoot = nppRoot->FirstChildElement(TEXT("GUIConfigs"));
-	TiXmlElement* dockMngNodeDup = nullptr;
-	TiXmlNode* dockMngNodeOriginal = nullptr;
+	NppXml::Element oldGUIRoot = NppXml::firstChildElement(nppRoot, "GUIConfigs");
+	NppXml::Document tempDoc = nullptr;
+	NppXml::Element dockMngNodeDup;
+	NppXml::Element dockMngNodeOriginal;
 	if (oldGUIRoot && _nppGUI._isCmdlineNosessionActivated)
 	{
-		for (TiXmlNode *childNode = oldGUIRoot->FirstChildElement(TEXT("GUIConfig"));
+		for (NppXml::Element childNode = NppXml::firstChildElement(oldGUIRoot, "GUIConfig");
 			childNode;
-			childNode = childNode->NextSibling(TEXT("GUIConfig")))
+			childNode = NppXml::nextSiblingElement(childNode, "GUIConfig"))
 		{
-			TiXmlElement* element = childNode->ToElement();
-			const TCHAR* nm = element->Attribute(TEXT("name"));
-			if (nullptr == nm)
+			const char* nm = NppXml::attribute(childNode, "name");
+			if (!nm)
 				continue;
 
-			if (!lstrcmp(nm, TEXT("DockingManager")))
+			if (std::strcmp(nm, "DockingManager") == 0)
 			{
 				dockMngNodeOriginal = childNode;
 				break;
@@ -7069,602 +7638,647 @@ void NppParameters::createXmlTreeFromGUIParams()
 		// Copy DockingParamNode
 		if (dockMngNodeOriginal)
 		{
-			dockMngNodeDup = new TiXmlElement(TEXT("GUIConfig"));
-			dockMngNodeDup->SetAttribute(TEXT("name"), TEXT("DockingManager"));
-
-			duplicateDockingManager(dockMngNodeOriginal, dockMngNodeDup);
+			tempDoc = new NppXml::NewDocument;
+			NppXml::Element tempElem = NppXml::createChildElement(tempDoc, "GUIConfigs");
+			dockMngNodeDup = NppXml::insertEndChild(tempElem, dockMngNodeOriginal);
 		}
 	}
 
-	// Remove the old root nod if it exist
+	// Remove the old root node if it exist
 	if (oldGUIRoot)
 	{
-		nppRoot->RemoveChild(oldGUIRoot);
+		NppXml::deleteChild(nppRoot, oldGUIRoot);
 	}
 
-	TiXmlNode *newGUIRoot = nppRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfigs")));
+	NppXml::Element newGUIRoot = NppXml::createChildElement(nppRoot, "GUIConfigs");
 
-	// <GUIConfig name="ToolBar" visible="yes">standard</GUIConfig>
+	// <GUIConfig name="ToolBar" visible="yes" fluentColor="0" fluentCustomColor="0" fluentMono="no">standard</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("ToolBar"));
-		const TCHAR *pStr = (_nppGUI._toolbarShow) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("visible"), pStr);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		const auto& nppGUITbInfo = _nppGUI._tbIconInfo;
+		NppXml::setAttribute(GUIConfigElement, "name", "ToolBar");
+		setBoolAttribute(GUIConfigElement, "visible", _nppGUI._toolbarShow);
+		NppXml::setAttribute(GUIConfigElement, "fluentColor", static_cast<int>(nppGUITbInfo._tbColor));
+		NppXml::setAttribute(GUIConfigElement, "fluentCustomColor", nppGUITbInfo._tbCustomColor);
+		setBoolAttribute(GUIConfigElement, "fluentMono", nppGUITbInfo._tbUseMono);
 
-		if (_nppGUI._toolBarStatus == TB_SMALL)
-			pStr = TEXT("small");
-		else if (_nppGUI._toolBarStatus == TB_LARGE)
-			pStr = TEXT("large");
-		else if (_nppGUI._toolBarStatus == TB_SMALL2)
-			pStr = TEXT("small2");
-		else if (_nppGUI._toolBarStatus == TB_LARGE2)
-			pStr = TEXT("large2");
-		else //if (_nppGUI._toolBarStatus == TB_STANDARD)
-			pStr = TEXT("standard");
-		GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+		const char* pStr = nullptr;
+		switch (nppGUITbInfo._tbIconSet)
+		{
+			using enum toolBarStatusType;
+			case TB_SMALL:
+			{
+				pStr = "small";
+				break;
+			}
+
+			case TB_LARGE:
+			{
+				pStr = "large";
+				break;
+			}
+
+			case TB_SMALL2:
+			{
+				pStr = "small2";
+				break;
+			}
+
+			case TB_LARGE2:
+			{
+				pStr = "large2";
+				break;
+			}
+
+			case TB_STANDARD:
+			{
+				pStr = "standard";
+				break;
+			}
+		}
+		NppXml::createChildText(GUIConfigElement, pStr);
 	}
 
 	// <GUIConfig name="StatusBar">show</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("StatusBar"));
-		const TCHAR *pStr = _nppGUI._statusBarShow ? TEXT("show") : TEXT("hide");
-		GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "StatusBar");
+		NppXml::createChildText(GUIConfigElement, _nppGUI._statusBarShow ? "show" : "hide");
 	}
 
-	// <GUIConfig name="TabBar" dragAndDrop="yes" drawTopBar="yes" drawInactiveTab="yes" reduce="yes" closeButton="yes" doubleClick2Close="no" vertical="no" multiLine="no" hide="no" quitOnEmpty="no" iconSetNumber="0" />
+	// <GUIConfig name="TabBar" dragAndDrop="yes" drawTopBar="yes" drawInactiveTab="yes" reduce="yes" closeButton="yes"
+	// pinButton="yes" showOnlyPinnedButton="no" buttonsOninactiveTabs="no" doubleClick2Close="no"
+	// vertical="no" multiLine="no" hide="no" quitOnEmpty="no" tabCompactLabelLen="0" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("TabBar"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "TabBar");
 
-		const TCHAR *pStr = (_nppGUI._tabStatus & TAB_DRAWTOPBAR) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("dragAndDrop"), pStr);
+		setBoolAttribute(GUIConfigElement, "dragAndDrop", (_nppGUI._tabStatus & TAB_DRAGNDROP) != 0);
+		setBoolAttribute(GUIConfigElement, "drawTopBar", (_nppGUI._tabStatus & TAB_DRAWTOPBAR) != 0);
+		setBoolAttribute(GUIConfigElement, "drawInactiveTab", (_nppGUI._tabStatus & TAB_DRAWINACTIVETAB) != 0);
+		setBoolAttribute(GUIConfigElement, "reduce", (_nppGUI._tabStatus & TAB_REDUCE) != 0);
+		setBoolAttribute(GUIConfigElement, "closeButton", (_nppGUI._tabStatus & TAB_CLOSEBUTTON) != 0);
+		setBoolAttribute(GUIConfigElement, "pinButton", (_nppGUI._tabStatus & TAB_PINBUTTON) != 0);
+		setBoolAttribute(GUIConfigElement, "showOnlyPinnedButton", (_nppGUI._tabStatus & TAB_SHOWONLYPINNEDBUTTON) != 0);
+		setBoolAttribute(GUIConfigElement, "buttonsOninactiveTabs", (_nppGUI._tabStatus & TAB_INACTIVETABSHOWBUTTON) != 0);
+		setBoolAttribute(GUIConfigElement, "doubleClick2Close", (_nppGUI._tabStatus & TAB_DBCLK2CLOSE) != 0);
+		setBoolAttribute(GUIConfigElement, "vertical", (_nppGUI._tabStatus & TAB_VERTICAL) != 0);
+		setBoolAttribute(GUIConfigElement, "multiLine", (_nppGUI._tabStatus & TAB_MULTILINE) != 0);
+		setBoolAttribute(GUIConfigElement, "hide", (_nppGUI._tabStatus & TAB_HIDE) != 0 && !_nppGUI._forceTabbarVisible);
+		setBoolAttribute(GUIConfigElement, "quitOnEmpty", (_nppGUI._tabStatus & TAB_QUITONEMPTY) != 0);
 
-		pStr = (_nppGUI._tabStatus & TAB_DRAGNDROP) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("drawTopBar"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_DRAWINACTIVETAB) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("drawInactiveTab"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_REDUCE) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("reduce"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_CLOSEBUTTON) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("closeButton"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_DBCLK2CLOSE) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("doubleClick2Close"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_VERTICAL) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("vertical"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_MULTILINE) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("multiLine"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_HIDE) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("hide"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_QUITONEMPTY) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("quitOnEmpty"), pStr);
-
-		pStr = (_nppGUI._tabStatus & TAB_ALTICONS) ? TEXT("1") : TEXT("0");
-		GUIConfigElement->SetAttribute(TEXT("iconSetNumber"), pStr);
+		NppXml::setAttribute(GUIConfigElement, "tabCompactLabelLen", _nppGUI._tabCompactLabelLen);
 	}
 
 	// <GUIConfig name="ScintillaViewsSplitter">vertical</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("ScintillaViewsSplitter"));
-		const TCHAR *pStr = _nppGUI._splitterPos == POS_VERTICAL ? TEXT("vertical") : TEXT("horizontal");
-		GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "ScintillaViewsSplitter");
+		NppXml::createChildText(GUIConfigElement, _nppGUI._splitterPos ? "vertical" : "horizontal"); // POS_VERTICAL == true
 	}
 
 	// <GUIConfig name="UserDefineDlg" position="undocked">hide</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("UserDefineDlg"));
-		const TCHAR *pStr = (_nppGUI._userDefineDlgStatus & UDD_DOCKED) ? TEXT("docked") : TEXT("undocked");
-		GUIConfigElement->SetAttribute(TEXT("position"), pStr);
-		pStr = (_nppGUI._userDefineDlgStatus & UDD_SHOW) ? TEXT("show") : TEXT("hide");
-		GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "UserDefineDlg");
+		NppXml::setAttribute(GUIConfigElement, "position", (_nppGUI._userDefineDlgStatus & UDD_DOCKED) != 0 ? "docked" : "undocked");
+		NppXml::createChildText(GUIConfigElement, (_nppGUI._userDefineDlgStatus & UDD_SHOW) != 0 ? "show" : "hide");
 	}
 
-	// <GUIConfig name = "TabSetting" size = "4" replaceBySpace = "no" / >
+	// <GUIConfig name="TabSetting" replaceBySpace="no" size="4" backspaceUnindent="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("TabSetting"));
-		const TCHAR *pStr = _nppGUI._tabReplacedBySpace ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("replaceBySpace"), pStr);
-		GUIConfigElement->SetAttribute(TEXT("size"), _nppGUI._tabSize);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "TabSetting");
+		setBoolAttribute(GUIConfigElement, "replaceBySpace", _nppGUI._tabReplacedBySpace);
+		NppXml::setAttribute(GUIConfigElement, "size", _nppGUI._tabSize);
+		setBoolAttribute(GUIConfigElement, "backspaceUnindent", _nppGUI._backspaceUnindent);
 	}
 
-	// <GUIConfig name = "AppPosition" x = "3900" y = "446" width = "2160" height = "1380" isMaximized = "no" / >
+	// <GUIConfig name="AppPosition" x="0" y="0" width="1100" height="700" isMaximized="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("AppPosition"));
-		GUIConfigElement->SetAttribute(TEXT("x"), _nppGUI._appPos.left);
-		GUIConfigElement->SetAttribute(TEXT("y"), _nppGUI._appPos.top);
-		GUIConfigElement->SetAttribute(TEXT("width"), _nppGUI._appPos.right);
-		GUIConfigElement->SetAttribute(TEXT("height"), _nppGUI._appPos.bottom);
-		GUIConfigElement->SetAttribute(TEXT("isMaximized"), _nppGUI._isMaximized ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "AppPosition");
+		NppXml::setAttribute(GUIConfigElement, "x", _nppGUI._appPos.left);
+		NppXml::setAttribute(GUIConfigElement, "y", _nppGUI._appPos.top);
+		NppXml::setAttribute(GUIConfigElement, "width", _nppGUI._appPos.right);
+		NppXml::setAttribute(GUIConfigElement, "height", _nppGUI._appPos.bottom);
+		setBoolAttribute(GUIConfigElement, "isMaximized", _nppGUI._isMaximized);
 	}
 
 	// <GUIConfig name="FindWindowPosition" left="134" top="320" right="723" bottom="684" />
 	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("FindWindowPosition"));
-		GUIConfigElement->SetAttribute(TEXT("left"), _nppGUI._findWindowPos.left);
-		GUIConfigElement->SetAttribute(TEXT("top"), _nppGUI._findWindowPos.top);
-		GUIConfigElement->SetAttribute(TEXT("right"), _nppGUI._findWindowPos.right);
-		GUIConfigElement->SetAttribute(TEXT("bottom"), _nppGUI._findWindowPos.bottom);
-		GUIConfigElement->SetAttribute(TEXT("isLessModeOn"), _nppGUI._findWindowLessMode ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "FindWindowPosition");
+		NppXml::setAttribute(GUIConfigElement, "left", _nppGUI._findWindowPos.left);
+		NppXml::setAttribute(GUIConfigElement, "top", _nppGUI._findWindowPos.top);
+		NppXml::setAttribute(GUIConfigElement, "right", _nppGUI._findWindowPos.right);
+		NppXml::setAttribute(GUIConfigElement, "bottom", _nppGUI._findWindowPos.bottom);
+		setBoolAttribute(GUIConfigElement, "isLessModeOn", _nppGUI._findWindowLessMode);
 	}
 
-	// <GUIConfig name="FinderConfig" wrappedLines="no" purgeBeforeEverySearch="no" showOnlyOneEntryPerFoundLine="yes"/>
+	// <GUIConfig name="FinderConfig" wrappedLines="no" purgeBeforeEverySearch="no" showOnlyOneEntryPerFoundLine="yes" FiF_ignoreunsavedChangesInOpenedFiles="no" />
 	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("FinderConfig"));
-		const TCHAR* pStr = _nppGUI._finderLinesAreCurrentlyWrapped ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("wrappedLines"), pStr);
-		pStr = _nppGUI._finderPurgeBeforeEverySearch ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("purgeBeforeEverySearch"), pStr);
-		pStr = _nppGUI._finderShowOnlyOneEntryPerFoundLine ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("showOnlyOneEntryPerFoundLine"), pStr);
-
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "FinderConfig");
+		setBoolAttribute(GUIConfigElement, "wrappedLines", _nppGUI._finderLinesAreCurrentlyWrapped);
+		setBoolAttribute(GUIConfigElement, "purgeBeforeEverySearch", _nppGUI._finderPurgeBeforeEverySearch);
+		setBoolAttribute(GUIConfigElement, "showOnlyOneEntryPerFoundLine", _nppGUI._finderShowOnlyOneEntryPerFoundLine);
+		setBoolAttribute(GUIConfigElement, "FiF_ignoreunsavedChangesInOpenedFiles", _nppGUI._fif_ignoreunsavedChangesInOpenedFiles);
 	}
 
-	// <GUIConfig name="noUpdate" intervalDays="15" nextUpdateDate="20161022">no</GUIConfig>
+	// <GUIConfig name="noUpdate" intervalDays="15" nextUpdateDate="20161022" autoUpdateMode="1">no</GUIConfig>
 	{
-		TiXmlElement *element = insertGUIConfigBoolNode(newGUIRoot, TEXT("noUpdate"), !_nppGUI._autoUpdateOpt._doAutoUpdate);
-		element->SetAttribute(TEXT("intervalDays"), _nppGUI._autoUpdateOpt._intervalDays);
-		element->SetAttribute(TEXT("nextUpdateDate"), _nppGUI._autoUpdateOpt._nextUpdateDate.toString().c_str());
+		NppXml::Element GUIConfigElement = insertGUIConfigBoolNode(newGUIRoot, "noUpdate", _nppGUI._autoUpdateOpt._doAutoUpdate == NppGUI::AutoUpdateMode::autoupdate_disabled);
+		NppXml::setAttribute(GUIConfigElement, "intervalDays", _nppGUI._autoUpdateOpt._intervalDays);
+		NppXml::setAttribute(GUIConfigElement, "nextUpdateDate", _nppGUI._autoUpdateOpt._nextUpdateDate.toString());
+		NppXml::setAttribute(GUIConfigElement, "autoUpdateMode", _nppGUI._autoUpdateOpt._doAutoUpdate);
 	}
 
-	// <GUIConfig name="Auto-detection">yes</GUIConfig>	
+	// <GUIConfig name="Auto-detection">yes</GUIConfig>
 	{
-		const TCHAR *pStr = TEXT("no");
+		const char* pStr = nullptr;
 
 		if (_nppGUI._fileAutoDetection & cdEnabledOld)
 		{
-			pStr = TEXT("yesOld");
-
 			if ((_nppGUI._fileAutoDetection & cdAutoUpdate) && (_nppGUI._fileAutoDetection & cdGo2end))
 			{
-				pStr = TEXT("autoUpdate2EndOld");
+				pStr = "autoUpdate2EndOld";
 			}
 			else if (_nppGUI._fileAutoDetection & cdAutoUpdate)
 			{
-				pStr = TEXT("autoOld");
+				pStr = "autoOld";
 			}
 			else if (_nppGUI._fileAutoDetection & cdGo2end)
 			{
-				pStr = TEXT("Update2EndOld");
+				pStr = "Update2EndOld";
+			}
+			else
+			{
+				pStr = "yesOld";
 			}
 		}
 		else if (_nppGUI._fileAutoDetection & cdEnabledNew)
 		{
-			pStr = TEXT("yes");
-
 			if ((_nppGUI._fileAutoDetection & cdAutoUpdate) && (_nppGUI._fileAutoDetection & cdGo2end))
 			{
-				pStr = TEXT("autoUpdate2End");
+				pStr = "autoUpdate2End";
 			}
 			else if (_nppGUI._fileAutoDetection & cdAutoUpdate)
 			{
-				pStr = TEXT("auto");
+				pStr = "auto";
 			}
 			else if (_nppGUI._fileAutoDetection & cdGo2end)
 			{
-				pStr = TEXT("Update2End");
+				pStr = "Update2End";
+			}
+			else
+			{
+				pStr = "yes";
 			}
 		}
+		else
+		{
+			pStr = "no";
+		}
 
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("Auto-detection"));
-		GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "Auto-detection");
+		NppXml::createChildText(GUIConfigElement, pStr);
 	}
 
 	// <GUIConfig name="CheckHistoryFiles">no</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("CheckHistoryFiles"), _nppGUI._checkHistoryFiles);
+		insertGUIConfigBoolNode(newGUIRoot, "CheckHistoryFiles", _nppGUI._checkHistoryFiles);
 	}
 
-	// <GUIConfig name="TrayIcon">no</GUIConfig>
+	// <GUIConfig name="TrayIcon">0</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("TrayIcon"), _nppGUI._isMinimizedToTray);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "TrayIcon");
+		NppXml::createChildText(GUIConfigElement, std::to_string(_nppGUI._isMinimizedToTray));
 	}
 
-	// <GUIConfig name="MaitainIndent">yes</GUIConfig>
+	// <GUIConfig name="MaintainIndent">1</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("MaitainIndent"), _nppGUI._maitainIndent);
+		//insertGUIConfigBoolNode(newGUIRoot, L"MaintainIndent", _nppGUI._maintainIndent);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "MaintainIndent");
+		NppXml::createChildText(GUIConfigElement, std::to_string(_nppGUI._maintainIndent));
 	}
 
-	// <GUIConfig name = "TagsMatchHighLight" TagAttrHighLight = "yes" HighLightNonHtmlZone = "no">yes< / GUIConfig>
+	// <GUIConfig name="TagsMatchHighLight" TagAttrHighLight="yes" HighLightNonHtmlZone="no">yes</GUIConfig>
 	{
-		TiXmlElement * ele = insertGUIConfigBoolNode(newGUIRoot, TEXT("TagsMatchHighLight"), _nppGUI._enableTagsMatchHilite);
-		ele->SetAttribute(TEXT("TagAttrHighLight"), _nppGUI._enableTagAttrsHilite ? TEXT("yes") : TEXT("no"));
-		ele->SetAttribute(TEXT("HighLightNonHtmlZone"), _nppGUI._enableHiliteNonHTMLZone ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = insertGUIConfigBoolNode(newGUIRoot, "TagsMatchHighLight", _nppGUI._enableTagsMatchHilite);
+		setBoolAttribute(GUIConfigElement, "TagAttrHighLight", _nppGUI._enableTagAttrsHilite);
+		setBoolAttribute(GUIConfigElement, "HighLightNonHtmlZone", _nppGUI._enableHiliteNonHTMLZone);
 	}
 
-	// <GUIConfig name = "RememberLastSession">yes< / GUIConfig>
+	// <GUIConfig name="RememberLastSession">yes</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("RememberLastSession"), _nppGUI._rememberLastSession);
+		insertGUIConfigBoolNode(newGUIRoot, "RememberLastSession", _nppGUI._rememberLastSession);
 	}
 
-	// <GUIConfig name = "RememberLastSession">yes< / GUIConfig>
+	// <GUIConfig name="KeepSessionAbsentFileEntries">no</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("KeepSessionAbsentFileEntries"), _nppGUI._keepSessionAbsentFileEntries);
+		insertGUIConfigBoolNode(newGUIRoot, "KeepSessionAbsentFileEntries", _nppGUI._keepSessionAbsentFileEntries);
 	}
 
-	// <GUIConfig name = "DetectEncoding">yes< / GUIConfig>
+	// <GUIConfig name="DetectEncoding">yes</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("DetectEncoding"), _nppGUI._detectEncoding);
-	}
-	
-	// <GUIConfig name = "SaveAllConfirm">yes< / GUIConfig>
-	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("SaveAllConfirm"), _nppGUI._saveAllConfirm);
+		insertGUIConfigBoolNode(newGUIRoot, "DetectEncoding", _nppGUI._detectEncoding);
 	}
 
-	// <GUIConfig name = "NewDocDefaultSettings" format = "0" encoding = "0" lang = "3" codepage = "-1" openAnsiAsUTF8 = "no" / >
+	// <GUIConfig name="SaveAllConfirm">yes</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("NewDocDefaultSettings"));
-		GUIConfigElement->SetAttribute(TEXT("format"), static_cast<int32_t>(_nppGUI._newDocDefaultSettings._format));
-		GUIConfigElement->SetAttribute(TEXT("encoding"), _nppGUI._newDocDefaultSettings._unicodeMode);
-		GUIConfigElement->SetAttribute(TEXT("lang"), _nppGUI._newDocDefaultSettings._lang);
-		GUIConfigElement->SetAttribute(TEXT("codepage"), _nppGUI._newDocDefaultSettings._codepage);
-		GUIConfigElement->SetAttribute(TEXT("openAnsiAsUTF8"), _nppGUI._newDocDefaultSettings._openAnsiAsUtf8 ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("addNewDocumentOnStartup"), _nppGUI._newDocDefaultSettings._addNewDocumentOnStartup ? TEXT("yes") : TEXT("no"));
+		insertGUIConfigBoolNode(newGUIRoot, "SaveAllConfirm", _nppGUI._saveAllConfirm);
 	}
 
-	// <GUIConfig name = "langsExcluded" gr0 = "0" gr1 = "0" gr2 = "0" gr3 = "0" gr4 = "0" gr5 = "0" gr6 = "0" gr7 = "0" langMenuCompact = "yes" / >
+	// <GUIConfig name="NewDocDefaultSettings" format="0" encoding="4" lang="0" codepage="-1" openAnsiAsUTF8="yes" addNewDocumentOnStartup="no" useContentAsTabName="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("langsExcluded"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "NewDocDefaultSettings");
+		NppXml::setAttribute(GUIConfigElement, "format", static_cast<int>(_nppGUI._newDocDefaultSettings._format));
+		NppXml::setAttribute(GUIConfigElement, "encoding", _nppGUI._newDocDefaultSettings._unicodeMode);
+		NppXml::setAttribute(GUIConfigElement, "lang", _nppGUI._newDocDefaultSettings._lang);
+		NppXml::setAttribute(GUIConfigElement, "codepage", _nppGUI._newDocDefaultSettings._codepage);
+		setBoolAttribute(GUIConfigElement, "openAnsiAsUTF8", _nppGUI._newDocDefaultSettings._openAnsiAsUtf8);
+		setBoolAttribute(GUIConfigElement, "addNewDocumentOnStartup", _nppGUI._newDocDefaultSettings._addNewDocumentOnStartup);
+		setBoolAttribute(GUIConfigElement, "useContentAsTabName", _nppGUI._newDocDefaultSettings._useContentAsTabName);
+	}
+
+	// <GUIConfig name="langsExcluded" gr0="0" gr1="0" gr2="0" gr3="0" gr4="0" gr5="0" gr6="0" gr7="0" gr8="0" gr9="0" gr10="0" gr11="0" gr12="0" langMenuCompact="yes" />
+	{
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "langsExcluded");
 		writeExcludedLangList(GUIConfigElement);
-		GUIConfigElement->SetAttribute(TEXT("langMenuCompact"), _nppGUI._isLangMenuCompact ? TEXT("yes") : TEXT("no"));
+		setBoolAttribute(GUIConfigElement, "langMenuCompact", _nppGUI._isLangMenuCompact);
 	}
 
-	// <GUIConfig name="Print" lineNumber="no" printOption="0" headerLeft="$(FULL_CURRENT_PATH)" headerMiddle="" headerRight="$(LONG_DATE) $(TIME)" headerFontName="IBMPC" headerFontStyle="1" headerFontSize="8" footerLeft="" footerMiddle="-$(CURRENT_PRINTING_PAGE)-" footerRight="" footerFontName="" footerFontStyle="0" footerFontSize="9" margeLeft="0" margeTop="0" margeRight="0" margeBottom="0" />
+	// <GUIConfig name="Print" lineNumber="no" printOption="0" headerLeft="$(FULL_CURRENT_PATH)" headerMiddle="" headerRight="$(LONG_DATE) $(TIME)" headerFontName="IBMPC"
+	// headerFontStyle="1" headerFontSize="8" footerLeft="" footerMiddle="-$(CURRENT_PRINTING_PAGE)-" footerRight="" footerFontName="" footerFontStyle="0" footerFontSize="9"
+	// margeLeft="0" margeTop="0" margeRight="0" margeBottom="0" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("Print"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "Print");
 		writePrintSetting(GUIConfigElement);
 	}
 
 	// <GUIConfig name="Backup" action="0" useCustumDir="no" dir="" isSnapshotMode="yes" snapshotBackupTiming="7000" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("Backup"));
-		GUIConfigElement->SetAttribute(TEXT("action"), _nppGUI._backup);
-		GUIConfigElement->SetAttribute(TEXT("useCustumDir"), _nppGUI._useDir ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("dir"), _nppGUI._backupDir.c_str());
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "Backup");
+		NppXml::setAttribute(GUIConfigElement, "action", _nppGUI._backup);
+		setBoolAttribute(GUIConfigElement, "useCustumDir", _nppGUI._useDir);
+		NppXml::setAttribute(GUIConfigElement, "dir", wstring2string(_nppGUI._backupDir));
 
-		GUIConfigElement->SetAttribute(TEXT("isSnapshotMode"), _nppGUI._isSnapshotMode ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("snapshotBackupTiming"), static_cast<int32_t>(_nppGUI._snapshotBackupTiming));
+		setBoolAttribute(GUIConfigElement, "isSnapshotMode", _nppGUI._isSnapshotMode);
+		NppXml::setAttribute(GUIConfigElement, "snapshotBackupTiming", _nppGUI._snapshotBackupTiming);
 	}
 
-	// <GUIConfig name = "TaskList">yes< / GUIConfig>
+	// <GUIConfig name="TaskList">yes</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("TaskList"), _nppGUI._doTaskList);
+		insertGUIConfigBoolNode(newGUIRoot, "TaskList", _nppGUI._doTaskList);
 	}
 
-	// <GUIConfig name = "MRU">yes< / GUIConfig>
+	// <GUIConfig name="MRU">yes</GUIConfig>
 	{
-		insertGUIConfigBoolNode(newGUIRoot, TEXT("MRU"), _nppGUI._styleMRU);
+		insertGUIConfigBoolNode(newGUIRoot, "MRU", _nppGUI._styleMRU);
 	}
 
 	// <GUIConfig name="URL">2</GUIConfig>
 	{
-		TCHAR szStr [12] = TEXT("0");
-		_itow(_nppGUI._styleURL, szStr, 10);
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("URL"));
-		GUIConfigElement->InsertEndChild(TiXmlText(szStr));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "URL");
+		NppXml::createChildText(GUIConfigElement, std::to_string(_nppGUI._styleURL));
 	}
 
-	// <GUIConfig name="uriCustomizedSchemes">svn://</GUIConfig>
+	// <GUIConfig name="uriCustomizedSchemes">svn:// cvs:// git:// imap:// irc:// irc6:// ircs:// ldap:// ldaps:// news: telnet://
+	// gopher:// ssh:// sftp:// smb:// skype: snmp:// spotify: steam:// sms: slack:// chrome:// bitcoin:</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("uriCustomizedSchemes"));
-		GUIConfigElement->InsertEndChild(TiXmlText(_nppGUI._uriSchemes.c_str()));
-	}
-	// <GUIConfig name = "globalOverride" fg = "no" bg = "no" font = "no" fontSize = "no" bold = "no" italic = "no" underline = "no" / >
-	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("globalOverride"));
-		GUIConfigElement->SetAttribute(TEXT("fg"), _nppGUI._globalOverride.enableFg ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("bg"), _nppGUI._globalOverride.enableBg ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("font"), _nppGUI._globalOverride.enableFont ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("fontSize"), _nppGUI._globalOverride.enableFontSize ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("bold"), _nppGUI._globalOverride.enableBold ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("italic"), _nppGUI._globalOverride.enableItalic ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("underline"), _nppGUI._globalOverride.enableUnderLine ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "uriCustomizedSchemes");
+		NppXml::createChildText(GUIConfigElement, wstring2string(_nppGUI._uriSchemes));
 	}
 
-	// <GUIConfig name = "auto-completion" autoCAction = "3" triggerFromNbChar = "1" funcParams = "yes" autoCIgnoreNumbers = "yes" / >
+	// <GUIConfig name="globalOverride" fg="no" bg="no" font="no" fontSize="no" bold="no" italic="no" underline="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("auto-completion"));
-		GUIConfigElement->SetAttribute(TEXT("autoCAction"), _nppGUI._autocStatus);
-		GUIConfigElement->SetAttribute(TEXT("triggerFromNbChar"), static_cast<int32_t>(_nppGUI._autocFromLen));
-
-		const TCHAR * pStr = _nppGUI._autocIgnoreNumbers ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("autoCIgnoreNumbers"), pStr);
-
-		pStr = _nppGUI._autocInsertSelectedUseENTER ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("insertSelectedItemUseENTER"), pStr);
-
-		pStr = _nppGUI._autocInsertSelectedUseTAB ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("insertSelectedItemUseTAB"), pStr);
-
-		pStr = _nppGUI._autocBrief ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("autoCBrief"), pStr);
-
-		pStr = _nppGUI._funcParams ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("funcParams"), pStr);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "globalOverride");
+		setBoolAttribute(GUIConfigElement, "fg", _nppGUI._globalOverride.enableFg);
+		setBoolAttribute(GUIConfigElement, "bg", _nppGUI._globalOverride.enableBg);
+		setBoolAttribute(GUIConfigElement, "font", _nppGUI._globalOverride.enableFont);
+		setBoolAttribute(GUIConfigElement, "fontSize", _nppGUI._globalOverride.enableFontSize);
+		setBoolAttribute(GUIConfigElement, "bold", _nppGUI._globalOverride.enableBold);
+		setBoolAttribute(GUIConfigElement, "italic", _nppGUI._globalOverride.enableItalic);
+		setBoolAttribute(GUIConfigElement, "underline", _nppGUI._globalOverride.enableUnderLine);
 	}
 
-	// <GUIConfig name = "auto-insert" parentheses = "yes" brackets = "yes" curlyBrackets = "yes" quotes = "no" doubleQuotes = "yes" htmlXmlTag = "yes" / >
+	// <GUIConfig name="auto-completion" autoCAction="3" triggerFromNbChar="1" autoCIgnoreNumbers="yes" insertSelectedItemUseENTER="yes"
+	// insertSelectedItemUseTAB="yes" autoCBrief="no" funcParams="yes" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("auto-insert"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "auto-completion");
+		NppXml::setAttribute(GUIConfigElement, "autoCAction", _nppGUI._autocStatus);
+		NppXml::setAttribute(GUIConfigElement, "triggerFromNbChar", _nppGUI._autocFromLen);
 
-		GUIConfigElement->SetAttribute(TEXT("parentheses"), _nppGUI._matchedPairConf._doParentheses ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("brackets"), _nppGUI._matchedPairConf._doBrackets ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("curlyBrackets"), _nppGUI._matchedPairConf._doCurlyBrackets ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("quotes"), _nppGUI._matchedPairConf._doQuotes ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("doubleQuotes"), _nppGUI._matchedPairConf._doDoubleQuotes ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("htmlXmlTag"), _nppGUI._matchedPairConf._doHtmlXmlTag ? TEXT("yes") : TEXT("no"));
+		setBoolAttribute(GUIConfigElement, "autoCIgnoreNumbers", _nppGUI._autocIgnoreNumbers);
+		setBoolAttribute(GUIConfigElement, "insertSelectedItemUseENTER", _nppGUI._autocInsertSelectedUseENTER);
+		setBoolAttribute(GUIConfigElement, "insertSelectedItemUseTAB", _nppGUI._autocInsertSelectedUseTAB);
+		setBoolAttribute(GUIConfigElement, "autoCBrief", _nppGUI._autocBrief);
+		setBoolAttribute(GUIConfigElement, "funcParams", _nppGUI._funcParams);
+	}
 
-		TiXmlElement hist_element{ TEXT("") };
-		hist_element.SetValue(TEXT("UserDefinePair"));
-		for (size_t i = 0, nb = _nppGUI._matchedPairConf._matchedPairs.size(); i < nb; ++i)
+	// <GUIConfig name="auto-insert" parentheses="no" brackets="no" curlyBrackets="no" quotes="no" doubleQuotes="no" htmlXmlTag="no" />
+	{
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "auto-insert");
+
+		setBoolAttribute(GUIConfigElement, "parentheses", _nppGUI._matchedPairConf._doParentheses);
+		setBoolAttribute(GUIConfigElement, "brackets", _nppGUI._matchedPairConf._doBrackets);
+		setBoolAttribute(GUIConfigElement, "curlyBrackets", _nppGUI._matchedPairConf._doCurlyBrackets);
+		setBoolAttribute(GUIConfigElement, "quotes", _nppGUI._matchedPairConf._doQuotes);
+		setBoolAttribute(GUIConfigElement, "doubleQuotes", _nppGUI._matchedPairConf._doDoubleQuotes);
+		setBoolAttribute(GUIConfigElement, "htmlXmlTag", _nppGUI._matchedPairConf._doHtmlXmlTag);
+
+		for (auto const& pair : _nppGUI._matchedPairConf._matchedPairs)
 		{
-			int open = _nppGUI._matchedPairConf._matchedPairs[i].first;
-			int close = _nppGUI._matchedPairConf._matchedPairs[i].second;
+			NppXml::Element hist_element = NppXml::createChildElement(GUIConfigElement, "UserDefinePair");
 
-			(hist_element.ToElement())->SetAttribute(TEXT("open"), open);
-			(hist_element.ToElement())->SetAttribute(TEXT("close"), close);
-			GUIConfigElement->InsertEndChild(hist_element);
+			NppXml::setAttribute(hist_element, "open", pair.first);
+			NppXml::setAttribute(hist_element, "close", pair.second);
 		}
 	}
 
-	// <GUIConfig name = "sessionExt">< / GUIConfig>
+	// <GUIConfig name="sessionExt"></GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("sessionExt"));
-		GUIConfigElement->InsertEndChild(TiXmlText(_nppGUI._definedSessionExt.c_str()));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "sessionExt");
+		NppXml::createChildText(GUIConfigElement, wstring2string(_nppGUI._definedSessionExt));
 	}
 
 	// <GUIConfig name="workspaceExt"></GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("workspaceExt"));
-		GUIConfigElement->InsertEndChild(TiXmlText(_nppGUI._definedWorkspaceExt.c_str()));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "workspaceExt");
+		NppXml::createChildText(GUIConfigElement, wstring2string(_nppGUI._definedWorkspaceExt));
 	}
 
 	// <GUIConfig name="MenuBar">show</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("MenuBar"));
-		GUIConfigElement->InsertEndChild(TiXmlText(_nppGUI._menuBarShow ? TEXT("show") : TEXT("hide")));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "MenuBar");
+		NppXml::createChildText(GUIConfigElement, _nppGUI._menuBarShow ? "show" : "hide");
 	}
 
-	// <GUIConfig name="Caret" width="1" blinkRate="250" />
+	// <GUIConfig name="DialogFont" size="8" fontName="MS Shell Dlg" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("Caret"));
-		GUIConfigElement->SetAttribute(TEXT("width"), _nppGUI._caretWidth);
-		GUIConfigElement->SetAttribute(TEXT("blinkRate"), _nppGUI._caretBlinkRate);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "DialogFont");
+		NppXml::setAttribute(GUIConfigElement, "size", _nppGUI._fontDlgSize);
+		NppXml::setAttribute(GUIConfigElement, "fontName", _nppGUI._fontDlgName);
 	}
 
-	// <GUIConfig name="openSaveDir" value="0" defaultDirPath="" />
+	// <GUIConfig name="Caret" width="1" blinkRate="600" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("openSaveDir"));
-		GUIConfigElement->SetAttribute(TEXT("value"), _nppGUI._openSaveDir);
-		GUIConfigElement->SetAttribute(TEXT("defaultDirPath"), _nppGUI._defaultDir);
-		GUIConfigElement->SetAttribute(TEXT("lastUsedDirPath"), _nppGUI._lastUsedDir);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "Caret");
+		NppXml::setAttribute(GUIConfigElement, "width", _nppGUI._caretWidth);
+		NppXml::setAttribute(GUIConfigElement, "blinkRate", _nppGUI._caretBlinkRate);
+	}
+
+	// <GUIConfig name="openSaveDir" value="0" defaultDirPath="" lastUsedDirPath="" />
+	{
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "openSaveDir");
+		NppXml::setAttribute(GUIConfigElement, "value", _nppGUI._openSaveDir);
+		NppXml::setAttribute(GUIConfigElement, "defaultDirPath", wstring2string(_nppGUI._defaultDir));
+		NppXml::setAttribute(GUIConfigElement, "lastUsedDirPath", wstring2string(_nppGUI._lastUsedDir));
 	}
 
 	// <GUIConfig name="titleBar" short="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("titleBar"));
-		const TCHAR *pStr = (_nppGUI._shortTitlebar) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("short"), pStr);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "titleBar");
+		setBoolAttribute(GUIConfigElement, "short", _nppGUI._shortTitlebar);
 	}
 
-	// <GUIConfig name="insertDateTime" path="C:\sources\notepad-plus-plus\PowerEditor\visual.net\..\bin\stylers.xml" />
+	// <GUIConfig name="insertDateTime" customizedFormat="yyyy-MM-dd HH:mm:ss" reverseDefaultOrder="no" />
 	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("insertDateTime"));
-		GUIConfigElement->SetAttribute(TEXT("customizedFormat"), _nppGUI._dateTimeFormat.c_str());
-		const TCHAR* pStr = (_nppGUI._dateTimeReverseDefaultOrder) ? TEXT("yes") : TEXT("no");
-		GUIConfigElement->SetAttribute(TEXT("reverseDefaultOrder"), pStr);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "insertDateTime");
+		NppXml::setAttribute(GUIConfigElement, "customizedFormat", wstring2string(_nppGUI._dateTimeFormat));
+		setBoolAttribute(GUIConfigElement, "reverseDefaultOrder", _nppGUI._dateTimeReverseDefaultOrder);
 	}
 
-	// <GUIConfig name="wordCharList" useDefault="yes" charsAdded=".$%"  />
+	// <GUIConfig name="wordCharList" useDefault="yes" charsAdded="" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("wordCharList"));
-		GUIConfigElement->SetAttribute(TEXT("useDefault"), _nppGUI._isWordCharDefault ? TEXT("yes") : TEXT("no"));
-		WcharMbcsConvertor& wmc = WcharMbcsConvertor::getInstance();
-		const wchar_t* charsAddStr = wmc.char2wchar(_nppGUI._customWordChars.c_str(), SC_CP_UTF8);
-		GUIConfigElement->SetAttribute(TEXT("charsAdded"), charsAddStr);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "wordCharList");
+		setBoolAttribute(GUIConfigElement, "useDefault", _nppGUI._isWordCharDefault);
+		NppXml::setAttribute(GUIConfigElement, "charsAdded", _nppGUI._customWordChars);
 	}
 
 	// <GUIConfig name="delimiterSelection" leftmostDelimiter="40" rightmostDelimiter="41" delimiterSelectionOnEntireDocument="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("delimiterSelection"));
-		GUIConfigElement->SetAttribute(TEXT("leftmostDelimiter"), _nppGUI._leftmostDelimiter);
-		GUIConfigElement->SetAttribute(TEXT("rightmostDelimiter"), _nppGUI._rightmostDelimiter);
-		GUIConfigElement->SetAttribute(TEXT("delimiterSelectionOnEntireDocument"), _nppGUI._delimiterSelectionOnEntireDocument ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "delimiterSelection");
+		NppXml::setAttribute(GUIConfigElement, "leftmostDelimiter", _nppGUI._leftmostDelimiter);
+		NppXml::setAttribute(GUIConfigElement, "rightmostDelimiter", _nppGUI._rightmostDelimiter);
+		setBoolAttribute(GUIConfigElement, "delimiterSelectionOnEntireDocument", _nppGUI._delimiterSelectionOnEntireDocument);
 	}
 
-	// <GUIConfig name="largeFileRestriction" fileSizeMB="200" isEnabled="yes" allowAutoCompletion="no" allowBraceMatch="no" deactivateWordWrap="yes" allowClickableLink="no" suppress2GBWarning="no" />
+	// <GUIConfig name="largeFileRestriction" fileSizeMB="200" isEnabled="yes" allowAutoCompletion="no" allowBraceMatch="no" allowSmartHilite="no"
+	// allowClickableLink="no" deactivateWordWrap="yes" suppress2GBWarning="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("largeFileRestriction"));
-		GUIConfigElement->SetAttribute(TEXT("fileSizeMB"), static_cast<int>((_nppGUI._largeFileRestriction._largeFileSizeDefInByte / 1024) / 1024));
-		GUIConfigElement->SetAttribute(TEXT("isEnabled"), _nppGUI._largeFileRestriction._isEnabled ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("allowAutoCompletion"), _nppGUI._largeFileRestriction._allowAutoCompletion ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("allowBraceMatch"), _nppGUI._largeFileRestriction._allowBraceMatch ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("allowSmartHilite"), _nppGUI._largeFileRestriction._allowSmartHilite ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("allowClickableLink"), _nppGUI._largeFileRestriction._allowClickableLink ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("deactivateWordWrap"), _nppGUI._largeFileRestriction._deactivateWordWrap ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("suppress2GBWarning"), _nppGUI._largeFileRestriction._suppress2GBWarning ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "largeFileRestriction");
+		NppXml::setAttribute(GUIConfigElement, "fileSizeMB", (_nppGUI._largeFileRestriction._largeFileSizeDefInByte / 1024) / 1024);
+		setBoolAttribute(GUIConfigElement, "isEnabled", _nppGUI._largeFileRestriction._isEnabled);
+		setBoolAttribute(GUIConfigElement, "allowAutoCompletion", _nppGUI._largeFileRestriction._allowAutoCompletion);
+		setBoolAttribute(GUIConfigElement, "allowBraceMatch", _nppGUI._largeFileRestriction._allowBraceMatch);
+		setBoolAttribute(GUIConfigElement, "allowSmartHilite", _nppGUI._largeFileRestriction._allowSmartHilite);
+		setBoolAttribute(GUIConfigElement, "allowClickableLink", _nppGUI._largeFileRestriction._allowClickableLink);
+		setBoolAttribute(GUIConfigElement, "deactivateWordWrap", _nppGUI._largeFileRestriction._deactivateWordWrap);
+		setBoolAttribute(GUIConfigElement, "suppress2GBWarning", _nppGUI._largeFileRestriction._suppress2GBWarning);
 	}
 
-	// <GUIConfig name="multiInst" setting="0" />
+	// <GUIConfig name="multiInst" setting="0" clipboardHistory="no" documentList="no" characterPanel="no" folderAsWorkspace="no" projectPanels="no"
+	// documentMap="no" fuctionList="no" pluginPanels="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("multiInst"));
-		GUIConfigElement->SetAttribute(TEXT("setting"), _nppGUI._multiInstSetting);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "multiInst");
+		NppXml::setAttribute(GUIConfigElement, "setting", _nppGUI._multiInstSetting);
 
-		auto setYesNoBoolAttribute = [&GUIConfigElement](const TCHAR* name, bool value) -> void {
-			const TCHAR* pStr = value ? TEXT("yes") : TEXT("no");
-			GUIConfigElement->SetAttribute(name, pStr);
-		};
-
-		setYesNoBoolAttribute(TEXT("clipboardHistory"), _nppGUI._clipboardHistoryPanelKeepState);
-		setYesNoBoolAttribute(TEXT("documentList"), _nppGUI._docListKeepState);
-		setYesNoBoolAttribute(TEXT("characterPanel"), _nppGUI._charPanelKeepState);
-		setYesNoBoolAttribute(TEXT("folderAsWorkspace"), _nppGUI._fileBrowserKeepState);
-		setYesNoBoolAttribute(TEXT("projectPanels"), _nppGUI._projectPanelKeepState);
-		setYesNoBoolAttribute(TEXT("documentMap"), _nppGUI._docMapKeepState);
-		setYesNoBoolAttribute(TEXT("fuctionList"), _nppGUI._funcListKeepState);
-		setYesNoBoolAttribute(TEXT("pluginPanels"), _nppGUI._pluginPanelKeepState);
+		setBoolAttribute(GUIConfigElement, "clipboardHistory", _nppGUI._clipboardHistoryPanelKeepState);
+		setBoolAttribute(GUIConfigElement, "documentList", _nppGUI._docListKeepState);
+		setBoolAttribute(GUIConfigElement, "characterPanel", _nppGUI._charPanelKeepState);
+		setBoolAttribute(GUIConfigElement, "folderAsWorkspace", _nppGUI._fileBrowserKeepState);
+		setBoolAttribute(GUIConfigElement, "projectPanels", _nppGUI._projectPanelKeepState);
+		setBoolAttribute(GUIConfigElement, "documentMap", _nppGUI._docMapKeepState);
+		setBoolAttribute(GUIConfigElement, "fuctionList", _nppGUI._funcListKeepState);
+		setBoolAttribute(GUIConfigElement, "pluginPanels", _nppGUI._pluginPanelKeepState);
 	}
 
-	// <GUIConfig name="MISC" fileSwitcherWithoutExtColumn="no" backSlashIsEscapeCharacterForSql="yes" isFolderDroppedOpenFiles="no" saveDlgExtFilterToAllTypes="no" />
+	// <GUIConfig name="MISC" fileSwitcherWithoutExtColumn="no" fileSwitcherExtWidth="50" fileSwitcherWithoutPathColumn="no" fileSwitcherPathWidth="50"
+	// fileSwitcherNoGroups="no" backSlashIsEscapeCharacterForSql="yes" writeTechnologyEngine="1" isFolderDroppedOpenFiles="no" docPeekOnTab="no"
+	// docPeekOnMap="no" sortFunctionList="no" saveDlgExtFilterToAllTypes="no" muteSounds="no" enableFoldCmdToggable="no" hideMenuRightShortcuts="no" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("MISC"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "MISC");
 
-		auto setYesNoBoolAttribute = [&GUIConfigElement](const TCHAR* name, bool value) -> void {
-			const TCHAR* pStr = value ? TEXT("yes") : TEXT("no");
-			GUIConfigElement->SetAttribute(name, pStr);
-		};
-
-		GUIConfigElement->SetAttribute(TEXT("fileSwitcherWithoutExtColumn"), _nppGUI._fileSwitcherWithoutExtColumn ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("fileSwitcherExtWidth"), _nppGUI._fileSwitcherExtWidth);
-		GUIConfigElement->SetAttribute(TEXT("fileSwitcherWithoutPathColumn"), _nppGUI._fileSwitcherWithoutPathColumn ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("fileSwitcherPathWidth"), _nppGUI._fileSwitcherPathWidth);
-		setYesNoBoolAttribute(TEXT("fileSwitcherNoGroups"), _nppGUI._fileSwitcherDisableListViewGroups);
-		GUIConfigElement->SetAttribute(TEXT("backSlashIsEscapeCharacterForSql"), _nppGUI._backSlashIsEscapeCharacterForSql ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("writeTechnologyEngine"), _nppGUI._writeTechnologyEngine);
-		GUIConfigElement->SetAttribute(TEXT("isFolderDroppedOpenFiles"), _nppGUI._isFolderDroppedOpenFiles ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("docPeekOnTab"), _nppGUI._isDocPeekOnTab ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("docPeekOnMap"), _nppGUI._isDocPeekOnMap ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("sortFunctionList"), _nppGUI._shouldSortFunctionList ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("saveDlgExtFilterToAllTypes"), _nppGUI._setSaveDlgExtFiltToAllTypes ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("muteSounds"), _nppGUI._muteSounds ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("enableFoldCmdToggable"), _nppGUI._enableFoldCmdToggable ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("hideMenuRightShortcuts"), _nppGUI._hideMenuRightShortcuts ? TEXT("yes") : TEXT("no"));
+		setBoolAttribute(GUIConfigElement, "fileSwitcherWithoutExtColumn", _nppGUI._fileSwitcherWithoutExtColumn);
+		NppXml::setAttribute(GUIConfigElement, "fileSwitcherExtWidth", _nppGUI._fileSwitcherExtWidth);
+		setBoolAttribute(GUIConfigElement, "fileSwitcherWithoutPathColumn", _nppGUI._fileSwitcherWithoutPathColumn);
+		NppXml::setAttribute(GUIConfigElement, "fileSwitcherPathWidth", _nppGUI._fileSwitcherPathWidth);
+		setBoolAttribute(GUIConfigElement, "fileSwitcherNoGroups", _nppGUI._fileSwitcherDisableListViewGroups);
+		setBoolAttribute(GUIConfigElement, "backSlashIsEscapeCharacterForSql", _nppGUI._backSlashIsEscapeCharacterForSql);
+		NppXml::setAttribute(GUIConfigElement, "writeTechnologyEngine", _nppGUI._writeTechnologyEngine);
+		setBoolAttribute(GUIConfigElement, "isFolderDroppedOpenFiles", _nppGUI._isFolderDroppedOpenFiles);
+		setBoolAttribute(GUIConfigElement, "docPeekOnTab", _nppGUI._isDocPeekOnTab);
+		setBoolAttribute(GUIConfigElement, "docPeekOnMap", _nppGUI._isDocPeekOnMap);
+		setBoolAttribute(GUIConfigElement, "sortFunctionList", _nppGUI._shouldSortFunctionList);
+		setBoolAttribute(GUIConfigElement, "saveDlgExtFilterToAllTypes", _nppGUI._setSaveDlgExtFiltToAllTypes);
+		setBoolAttribute(GUIConfigElement, "muteSounds", _nppGUI._muteSounds);
+		setBoolAttribute(GUIConfigElement, "enableFoldCmdToggable", _nppGUI._enableFoldCmdToggable);
+		setBoolAttribute(GUIConfigElement, "hideMenuRightShortcuts", _nppGUI._hideMenuRightShortcuts);
+		setBoolAttribute(GUIConfigElement, "isFawSymlinkAllowed", _nppGUI._isFawSymlinkAllowed);
 	}
 
-	// <GUIConfig name="Searching" "monospacedFontFindDlg"="no" stopFillingFindField="no" findDlgAlwaysVisible="no" confirmReplaceOpenDocs="yes" confirmMacroReplaceOpenDocs="yes" confirmReplaceInFiles="yes" confirmMacroReplaceInFiles="yes" replaceStopsWithoutFindingNext="no" inSelectionAutocheckThreshold="1024" />
+	// <GUIConfig name="Searching" monospacedFontFindDlg="no" fillFindFieldWithSelected="yes" fillFindFieldSelectCaret="yes"
+	// findDlgAlwaysVisible="no" confirmReplaceInAllOpenDocs="yes" replaceStopsWithoutFindingNext="no" inSelectionAutocheckThreshold="1024"
+	// fillFindWhatThreshold="1024" fillDirFieldFromActiveDoc="no" />
 	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("Searching"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "Searching");
 
-		GUIConfigElement->SetAttribute(TEXT("monospacedFontFindDlg"), _nppGUI._monospacedFontFindDlg ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("fillFindFieldWithSelected"), _nppGUI._fillFindFieldWithSelected ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("fillFindFieldSelectCaret"), _nppGUI._fillFindFieldSelectCaret ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("findDlgAlwaysVisible"), _nppGUI._findDlgAlwaysVisible ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("confirmReplaceInAllOpenDocs"), _nppGUI._confirmReplaceInAllOpenDocs ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("replaceStopsWithoutFindingNext"), _nppGUI._replaceStopsWithoutFindingNext ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("inSelectionAutocheckThreshold"), _nppGUI._inSelectionAutocheckThreshold);
+		setBoolAttribute(GUIConfigElement, "monospacedFontFindDlg", _nppGUI._monospacedFontFindDlg);
+		setBoolAttribute(GUIConfigElement, "fillFindFieldWithSelected", _nppGUI._fillFindFieldWithSelected);
+		setBoolAttribute(GUIConfigElement, "fillFindFieldSelectCaret", _nppGUI._fillFindFieldSelectCaret);
+		setBoolAttribute(GUIConfigElement, "findDlgAlwaysVisible", _nppGUI._findDlgAlwaysVisible);
+		setBoolAttribute(GUIConfigElement, "confirmReplaceInAllOpenDocs", _nppGUI._confirmReplaceInAllOpenDocs);
+		setBoolAttribute(GUIConfigElement, "replaceStopsWithoutFindingNext", _nppGUI._replaceStopsWithoutFindingNext);
+		NppXml::setAttribute(GUIConfigElement, "inSelectionAutocheckThreshold", _nppGUI._inSelectionAutocheckThreshold);
+		NppXml::setAttribute(GUIConfigElement, "fillFindWhatThreshold", _nppGUI._fillFindWhatThreshold);
+		setBoolAttribute(GUIConfigElement, "fillDirFieldFromActiveDoc", _nppGUI._fillDirFieldFromActiveDoc);
 	}
 
 	// <GUIConfig name="searchEngine" searchEngineChoice="2" searchEngineCustom="" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("searchEngine"));
-		GUIConfigElement->SetAttribute(TEXT("searchEngineChoice"), _nppGUI._searchEngineChoice);
-		GUIConfigElement->SetAttribute(TEXT("searchEngineCustom"), _nppGUI._searchEngineCustom);
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "searchEngine");
+		NppXml::setAttribute(GUIConfigElement, "searchEngineChoice", _nppGUI._searchEngineChoice);
+		NppXml::setAttribute(GUIConfigElement, "searchEngineCustom", wstring2string(_nppGUI._searchEngineCustom));
 	}
 
-	// <GUIConfig name="MarkAll" matchCase="no" wholeWordOnly="yes" </GUIConfig>
 	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("MarkAll"));
-		GUIConfigElement->SetAttribute(TEXT("matchCase"), _nppGUI._markAllCaseSensitive ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("wholeWordOnly"), _nppGUI._markAllWordOnly ? TEXT("yes") : TEXT("no"));
+		if (!_nppGUI._shortcutsXmlHmacInConfig.empty())
+		{
+			NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+			NppXml::setAttribute(GUIConfigElement, "name", "shortcutsXmlHMAC");
+			NppXml::setAttribute(GUIConfigElement, "value", _nppGUI._shortcutsXmlHmacInConfig);
+		}
+	}
+
+	// <GUIConfig name="MarkAll" matchCase="no" wholeWordOnly="yes" />
+	{
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "MarkAll");
+		setBoolAttribute(GUIConfigElement, "matchCase", _nppGUI._markAllCaseSensitive);
+		setBoolAttribute(GUIConfigElement, "wholeWordOnly", _nppGUI._markAllWordOnly);
 	}
 
 	// <GUIConfig name="SmartHighLight" matchCase="no" wholeWordOnly="yes" useFindSettings="no" onAnotherView="no">yes</GUIConfig>
 	{
-		TiXmlElement *GUIConfigElement = insertGUIConfigBoolNode(newGUIRoot, TEXT("SmartHighLight"), _nppGUI._enableSmartHilite);
-		GUIConfigElement->SetAttribute(TEXT("matchCase"), _nppGUI._smartHiliteCaseSensitive ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("wholeWordOnly"), _nppGUI._smartHiliteWordOnly ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("useFindSettings"), _nppGUI._smartHiliteUseFindSettings ? TEXT("yes") : TEXT("no"));
-		GUIConfigElement->SetAttribute(TEXT("onAnotherView"), _nppGUI._smartHiliteOnAnotherView ? TEXT("yes") : TEXT("no"));
+		NppXml::Element GUIConfigElement = insertGUIConfigBoolNode(newGUIRoot, "SmartHighLight", _nppGUI._enableSmartHilite);
+		setBoolAttribute(GUIConfigElement, "matchCase", _nppGUI._smartHiliteCaseSensitive);
+		setBoolAttribute(GUIConfigElement, "wholeWordOnly", _nppGUI._smartHiliteWordOnly);
+		setBoolAttribute(GUIConfigElement, "useFindSettings", _nppGUI._smartHiliteUseFindSettings);
+		setBoolAttribute(GUIConfigElement, "onAnotherView", _nppGUI._smartHiliteOnAnotherView);
 	}
 
-	// <GUIConfig name="commandLineInterpreter">powershell</GUIConfig>
-	if (_nppGUI._commandLineInterpreter.compare(CMD_INTERPRETER))
+	// <GUIConfig name="DarkMode" enable="no" colorTone="0" customColorTop="2105376" customColorMenuHotTrack="4539717" customColorActive="3684408"
+	// customColorMain="2105376" customColorError="176" customColorText="14737632" customColorDarkText="12632256" customColorDisabledText="8421504"
+	// customColorLinkText="65535" customColorEdge="6579300" customColorHotEdge="10197915" customColorDisabledEdge="4737096" enableWindowsMode="no"
+	// darkThemeName="DarkModeDefault.xml" darkToolBarIconSet="0" darkTbFluentColor="0" darkTbFluentCustomColor="0" darkTbFluentMono="no" darkTabIconSet="2"
+	// darkTabUseTheme="no" lightThemeName="" lightToolBarIconSet="4" lightTbFluentColor="0" lightTbFluentCustomColor="33024" lightTbFluentMono="no"
+	// lightTabIconSet="0" lightTabUseTheme="yes" />
 	{
-		TiXmlElement *GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("commandLineInterpreter"));
-		GUIConfigElement->InsertEndChild(TiXmlText(_nppGUI._commandLineInterpreter.c_str()));
-	}
-
-	// <GUIConfig name="DarkMode" enable="no" colorTone="0" />
-	{
-		TiXmlElement* GUIConfigElement = (newGUIRoot->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-		GUIConfigElement->SetAttribute(TEXT("name"), TEXT("DarkMode"));
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "DarkMode");
 
 		NppDarkMode::setAdvancedOptions();
 
-		auto setYesNoBoolAttribute = [&GUIConfigElement](const TCHAR* name, bool value) {
-			const TCHAR* pStr = value ? TEXT("yes") : TEXT("no");
-			GUIConfigElement->SetAttribute(name, pStr);
-		};
+		setBoolAttribute(GUIConfigElement, "enable", _nppGUI._darkmode._isEnabled);
+		NppXml::setAttribute(GUIConfigElement, "colorTone", _nppGUI._darkmode._colorTone);
 
-		setYesNoBoolAttribute(TEXT("enable"), _nppGUI._darkmode._isEnabled);
-		GUIConfigElement->SetAttribute(TEXT("colorTone"), _nppGUI._darkmode._colorTone);
-
-		GUIConfigElement->SetAttribute(TEXT("customColorTop"), _nppGUI._darkmode._customColors.pureBackground);
-		GUIConfigElement->SetAttribute(TEXT("customColorMenuHotTrack"), _nppGUI._darkmode._customColors.hotBackground);
-		GUIConfigElement->SetAttribute(TEXT("customColorActive"), _nppGUI._darkmode._customColors.softerBackground);
-		GUIConfigElement->SetAttribute(TEXT("customColorMain"), _nppGUI._darkmode._customColors.background);
-		GUIConfigElement->SetAttribute(TEXT("customColorError"), _nppGUI._darkmode._customColors.errorBackground);
-		GUIConfigElement->SetAttribute(TEXT("customColorText"), _nppGUI._darkmode._customColors.text);
-		GUIConfigElement->SetAttribute(TEXT("customColorDarkText"), _nppGUI._darkmode._customColors.darkerText);
-		GUIConfigElement->SetAttribute(TEXT("customColorDisabledText"), _nppGUI._darkmode._customColors.disabledText);
-		GUIConfigElement->SetAttribute(TEXT("customColorLinkText"), _nppGUI._darkmode._customColors.linkText);
-		GUIConfigElement->SetAttribute(TEXT("customColorEdge"), _nppGUI._darkmode._customColors.edge);
-		GUIConfigElement->SetAttribute(TEXT("customColorHotEdge"), _nppGUI._darkmode._customColors.hotEdge);
-		GUIConfigElement->SetAttribute(TEXT("customColorDisabledEdge"), _nppGUI._darkmode._customColors.disabledEdge);
+		NppXml::setAttribute(GUIConfigElement, "customColorTop", _nppGUI._darkmode._customColors.pureBackground);
+		NppXml::setAttribute(GUIConfigElement, "customColorMenuHotTrack", _nppGUI._darkmode._customColors.hotBackground);
+		NppXml::setAttribute(GUIConfigElement, "customColorActive", _nppGUI._darkmode._customColors.softerBackground);
+		NppXml::setAttribute(GUIConfigElement, "customColorMain", _nppGUI._darkmode._customColors.background);
+		NppXml::setAttribute(GUIConfigElement, "customColorError", _nppGUI._darkmode._customColors.errorBackground);
+		NppXml::setAttribute(GUIConfigElement, "customColorText", _nppGUI._darkmode._customColors.text);
+		NppXml::setAttribute(GUIConfigElement, "customColorDarkText", _nppGUI._darkmode._customColors.darkerText);
+		NppXml::setAttribute(GUIConfigElement, "customColorDisabledText", _nppGUI._darkmode._customColors.disabledText);
+		NppXml::setAttribute(GUIConfigElement, "customColorLinkText", _nppGUI._darkmode._customColors.linkText);
+		NppXml::setAttribute(GUIConfigElement, "customColorEdge", _nppGUI._darkmode._customColors.edge);
+		NppXml::setAttribute(GUIConfigElement, "customColorHotEdge", _nppGUI._darkmode._customColors.hotEdge);
+		NppXml::setAttribute(GUIConfigElement, "customColorDisabledEdge", _nppGUI._darkmode._customColors.disabledEdge);
 
 		// advanced options section
-		setYesNoBoolAttribute(TEXT("enableWindowsMode"), _nppGUI._darkmode._advOptions._enableWindowsMode);
+		const auto& advOpt = _nppGUI._darkmode._advOptions;
+		setBoolAttribute(GUIConfigElement, "enableWindowsMode", advOpt._enableWindowsMode);
 
-		GUIConfigElement->SetAttribute(TEXT("darkThemeName"), _nppGUI._darkmode._advOptions._darkDefaults._xmlFileName.c_str());
-		GUIConfigElement->SetAttribute(TEXT("darkToolBarIconSet"), _nppGUI._darkmode._advOptions._darkDefaults._toolBarIconSet);
-		GUIConfigElement->SetAttribute(TEXT("darkTabIconSet"), _nppGUI._darkmode._advOptions._darkDefaults._tabIconSet);
-		setYesNoBoolAttribute(TEXT("darkTabUseTheme"), _nppGUI._darkmode._advOptions._darkDefaults._tabUseTheme);
+		const auto& darkDefaults = advOpt._darkDefaults;
+		const auto& darkThemeName = darkDefaults._xmlFileName;
+		const auto& darkTbInfo = darkDefaults._tbIconInfo;
+		NppXml::setAttribute(GUIConfigElement, "darkThemeName", wstring2string(darkThemeName));
+		NppXml::setAttribute(GUIConfigElement, "darkToolBarIconSet", darkTbInfo._tbIconSet);
+		NppXml::setAttribute(GUIConfigElement, "darkTbFluentColor", static_cast<int>(darkTbInfo._tbColor));
+		NppXml::setAttribute(GUIConfigElement, "darkTbFluentCustomColor", darkTbInfo._tbCustomColor);
+		setBoolAttribute(GUIConfigElement, "darkTbFluentMono", darkTbInfo._tbUseMono);
+		NppXml::setAttribute(GUIConfigElement, "darkTabIconSet", darkDefaults._tabIconSet);
+		setBoolAttribute(GUIConfigElement, "darkTabUseTheme", darkDefaults._tabUseTheme);
 
-		GUIConfigElement->SetAttribute(TEXT("lightThemeName"), _nppGUI._darkmode._advOptions._lightDefaults._xmlFileName.c_str());
-		GUIConfigElement->SetAttribute(TEXT("lightToolBarIconSet"), _nppGUI._darkmode._advOptions._lightDefaults._toolBarIconSet);
-		GUIConfigElement->SetAttribute(TEXT("lightTabIconSet"), _nppGUI._darkmode._advOptions._lightDefaults._tabIconSet);
-		setYesNoBoolAttribute(TEXT("lightTabUseTheme"), _nppGUI._darkmode._advOptions._lightDefaults._tabUseTheme);
+		const auto& lightDefaults = advOpt._lightDefaults;
+		const auto& lightThemeName = lightDefaults._xmlFileName;
+		const auto& lightTbInfo = lightDefaults._tbIconInfo;
+		NppXml::setAttribute(GUIConfigElement, "lightThemeName", wstring2string(lightThemeName));
+		NppXml::setAttribute(GUIConfigElement, "lightToolBarIconSet", lightTbInfo._tbIconSet);
+		NppXml::setAttribute(GUIConfigElement, "lightTbFluentColor", static_cast<int>(lightTbInfo._tbColor));
+		NppXml::setAttribute(GUIConfigElement, "lightTbFluentCustomColor", lightTbInfo._tbCustomColor);
+		setBoolAttribute(GUIConfigElement, "lightTbFluentMono", lightTbInfo._tbUseMono);
+		NppXml::setAttribute(GUIConfigElement, "lightTabIconSet", lightDefaults._tabIconSet);
+		setBoolAttribute(GUIConfigElement, "lightTabUseTheme", lightDefaults._tabUseTheme);
 	}
 
-	// <GUIConfig name="ScintillaPrimaryView" lineNumberMargin="show" bookMarkMargin="show" indentGuideLine="show" folderMarkStyle="box" lineWrapMethod="aligned" currentLineHilitingShow="show" scrollBeyondLastLine="no" rightClickKeepsSelection="no" disableAdvancedScrolling="no" wrapSymbolShow="hide" Wrap="no" borderEdge="yes" edge="no" edgeNbColumn="80" zoom="0" zoom2="0" whiteSpaceShow="hide" eolShow="hide" borderWidth="2" smoothFont="no" />
+	// <GUIConfig name="ColorPickerCustomColors" color0="..." ... color15="..." />
+	{
+		NppXml::Element GUIConfigElement = NppXml::createChildElement(newGUIRoot, "GUIConfig");
+		NppXml::setAttribute(GUIConfigElement, "name", "ColorPickerCustomColors");
+
+		size_t i = 0;
+		for (auto & cc : _nppGUI._colorPickerCustomColors)
+		{
+			const std::string attrName = "color" + std::to_string(i++);
+			NppXml::setAttribute(GUIConfigElement, attrName.c_str(), static_cast<int>(cc));
+		}
+	}
+
+	// <GUIConfig name="ScintillaPrimaryView" lineNumberMargin="show" lineNumberDynamicWidth="yes" bookMarkMargin="show" indentGuideLine="show"
+	// folderMarkStyle="box" isChangeHistoryEnabled="1" lineWrapMethod="aligned" currentLineIndicator="1" currentLineFrameWidth="1"
+	// virtualSpace="no" scrollBeyondLastLine="yes" rightClickKeepsSelection="no" selectedTextForegroundSingleColor="no" disableAdvancedScrolling="no"
+	// wrapSymbolShow="hide" Wrap="no" borderEdge="yes" isEdgeBgMode="no" edgeMultiColumnPos="" zoom="0" zoom2="0" whiteSpaceShow="hide"
+	// eolShow="hide" eolMode="1" npcShow="hide" npcMode="1" npcCustomColor="no" npcIncludeCcUniEOL="no" npcNoInputC0="yes" ccShow="yes"
+	// borderWidth="2" smoothFont="no" paddingLeft="0" paddingRight="0" distractionFreeDivPart="4" lineCopyCutWithoutSelection="yes"
+	// multiSelection="yes" columnSel2MultiEdit="yes" disableSelectedTextDragDrop="no" />
 	writeScintillaParams();
 
 	// <GUIConfig name="DockingManager" leftWidth="328" rightWidth="359" topHeight="200" bottomHeight="436">
 	// ...
 	if (_nppGUI._isCmdlineNosessionActivated && dockMngNodeDup)
 	{
-		newGUIRoot->InsertEndChild(*dockMngNodeDup);
-		delete dockMngNodeDup;
+		NppXml::insertEndChild(newGUIRoot, dockMngNodeDup);
+		delete tempDoc;
 	}
 	else
 	{
@@ -7674,158 +8288,149 @@ void NppParameters::createXmlTreeFromGUIParams()
 
 bool NppParameters::writeFindHistory()
 {
-	if (!_pXmlUserDoc) return false;
+	if (!_xmlUserDoc._doc) return false;
 
-	TiXmlNode *nppRoot = _pXmlUserDoc->FirstChild(TEXT("NotepadPlus"));
+	NppXml::Element nppRoot = NppXml::firstChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	if (!nppRoot)
 	{
-		nppRoot = _pXmlUserDoc->InsertEndChild(TiXmlElement(TEXT("NotepadPlus")));
+		nppRoot = NppXml::createChildElement(_xmlUserDoc._doc, "NotepadPlus");
 	}
 
-	TiXmlNode *findHistoryRoot = nppRoot->FirstChildElement(TEXT("FindHistory"));
+	NppXml::Element findHistoryRoot = NppXml::firstChildElement(nppRoot, "FindHistory");
 	if (!findHistoryRoot)
 	{
-		TiXmlElement element(TEXT("FindHistory"));
-		findHistoryRoot = nppRoot->InsertEndChild(element);
+		findHistoryRoot = NppXml::createChildElement(nppRoot, "FindHistory");
 	}
-	findHistoryRoot->Clear();
-
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("nbMaxFindHistoryPath"),	_findHistory._nbMaxFindHistoryPath);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("nbMaxFindHistoryFilter"),  _findHistory._nbMaxFindHistoryFilter);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("nbMaxFindHistoryFind"),	_findHistory._nbMaxFindHistoryFind);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("nbMaxFindHistoryReplace"), _findHistory._nbMaxFindHistoryReplace);
-
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("matchWord"),				_findHistory._isMatchWord?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("matchCase"),				_findHistory._isMatchCase?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("wrap"),					_findHistory._isWrap?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("directionDown"),			_findHistory._isDirectionDown?TEXT("yes"):TEXT("no"));
-
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifRecuisive"),			_findHistory._isFifRecuisive?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifInHiddenFolder"),		_findHistory._isFifInHiddenFolder?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifProjectPanel1"),	    	_findHistory._isFifProjectPanel_1?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifProjectPanel2"),	      	_findHistory._isFifProjectPanel_2?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifProjectPanel3"),	       	_findHistory._isFifProjectPanel_3?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifFilterFollowsDoc"),	_findHistory._isFilterFollowDoc?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("fifFolderFollowsDoc"),	_findHistory._isFolderFollowDoc?TEXT("yes"):TEXT("no"));
-
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("searchMode"), _findHistory._searchMode);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("transparencyMode"), _findHistory._transparencyMode);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("transparency"), _findHistory._transparency);
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("dotMatchesNewline"),		_findHistory._dotMatchesNewline?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("isSearch2ButtonsMode"),		_findHistory._isSearch2ButtonsMode?TEXT("yes"):TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("regexBackward4PowerUser"),		_findHistory._regexBackward4PowerUser ? TEXT("yes") : TEXT("no"));
-
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("bookmarkLine"), _findHistory._isBookmarkLine ? TEXT("yes") : TEXT("no"));
-	(findHistoryRoot->ToElement())->SetAttribute(TEXT("purge"), _findHistory._isPurge ? TEXT("yes") : TEXT("no"));
-
-	TiXmlElement hist_element{TEXT("")};
-
-	hist_element.SetValue(TEXT("Path"));
-	for (size_t i = 0, len = _findHistory._findHistoryPaths.size(); i < len; ++i)
+	else
 	{
-		(hist_element.ToElement())->SetAttribute(TEXT("name"), _findHistory._findHistoryPaths[i].c_str());
-		findHistoryRoot->InsertEndChild(hist_element);
+		NppXml::clear(findHistoryRoot);
 	}
 
-	hist_element.SetValue(TEXT("Filter"));
-	for (size_t i = 0, len = _findHistory._findHistoryFilters.size(); i < len; ++i)
+	NppXml::setAttribute(findHistoryRoot, "nbMaxFindHistoryPath", _findHistory._nbMaxFindHistoryPath);
+	NppXml::setAttribute(findHistoryRoot, "nbMaxFindHistoryFilter", _findHistory._nbMaxFindHistoryFilter);
+	NppXml::setAttribute(findHistoryRoot, "nbMaxFindHistoryFind", _findHistory._nbMaxFindHistoryFind);
+	NppXml::setAttribute(findHistoryRoot, "nbMaxFindHistoryReplace", _findHistory._nbMaxFindHistoryReplace);
+
+	setBoolAttribute(findHistoryRoot, "matchWord", _findHistory._isMatchWord);
+	setBoolAttribute(findHistoryRoot, "matchCase", _findHistory._isMatchCase);
+	setBoolAttribute(findHistoryRoot, "wrap", _findHistory._isWrap);
+	setBoolAttribute(findHistoryRoot, "directionDown", _findHistory._isDirectionDown);
+
+	setBoolAttribute(findHistoryRoot, "fifRecuisive", _findHistory._isFifRecursive);
+	setBoolAttribute(findHistoryRoot, "fifInHiddenFolder", _findHistory._isFifInHiddenFolder);
+	setBoolAttribute(findHistoryRoot, "fifProjectPanel1", _findHistory._isFifProjectPanel_1);
+	setBoolAttribute(findHistoryRoot, "fifProjectPanel2", _findHistory._isFifProjectPanel_2);
+	setBoolAttribute(findHistoryRoot, "fifProjectPanel3", _findHistory._isFifProjectPanel_3);
+	setBoolAttribute(findHistoryRoot, "fifFilterFollowsDoc", _findHistory._isFilterFollowDoc);
+
+	NppXml::setAttribute(findHistoryRoot, "searchMode", _findHistory._searchMode);
+	NppXml::setAttribute(findHistoryRoot, "transparencyMode", _findHistory._transparencyMode);
+	NppXml::setAttribute(findHistoryRoot, "transparency", _findHistory._transparency);
+	setBoolAttribute(findHistoryRoot, "dotMatchesNewline", _findHistory._dotMatchesNewline);
+	setBoolAttribute(findHistoryRoot, "isSearch2ButtonsMode", _findHistory._isSearch2ButtonsMode);
+	setBoolAttribute(findHistoryRoot, "regexBackward4PowerUser", _findHistory._regexBackward4PowerUser);
+
+	setBoolAttribute(findHistoryRoot, "bookmarkLine", _findHistory._isBookmarkLine);
+	setBoolAttribute(findHistoryRoot, "purge", _findHistory._isPurge);
+
+	for (const auto& path : _findHistory._findHistoryPaths)
 	{
-		(hist_element.ToElement())->SetAttribute(TEXT("name"), _findHistory._findHistoryFilters[i].c_str());
-		findHistoryRoot->InsertEndChild(hist_element);
+		NppXml::Element pathElement = NppXml::createChildElement(findHistoryRoot, "Path");
+		NppXml::setAttribute(pathElement, "name", wstring2string(path));
 	}
 
-	hist_element.SetValue(TEXT("Find"));
-	for (size_t i = 0, len = _findHistory._findHistoryFinds.size(); i < len; ++i)
+	for (const auto& filter : _findHistory._findHistoryFilters)
 	{
-		(hist_element.ToElement())->SetAttribute(TEXT("name"), _findHistory._findHistoryFinds[i].c_str());
-		findHistoryRoot->InsertEndChild(hist_element);
+		NppXml::Element filterElement = NppXml::createChildElement(findHistoryRoot, "Filter");
+		NppXml::setAttribute(filterElement, "name", wstring2string(filter));
 	}
 
-	hist_element.SetValue(TEXT("Replace"));
-	for (size_t i = 0, len = _findHistory._findHistoryReplaces.size(); i < len; ++i)
+	for (const auto& find : _findHistory._findHistoryFinds)
 	{
-		(hist_element.ToElement())->SetAttribute(TEXT("name"), _findHistory._findHistoryReplaces[i].c_str());
-		findHistoryRoot->InsertEndChild(hist_element);
+		NppXml::Element findElement = NppXml::createChildElement(findHistoryRoot, "Find");
+		NppXml::setAttribute(findElement, "name", wstring2string(find));
+	}
+
+	for (const auto& replace : _findHistory._findHistoryReplaces)
+	{
+		NppXml::Element replaceElement = NppXml::createChildElement(findHistoryRoot, "Replace");
+		NppXml::setAttribute(replaceElement, "name", wstring2string(replace));
 	}
 
 	return true;
 }
 
-void NppParameters::insertDockingParamNode(TiXmlNode *GUIRoot)
+void NppParameters::insertDockingParamNode(NppXml::Element& GUIRoot) const
 {
-	TiXmlElement DMNode(TEXT("GUIConfig"));
-	DMNode.SetAttribute(TEXT("name"), TEXT("DockingManager"));
-	DMNode.SetAttribute(TEXT("leftWidth"), _nppGUI._dockingData._leftWidth);
-	DMNode.SetAttribute(TEXT("rightWidth"), _nppGUI._dockingData._rightWidth);
-	DMNode.SetAttribute(TEXT("topHeight"), _nppGUI._dockingData._topHeight);
-	DMNode.SetAttribute(TEXT("bottomHeight"), _nppGUI._dockingData._bottomHight);
+	NppXml::Element DMNode = NppXml::createChildElement(GUIRoot, "GUIConfig");
 
-	for (size_t i = 0, len = _nppGUI._dockingData._flaotingWindowInfo.size(); i < len ; ++i)
+	NppXml::setAttribute(DMNode, "name", "DockingManager");
+	NppXml::setAttribute(DMNode, "leftWidth", _nppGUI._dockingData._leftWidth);
+	NppXml::setAttribute(DMNode, "rightWidth", _nppGUI._dockingData._rightWidth);
+	NppXml::setAttribute(DMNode, "topHeight", _nppGUI._dockingData._topHeight);
+	NppXml::setAttribute(DMNode, "bottomHeight", _nppGUI._dockingData._bottomHeight);
+
+	for (const auto& fwi : _nppGUI._dockingData._floatingWindowInfo)
 	{
-		FloatingWindowInfo & fwi = _nppGUI._dockingData._flaotingWindowInfo[i];
-		TiXmlElement FWNode(TEXT("FloatingWindow"));
-		FWNode.SetAttribute(TEXT("cont"), fwi._cont);
-		FWNode.SetAttribute(TEXT("x"), fwi._pos.left);
-		FWNode.SetAttribute(TEXT("y"), fwi._pos.top);
-		FWNode.SetAttribute(TEXT("width"), fwi._pos.right);
-		FWNode.SetAttribute(TEXT("height"), fwi._pos.bottom);
+		NppXml::Element FWNode = NppXml::createChildElement(DMNode, "FloatingWindow");
 
-		DMNode.InsertEndChild(FWNode);
+		NppXml::setAttribute(FWNode, "cont", fwi._cont);
+		NppXml::setAttribute(FWNode, "x", fwi._pos.left);
+		NppXml::setAttribute(FWNode, "y", fwi._pos.top);
+		NppXml::setAttribute(FWNode, "width", fwi._pos.right);
+		NppXml::setAttribute(FWNode, "height", fwi._pos.bottom);
 	}
 
-	for (size_t i = 0, len = _nppGUI._dockingData._pluginDockInfo.size() ; i < len ; ++i)
+	for (const auto& pdi : _nppGUI._dockingData._pluginDockInfo)
 	{
-		PluginDlgDockingInfo & pdi = _nppGUI._dockingData._pluginDockInfo[i];
-		TiXmlElement PDNode(TEXT("PluginDlg"));
-		PDNode.SetAttribute(TEXT("pluginName"), pdi._name);
-		PDNode.SetAttribute(TEXT("id"), pdi._internalID);
-		PDNode.SetAttribute(TEXT("curr"), pdi._currContainer);
-		PDNode.SetAttribute(TEXT("prev"), pdi._prevContainer);
-		PDNode.SetAttribute(TEXT("isVisible"), pdi._isVisible?TEXT("yes"):TEXT("no"));
+		NppXml::Element PDNode = NppXml::createChildElement(DMNode, "PluginDlg");
 
-		DMNode.InsertEndChild(PDNode);
+		NppXml::setAttribute(PDNode, "pluginName", wstring2string(pdi._name));
+		NppXml::setAttribute(PDNode, "id", pdi._internalID);
+		NppXml::setAttribute(PDNode, "curr", pdi._currContainer);
+		NppXml::setAttribute(PDNode, "prev", pdi._prevContainer);
+		setBoolAttribute(PDNode, "isVisible", pdi._isVisible);
 	}
 
-	for (size_t i = 0, len = _nppGUI._dockingData._containerTabInfo.size(); i < len ; ++i)
+	for (const auto& cti : _nppGUI._dockingData._containerTabInfo)
 	{
-		ContainerTabInfo & cti = _nppGUI._dockingData._containerTabInfo[i];
-		TiXmlElement CTNode(TEXT("ActiveTabs"));
-		CTNode.SetAttribute(TEXT("cont"), cti._cont);
-		CTNode.SetAttribute(TEXT("activeTab"), cti._activeTab);
-		DMNode.InsertEndChild(CTNode);
-	}
+		NppXml::Element CTNode = NppXml::createChildElement(DMNode, "ActiveTabs");
 
-	GUIRoot->InsertEndChild(DMNode);
+		NppXml::setAttribute(CTNode, "cont", cti._cont);
+		NppXml::setAttribute(CTNode, "activeTab", cti._activeTab);
+	}
 }
 
-void NppParameters::writePrintSetting(TiXmlElement *element)
+void NppParameters::writePrintSetting(NppXml::Element& element) const
 {
-	const TCHAR *pStr = _nppGUI._printSettings._printLineNumber?TEXT("yes"):TEXT("no");
-	element->SetAttribute(TEXT("lineNumber"), pStr);
+	const auto& prSet = _nppGUI._printSettings;
 
-	element->SetAttribute(TEXT("printOption"), _nppGUI._printSettings._printOption);
+	setBoolAttribute(element, "lineNumber", prSet._printLineNumber);
+	setBoolAttribute(element, "formFeedPageBreak", prSet._printFormFeedPageBreak);
 
-	element->SetAttribute(TEXT("headerLeft"), _nppGUI._printSettings._headerLeft.c_str());
-	element->SetAttribute(TEXT("headerMiddle"), _nppGUI._printSettings._headerMiddle.c_str());
-	element->SetAttribute(TEXT("headerRight"), _nppGUI._printSettings._headerRight.c_str());
-	element->SetAttribute(TEXT("footerLeft"), _nppGUI._printSettings._footerLeft.c_str());
-	element->SetAttribute(TEXT("footerMiddle"), _nppGUI._printSettings._footerMiddle.c_str());
-	element->SetAttribute(TEXT("footerRight"), _nppGUI._printSettings._footerRight.c_str());
+	NppXml::setAttribute(element, "printOption", prSet._printOption);
 
-	element->SetAttribute(TEXT("headerFontName"), _nppGUI._printSettings._headerFontName.c_str());
-	element->SetAttribute(TEXT("headerFontStyle"), _nppGUI._printSettings._headerFontStyle);
-	element->SetAttribute(TEXT("headerFontSize"), _nppGUI._printSettings._headerFontSize);
-	element->SetAttribute(TEXT("footerFontName"), _nppGUI._printSettings._footerFontName.c_str());
-	element->SetAttribute(TEXT("footerFontStyle"), _nppGUI._printSettings._footerFontStyle);
-	element->SetAttribute(TEXT("footerFontSize"), _nppGUI._printSettings._footerFontSize);
+	NppXml::setAttribute(element, "headerLeft", wstring2string(prSet._headerLeft));
+	NppXml::setAttribute(element, "headerMiddle", wstring2string(prSet._headerMiddle));
+	NppXml::setAttribute(element, "headerRight", wstring2string(prSet._headerRight));
+	NppXml::setAttribute(element, "footerLeft", wstring2string(prSet._footerLeft));
+	NppXml::setAttribute(element, "footerMiddle", wstring2string(prSet._footerMiddle));
+	NppXml::setAttribute(element, "footerRight", wstring2string(prSet._footerRight));
 
-	element->SetAttribute(TEXT("margeLeft"), _nppGUI._printSettings._marge.left);
-	element->SetAttribute(TEXT("margeRight"), _nppGUI._printSettings._marge.right);
-	element->SetAttribute(TEXT("margeTop"), _nppGUI._printSettings._marge.top);
-	element->SetAttribute(TEXT("margeBottom"), _nppGUI._printSettings._marge.bottom);
+	NppXml::setAttribute(element, "headerFontName", wstring2string(prSet._headerFontName));
+	NppXml::setAttribute(element, "headerFontStyle", prSet._headerFontStyle);
+	NppXml::setAttribute(element, "headerFontSize", prSet._headerFontSize);
+	NppXml::setAttribute(element, "footerFontName", wstring2string(prSet._footerFontName));
+	NppXml::setAttribute(element, "footerFontStyle", prSet._footerFontStyle);
+	NppXml::setAttribute(element, "footerFontSize", prSet._footerFontSize);
+
+	NppXml::setAttribute(element, "margeLeft", prSet._marge.left);
+	NppXml::setAttribute(element, "margeRight", prSet._marge.right);
+	NppXml::setAttribute(element, "margeTop", prSet._marge.top);
+	NppXml::setAttribute(element, "margeBottom", prSet._marge.bottom);
 }
 
-void NppParameters::writeExcludedLangList(TiXmlElement *element)
+void NppParameters::writeExcludedLangList(NppXml::Element& element) const
 {
 	int g0 = 0; // up to 8
 	int g1 = 0; // up to 16
@@ -7837,46 +8442,45 @@ void NppParameters::writeExcludedLangList(TiXmlElement *element)
 	int g7 = 0; // up to 64
 	int g8 = 0; // up to 72
 	int g9 = 0; // up to 80
-	int g10= 0; // up to 88
-	int g11= 0; // up to 96
-	int g12= 0; // up to 104
+	int g10 = 0; // up to 88
+	int g11 = 0; // up to 96
+	int g12 = 0; // up to 104
 
-	const int groupNbMember = 8;
+	static constexpr int groupNbMember = 8;
 
-	for (size_t i = 0, len = _nppGUI._excludedLangList.size(); i < len ; ++i)
+	for (const auto& exclLang : _nppGUI._excludedLangList)
 	{
-		LangType langType = _nppGUI._excludedLangList[i]._langType;
+		const LangType langType = exclLang._langType;
 		if (langType >= L_EXTERNAL && langType < L_END)
 			continue;
 
-		int nGrp = langType / groupNbMember;
-		int nMask = 1 << langType % groupNbMember;
-
+		const int nGrp = langType / groupNbMember;
+		const int nMask = 1 << langType % groupNbMember;
 
 		switch (nGrp)
 		{
-			case 0 :
+			case 0:
 				g0 |= nMask;
 				break;
-			case 1 :
+			case 1:
 				g1 |= nMask;
 				break;
-			case 2 :
+			case 2:
 				g2 |= nMask;
 				break;
-			case 3 :
+			case 3:
 				g3 |= nMask;
 				break;
-			case 4 :
+			case 4:
 				g4 |= nMask;
 				break;
-			case 5 :
+			case 5:
 				g5 |= nMask;
 				break;
-			case 6 :
+			case 6:
 				g6 |= nMask;
 				break;
-			case 7 :
+			case 7:
 				g7 |= nMask;
 				break;
 			case 8:
@@ -7897,33 +8501,27 @@ void NppParameters::writeExcludedLangList(TiXmlElement *element)
 		}
 	}
 
-	element->SetAttribute(TEXT("gr0"), g0);
-	element->SetAttribute(TEXT("gr1"), g1);
-	element->SetAttribute(TEXT("gr2"), g2);
-	element->SetAttribute(TEXT("gr3"), g3);
-	element->SetAttribute(TEXT("gr4"), g4);
-	element->SetAttribute(TEXT("gr5"), g5);
-	element->SetAttribute(TEXT("gr6"), g6);
-	element->SetAttribute(TEXT("gr7"), g7);
-	element->SetAttribute(TEXT("gr8"), g8);
-	element->SetAttribute(TEXT("gr9"), g9);
-	element->SetAttribute(TEXT("gr10"), g10);
-	element->SetAttribute(TEXT("gr11"), g11);
-	element->SetAttribute(TEXT("gr12"), g12);
+	NppXml::setAttribute(element, "gr0", g0);
+	NppXml::setAttribute(element, "gr1", g1);
+	NppXml::setAttribute(element, "gr2", g2);
+	NppXml::setAttribute(element, "gr3", g3);
+	NppXml::setAttribute(element, "gr4", g4);
+	NppXml::setAttribute(element, "gr5", g5);
+	NppXml::setAttribute(element, "gr6", g6);
+	NppXml::setAttribute(element, "gr7", g7);
+	NppXml::setAttribute(element, "gr8", g8);
+	NppXml::setAttribute(element, "gr9", g9);
+	NppXml::setAttribute(element, "gr10", g10);
+	NppXml::setAttribute(element, "gr11", g11);
+	NppXml::setAttribute(element, "gr12", g12);
 }
 
-TiXmlElement * NppParameters::insertGUIConfigBoolNode(TiXmlNode *r2w, const TCHAR *name, bool bVal)
+NppXml::Element NppParameters::insertGUIConfigBoolNode(NppXml::Element& r2w, const char* name, bool bVal)
 {
-	const TCHAR *pStr = bVal?TEXT("yes"):TEXT("no");
-	TiXmlElement *GUIConfigElement = (r2w->InsertEndChild(TiXmlElement(TEXT("GUIConfig"))))->ToElement();
-	GUIConfigElement->SetAttribute(TEXT("name"), name);
-	GUIConfigElement->InsertEndChild(TiXmlText(pStr));
+	NppXml::Element GUIConfigElement = NppXml::createChildElement(r2w, "GUIConfig");
+	NppXml::setAttribute(GUIConfigElement, "name", name);
+	NppXml::createChildText(GUIConfigElement, bVal ? "yes" : "no");
 	return GUIConfigElement;
-}
-
-int RGB2int(COLORREF color)
-{
-	return (((((DWORD)color) & 0x0000FF) << 16) | ((((DWORD)color) & 0x00FF00)) | ((((DWORD)color) & 0xFF0000) >> 16));
 }
 
 int NppParameters::langTypeToCommandID(LangType lt) const
@@ -7945,7 +8543,7 @@ int NppParameters::langTypeToCommandID(LangType lt) const
 			id = IDM_LANG_HTML;	break;
 		case L_XML :
 			id = IDM_LANG_XML; break;
-		case L_JS :
+		case L_JS_EMBEDDED :
 		case L_JAVASCRIPT:
 			id = IDM_LANG_JS; break;
 		case L_JSON:
@@ -8147,7 +8745,28 @@ int NppParameters::langTypeToCommandID(LangType lt) const
 
 		case L_HOLLYWOOD:
 			id = IDM_LANG_HOLLYWOOD; break;
-			
+
+		case L_GOLANG:
+			id = IDM_LANG_GOLANG; break;
+
+		case L_RAKU:
+			id = IDM_LANG_RAKU; break;
+
+		case L_TOML:
+			id = IDM_LANG_TOML; break;
+
+		case L_SAS:
+			id = IDM_LANG_SAS; break;
+
+		case L_ERRORLIST:
+			id = IDM_LANG_ERRORLIST; break;
+
+		case L_ESCSEQ:
+			id = IDM_LANG_ESCSEQ; break;
+
+		case L_STTXT:
+			id = IDM_LANG_STTXT; break;
+
 		case L_SEARCHRESULT :
 			id = -1;	break;
 
@@ -8168,22 +8787,22 @@ std::wstring NppParameters:: getWinVersionStr() const
 {
 	switch (_winVersion)
 	{
-		case WV_WIN32S: return TEXT("Windows 3.1");
-		case WV_95: return TEXT("Windows 95");
-		case WV_98: return TEXT("Windows 98");
-		case WV_ME: return TEXT("Windows Millennium Edition");
-		case WV_NT: return TEXT("Windows NT");
-		case WV_W2K: return TEXT("Windows 2000");
-		case WV_XP: return TEXT("Windows XP");
-		case WV_S2003: return TEXT("Windows Server 2003");
-		case WV_XPX64: return TEXT("Windows XP 64 bits");
-		case WV_VISTA: return TEXT("Windows Vista");
-		case WV_WIN7: return TEXT("Windows 7");
-		case WV_WIN8: return TEXT("Windows 8");
-		case WV_WIN81: return TEXT("Windows 8.1");
-		case WV_WIN10: return TEXT("Windows 10");
-		case WV_WIN11: return TEXT("Windows 11");
-		default: /*case WV_UNKNOWN:*/ return TEXT("Windows unknown version");
+		case WV_WIN32S: return L"Windows 3.1";
+		case WV_95: return L"Windows 95";
+		case WV_98: return L"Windows 98";
+		case WV_ME: return L"Windows Millennium Edition";
+		case WV_NT: return L"Windows NT";
+		case WV_W2K: return L"Windows 2000";
+		case WV_XP: return L"Windows XP";
+		case WV_S2003: return L"Windows Server 2003";
+		case WV_XPX64: return L"Windows XP 64 bits";
+		case WV_VISTA: return L"Windows Vista";
+		case WV_WIN7: return L"Windows 7";
+		case WV_WIN8: return L"Windows 8";
+		case WV_WIN81: return L"Windows 8.1";
+		case WV_WIN10: return L"Windows 10";
+		case WV_WIN11: return L"Windows 11";
+		default: /*case WV_UNKNOWN:*/ return L"Windows unknown version";
 	}
 }
 
@@ -8192,349 +8811,346 @@ std::wstring NppParameters::getWinVerBitStr() const
 	switch (_platForm)
 	{
 	case PF_X86:
-		return TEXT("32-bit");
+		return L"32-bit";
 
 	case PF_X64:
 	case PF_IA64:
 	case PF_ARM64:
-		return TEXT("64-bit");
+		return L"64-bit";
 
 	default:
-		return TEXT("Unknown-bit");
+		return L"Unknown-bit";
 	}
 }
 
-std::wstring NppParameters::writeStyles(LexerStylerArray & lexersStylers, StyleArray & globalStylers)
+std::wstring NppParameters::writeStyles(LexerStylerArray& lexersStylers, StyleArray& globalStylers)
 {
-	TiXmlNode *lexersRoot = (_pXmlUserStylerDoc->FirstChild(TEXT("NotepadPlus")))->FirstChildElement(TEXT("LexerStyles"));
-	for (TiXmlNode *childNode = lexersRoot->FirstChildElement(TEXT("LexerType"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("LexerType")))
+	NppXml::Element root = NppXml::firstChildElement(_pXmlUserStylerDoc._doc, "NotepadPlus");
+	NppXml::Element lexersRoot = NppXml::firstChildElement(root, "LexerStyles");
+	for (NppXml::Element childNode = NppXml::firstChildElement(lexersRoot, "LexerType");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "LexerType"))
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *nm = element->Attribute(TEXT("name"));
+		const std::wstring nm = string2wstring(NppXml::attribute(childNode, "name", ""));
+		if (nm.empty())
+			continue;
 
-		LexerStyler *pLs = _lexerStylerVect.getLexerStylerByName(nm);
-		LexerStyler *pLs2 = lexersStylers.getLexerStylerByName(nm);
+		LexerStyler* pLs = _lexerStylerVect.getLexerStylerByName(nm.c_str());
+		LexerStyler* pLs2 = lexersStylers.getLexerStylerByName(nm.c_str());
 
 		if (pLs)
 		{
-			const TCHAR *extStr = pLs->getLexerUserExt();
-			element->SetAttribute(TEXT("ext"), extStr);
-			for (TiXmlNode *grChildNode = childNode->FirstChildElement(TEXT("WordsStyle"));
-					grChildNode ;
-					grChildNode = grChildNode->NextSibling(TEXT("WordsStyle")))
+			NppXml::setAttribute(childNode, "ext", wstring2string(pLs->getLexerUserExt()));
+
+			for (NppXml::Element grChildNode = NppXml::firstChildElement(childNode, "WordsStyle");
+				grChildNode;
+				grChildNode = NppXml::nextSiblingElement(grChildNode, "WordsStyle"))
 			{
-				TiXmlElement *grElement = grChildNode->ToElement();
-				const TCHAR *styleName = grElement->Attribute(TEXT("name"));
-				const Style * pStyle = pLs->findByName(styleName);
-				Style * pStyle2Sync = pLs2 ? pLs2->findByName(styleName) : nullptr;
+				const std::wstring styleName = string2wstring(NppXml::attribute(grChildNode, "name", ""));
+				const Style* pStyle = pLs->findByName(styleName);
+				Style* pStyle2Sync = pLs2 ? pLs2->findByName(styleName) : nullptr;
 				if (pStyle && pStyle2Sync)
 				{
-					writeStyle2Element(*pStyle, *pStyle2Sync, grElement);
+					writeStyle2Element(*pStyle, *pStyle2Sync, grChildNode);
 				}
 			}
 		}
 	}
 
-	for (size_t x = 0; x < _pXmlExternalLexerDoc.size(); ++x)
+	for (auto& extLexDoc : _pXmlExternalLexerDoc)
 	{
-		TiXmlNode* lexersRoot2 = ( _pXmlExternalLexerDoc[x]->FirstChild(TEXT("NotepadPlus")))->FirstChildElement(TEXT("LexerStyles"));
-		for (TiXmlNode* childNode = lexersRoot2->FirstChildElement(TEXT("LexerType"));
-			childNode ;
-			childNode = childNode->NextSibling(TEXT("LexerType")))
+		NppXml::Element root2 = NppXml::firstChildElement(extLexDoc._doc, "NotepadPlus");
+		NppXml::Element lexersRoot2 = NppXml::firstChildElement(root2, "LexerStyles");
+		for (NppXml::Element childNode = NppXml::firstChildElement(lexersRoot2, "LexerType");
+			childNode;
+			childNode = NppXml::nextSiblingElement(childNode, "LexerType"))
 		{
-			TiXmlElement *element = childNode->ToElement();
-			const TCHAR *nm = element->Attribute(TEXT("name"));
+			const std::wstring nm = string2wstring(NppXml::attribute(childNode, "name", ""));
+			if (nm.empty())
+				continue;
 
-			LexerStyler *pLs = _lexerStylerVect.getLexerStylerByName(nm);
-			LexerStyler *pLs2 = lexersStylers.getLexerStylerByName(nm);
+			LexerStyler* pLs = _lexerStylerVect.getLexerStylerByName(nm.c_str());
+			LexerStyler* pLs2 = lexersStylers.getLexerStylerByName(nm.c_str());
 
 			if (pLs)
 			{
-				const TCHAR *extStr = pLs->getLexerUserExt();
-				element->SetAttribute(TEXT("ext"), extStr);
+				NppXml::setAttribute(childNode, "ext", wstring2string(pLs->getLexerUserExt()));
 
-				for (TiXmlNode *grChildNode = childNode->FirstChildElement(TEXT("WordsStyle"));
-						grChildNode ;
-						grChildNode = grChildNode->NextSibling(TEXT("WordsStyle")))
+				for (NppXml::Element grChildNode = NppXml::firstChildElement(childNode, "WordsStyle");
+					grChildNode;
+					grChildNode = NppXml::nextSiblingElement(grChildNode, "WordsStyle"))
 				{
-					TiXmlElement *grElement = grChildNode->ToElement();
-					const TCHAR *styleName = grElement->Attribute(TEXT("name"));
-					const Style * pStyle = pLs->findByName(styleName);
-					Style * pStyle2Sync = pLs2 ? pLs2->findByName(styleName) : nullptr;
+					const std::wstring styleName = string2wstring(NppXml::attribute(grChildNode, "name", ""));
+					const Style* pStyle = pLs->findByName(styleName);
+					Style* pStyle2Sync = pLs2 ? pLs2->findByName(styleName) : nullptr;
 					if (pStyle && pStyle2Sync)
 					{
-						writeStyle2Element(*pStyle, *pStyle2Sync, grElement);
+						writeStyle2Element(*pStyle, *pStyle2Sync, grChildNode);
 					}
 				}
 			}
 		}
-		_pXmlExternalLexerDoc[x]->SaveFile();
+		static_cast<void>(NppXml::saveFile(extLexDoc._doc, extLexDoc._path.c_str()));
 	}
 
-	TiXmlNode *globalStylesRoot = (_pXmlUserStylerDoc->FirstChild(TEXT("NotepadPlus")))->FirstChildElement(TEXT("GlobalStyles"));
+	NppXml::Element globalStylesRoot = NppXml::firstChildElement(root, "GlobalStyles");
 
-	for (TiXmlNode *childNode = globalStylesRoot->FirstChildElement(TEXT("WidgetStyle"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("WidgetStyle")))
+	for (NppXml::Element childNode = NppXml::firstChildElement(globalStylesRoot, "WidgetStyle");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "WidgetStyle"))
 	{
-		TiXmlElement *pElement = childNode->ToElement();
-		const TCHAR *styleName = pElement->Attribute(TEXT("name"));
-		const Style * pStyle = _widgetStyleArray.findByName(styleName);
-		Style * pStyle2Sync = globalStylers.findByName(styleName);
+		const std::wstring styleName = string2wstring(NppXml::attribute(childNode, "name", ""));
+		const Style* pStyle = _widgetStyleArray.findByName(styleName);
+		Style* pStyle2Sync = globalStylers.findByName(styleName);
 		if (pStyle && pStyle2Sync)
 		{
-			writeStyle2Element(*pStyle, *pStyle2Sync, pElement);
+			writeStyle2Element(*pStyle, *pStyle2Sync, childNode);
 		}
 	}
 
-	bool isSaved = _pXmlUserStylerDoc->SaveFile();
-	if (!isSaved)
+	const auto savePath = _themeSwitcher.getSavePathFrom(_pXmlUserStylerDoc._path);
+	if (!savePath.empty())
 	{
-		auto savePath = _themeSwitcher.getSavePathFrom(_pXmlUserStylerDoc->Value());
-		if (!savePath.empty())
-		{
-			_pXmlUserStylerDoc->SaveFile(savePath.c_str());
-			return savePath;
-		}
+		static_cast<void>(NppXml::saveFile(_pXmlUserStylerDoc._doc, savePath.c_str()));
+		return savePath;
 	}
-	return TEXT("");
+
+	static_cast<void>(NppXml::saveFile(_pXmlUserStylerDoc._doc, _pXmlUserStylerDoc._path.c_str()));
+	return L"";
 }
 
-
-bool NppParameters::insertTabInfo(const TCHAR *langName, int tabInfo)
+bool NppParameters::insertTabInfo(const wchar_t* langName, int tabInfo, bool backspaceUnindent)
 {
-	if (!_pXmlDoc) return false;
-	TiXmlNode *langRoot = (_pXmlDoc->FirstChild(TEXT("NotepadPlus")))->FirstChildElement(TEXT("Languages"));
-	for (TiXmlNode *childNode = langRoot->FirstChildElement(TEXT("Language"));
-		childNode ;
-		childNode = childNode->NextSibling(TEXT("Language")))
+	if (!_pXmlDoc._doc) return false;
+	const std::string sLangName = wstring2string(langName);
+	NppXml::Element root = NppXml::firstChildElement(_pXmlDoc._doc, "NotepadPlus");
+	NppXml::Element langRoot = NppXml::firstChildElement(root, "Languages");
+	for (NppXml::Element childNode = NppXml::firstChildElement(langRoot, "Language");
+		childNode;
+		childNode = NppXml::nextSiblingElement(childNode, "Language"))
 	{
-		TiXmlElement *element = childNode->ToElement();
-		const TCHAR *nm = element->Attribute(TEXT("name"));
-		if (nm && lstrcmp(langName, nm) == 0)
+		const char* nm = NppXml::attribute(childNode, "name");
+		if (nm && std::strcmp(sLangName.c_str(), nm) == 0)
 		{
-			childNode->ToElement()->SetAttribute(TEXT("tabSettings"), tabInfo);
-			_pXmlDoc->SaveFile();
-			return true;
+			NppXml::setAttribute(childNode, "tabSettings", tabInfo);
+			setBoolAttribute(childNode, "backspaceUnindent", backspaceUnindent);
+			return NppXml::saveFile(_pXmlDoc._doc, _pXmlDoc._path.c_str());
 		}
 	}
+
+	for (auto& extLexDoc : _pXmlExternalLexerDoc)
+	{
+		NppXml::Element root2 = NppXml::firstChildElement(extLexDoc._doc, "NotepadPlus");
+		NppXml::Element langRoot2 = NppXml::firstChildElement(root2, "Languages");
+		for (NppXml::Element childNode = NppXml::firstChildElement(langRoot2, "Language");
+			childNode;
+			childNode = NppXml::nextSiblingElement(childNode, "Language"))
+		{
+			const char* nm = NppXml::attribute(childNode, "name");
+			if (nm && std::strcmp(sLangName.c_str(), nm) == 0)
+			{
+				NppXml::setAttribute(childNode, "tabSettings", tabInfo);
+				setBoolAttribute(childNode, "backspaceUnindent", backspaceUnindent);
+				return NppXml::saveFile(extLexDoc._doc, extLexDoc._path.c_str());
+			}
+		}
+	}
+
 	return false;
 }
 
-void NppParameters::writeStyle2Element(const Style & style2Write, Style & style2Sync, TiXmlElement *element)
+void NppParameters::writeStyle2Element(const Style& style2Write, Style& style2Sync, NppXml::Element& element)
 {
+	static constexpr size_t bufSize = 7;
 	if (HIBYTE(HIWORD(style2Write._fgColor)) != 0xFF)
 	{
-		int rgbVal = RGB2int(style2Write._fgColor);
-		TCHAR fgStr[7];
-		wsprintf(fgStr, TEXT("%.6X"), rgbVal);
-		element->SetAttribute(TEXT("fgColor"), fgStr);
+		const DWORD rgbVal = RGBHEX(style2Write._fgColor);
+		char fgStr[bufSize]{};
+		std::snprintf(fgStr, bufSize, "%.6lX", rgbVal);
+		NppXml::setAttribute(element, "fgColor", fgStr);
 	}
 
 	if (HIBYTE(HIWORD(style2Write._bgColor)) != 0xFF)
 	{
-		int rgbVal = RGB2int(style2Write._bgColor);
-		TCHAR bgStr[7];
-		wsprintf(bgStr, TEXT("%.6X"), rgbVal);
-		element->SetAttribute(TEXT("bgColor"), bgStr);
+		const DWORD rgbVal = RGBHEX(style2Write._bgColor);
+		char bgStr[bufSize]{};
+		std::snprintf(bgStr, bufSize, "%.6lX", rgbVal);
+		NppXml::setAttribute(element, "bgColor", bgStr);
 	}
 
 	if (style2Write._colorStyle != COLORSTYLE_ALL)
 	{
-		element->SetAttribute(TEXT("colorStyle"), style2Write._colorStyle);
+		NppXml::setAttribute(element, "colorStyle", style2Write._colorStyle);
+	}
+	else
+	{
+		NppXml::removeAttribute(element, "colorStyle");
 	}
 
 	if (!style2Write._fontName.empty())
 	{
-		const TCHAR * oldFontName = element->Attribute(TEXT("fontName"));
-		if (oldFontName && oldFontName != style2Write._fontName)
+		const char* oldFontName = NppXml::attribute(element, "fontName");
+		const std::string fontName = wstring2string(style2Write._fontName);
+		if (oldFontName && oldFontName != fontName)
 		{
-			element->SetAttribute(TEXT("fontName"), style2Write._fontName);
+			NppXml::setAttribute(element, "fontName", fontName);
 			style2Sync._fontName = style2Write._fontName;
 		}
 	}
 
 	if (style2Write._fontSize != STYLE_NOT_USED)
 	{
-		if (!style2Write._fontSize)
-			element->SetAttribute(TEXT("fontSize"), TEXT(""));
+		if (style2Write._fontSize == 0)
+			NppXml::setAttribute(element, "fontSize", "");
 		else
-			element->SetAttribute(TEXT("fontSize"), style2Write._fontSize);
+			NppXml::setAttribute(element, "fontSize", style2Write._fontSize);
 	}
 
 	if (style2Write._fontStyle != STYLE_NOT_USED)
 	{
-		element->SetAttribute(TEXT("fontStyle"), style2Write._fontStyle);
+		NppXml::setAttribute(element, "fontStyle", style2Write._fontStyle);
 	}
 
+	NppXml::Node teteDeNoeud = NppXml::lastChild(element);
 
-	if (!style2Write._keywords.empty())
-	{
-		TiXmlNode *teteDeNoeud = element->LastChild();
+	const std::string& kws = style2Write._keywords;
 
-		if (teteDeNoeud)
-			teteDeNoeud->SetValue(style2Write._keywords.c_str());
-		else
-			element->InsertEndChild(TiXmlText(style2Write._keywords.c_str()));
-	}
+	if (teteDeNoeud)
+		NppXml::setValue(teteDeNoeud, kws);
+	else
+		NppXml::createChildText(element, kws);
+
 }
 
-void NppParameters::insertUserLang2Tree(TiXmlNode *node, UserLangContainer *userLang)
+void NppParameters::insertUserLang2Tree(NppXml::Element& node, const UserLangContainer* userLang)
 {
-	TiXmlElement *rootElement = (node->InsertEndChild(TiXmlElement(TEXT("UserLang"))))->ToElement();
+	NppXml::Element rootElement = NppXml::createChildElement(node, "UserLang");
 
-	TCHAR temp[32];
-	std::wstring udlVersion;
-	udlVersion += _itow(SCE_UDL_VERSION_MAJOR, temp, 10);
-	udlVersion += TEXT(".");
-	udlVersion += _itow(SCE_UDL_VERSION_MINOR, temp, 10);
+	static const std::string udlVersion = std::to_string(SCE_UDL_VERSION_MAJOR) + "." + std::to_string(SCE_UDL_VERSION_MINOR);
 
-	rootElement->SetAttribute(TEXT("name"), userLang->_name);
-	rootElement->SetAttribute(TEXT("ext"), userLang->_ext);
-	if (userLang->_isDarkModeTheme)
-		rootElement->SetAttribute(TEXT("darkModeTheme"), TEXT("yes"));
-	rootElement->SetAttribute(TEXT("udlVersion"), udlVersion.c_str());
+	NppXml::setAttribute(rootElement, "name", wstring2string(userLang->_name));
+	NppXml::setAttribute(rootElement, "ext", wstring2string(userLang->_ext));
+	if (userLang->_isDarkModeTheme) // set only if it's dark theme
+		NppXml::setAttribute(rootElement, "darkModeTheme", "yes");
+	NppXml::setAttribute(rootElement, "udlVersion", udlVersion);
 
-	TiXmlElement *settingsElement = (rootElement->InsertEndChild(TiXmlElement(TEXT("Settings"))))->ToElement();
+	NppXml::Element settingsElement = NppXml::createChildElement(rootElement,"Settings");
 	{
-		TiXmlElement *globalElement = (settingsElement->InsertEndChild(TiXmlElement(TEXT("Global"))))->ToElement();
-		globalElement->SetAttribute(TEXT("caseIgnored"),			userLang->_isCaseIgnored ? TEXT("yes"):TEXT("no"));
-		globalElement->SetAttribute(TEXT("allowFoldOfComments"),	userLang->_allowFoldOfComments ? TEXT("yes"):TEXT("no"));
-		globalElement->SetAttribute(TEXT("foldCompact"),			userLang->_foldCompact ? TEXT("yes"):TEXT("no"));
-		globalElement->SetAttribute(TEXT("forcePureLC"),			userLang->_forcePureLC);
-		globalElement->SetAttribute(TEXT("decimalSeparator"),	   userLang->_decimalSeparator);
+		NppXml::Element globalElement = NppXml::createChildElement(settingsElement, "Global");
+		setBoolAttribute(globalElement, "caseIgnored", userLang->_isCaseIgnored);
+		setBoolAttribute(globalElement, "allowFoldOfComments", userLang->_allowFoldOfComments);
+		setBoolAttribute(globalElement, "foldCompact", userLang->_foldCompact);
+		NppXml::setAttribute(globalElement, "forcePureLC", userLang->_forcePureLC);
+		NppXml::setAttribute(globalElement, "decimalSeparator", userLang->_decimalSeparator);
 
-		TiXmlElement *prefixElement = (settingsElement->InsertEndChild(TiXmlElement(TEXT("Prefix"))))->ToElement();
+		NppXml::Element prefixElement = NppXml::createChildElement(settingsElement, "Prefix");
 		for (int i = 0 ; i < SCE_USER_TOTAL_KEYWORD_GROUPS ; ++i)
-			prefixElement->SetAttribute(globalMappper().keywordNameMapper[i+SCE_USER_KWLIST_KEYWORDS1], userLang->_isPrefix[i]?TEXT("yes"):TEXT("no"));
+			setBoolAttribute(prefixElement, globalMappper().keywordNameMapper[i + SCE_USER_KWLIST_KEYWORDS1].c_str(), userLang->_isPrefix[i]);
 	}
 
-	TiXmlElement *kwlElement = (rootElement->InsertEndChild(TiXmlElement(TEXT("KeywordLists"))))->ToElement();
+	NppXml::Element kwlElement = NppXml::createChildElement(rootElement, "KeywordLists");
 
 	for (int i = 0 ; i < SCE_USER_KWLIST_TOTAL ; ++i)
 	{
-		TiXmlElement *kwElement = (kwlElement->InsertEndChild(TiXmlElement(TEXT("Keywords"))))->ToElement();
-		kwElement->SetAttribute(TEXT("name"), globalMappper().keywordNameMapper[i]);
-		kwElement->InsertEndChild(TiXmlText(userLang->_keywordLists[i]));
+		NppXml::Element kwElement = NppXml::createChildElement(kwlElement, "Keywords");
+		NppXml::setAttribute(kwElement, "name", globalMappper().keywordNameMapper[i]);
+		NppXml::createChildText(kwElement, userLang->_keywordLists[i].c_str());
 	}
 
-	TiXmlElement *styleRootElement = (rootElement->InsertEndChild(TiXmlElement(TEXT("Styles"))))->ToElement();
+	NppXml::Element styleRootElement = NppXml::createChildElement(rootElement, "Styles");
 
 	for (const Style & style2Write : userLang->_styles)
 	{
-		TiXmlElement *styleElement = (styleRootElement->InsertEndChild(TiXmlElement(TEXT("WordsStyle"))))->ToElement();
+		NppXml::Element styleElement = NppXml::createChildElement(styleRootElement, "WordsStyle");
 
 		if (style2Write._styleID == -1)
 			continue;
 
-		styleElement->SetAttribute(TEXT("name"), style2Write._styleDesc);
-
+		NppXml::setAttribute(styleElement, "name", wstring2string(style2Write._styleDesc));
+		static constexpr size_t bufSize = 7;
 		//if (HIBYTE(HIWORD(style2Write._fgColor)) != 0xFF)
 		{
-			int rgbVal = RGB2int(style2Write._fgColor);
-			TCHAR fgStr[7];
-			wsprintf(fgStr, TEXT("%.6X"), rgbVal);
-			styleElement->SetAttribute(TEXT("fgColor"), fgStr);
+			const DWORD rgbVal = RGBHEX(style2Write._fgColor);
+			char fgStr[bufSize]{};
+			std::snprintf(fgStr, bufSize, "%.6lX", rgbVal);
+			NppXml::setAttribute(styleElement, "fgColor", fgStr);
 		}
 
 		//if (HIBYTE(HIWORD(style2Write._bgColor)) != 0xFF)
 		{
-			int rgbVal = RGB2int(style2Write._bgColor);
-			TCHAR bgStr[7];
-			wsprintf(bgStr, TEXT("%.6X"), rgbVal);
-			styleElement->SetAttribute(TEXT("bgColor"), bgStr);
+			const DWORD rgbVal = RGBHEX(style2Write._bgColor);
+			char bgStr[bufSize]{};
+			std::snprintf(bgStr, bufSize, "%.6lX", rgbVal);
+			NppXml::setAttribute(styleElement, "bgColor", bgStr);
 		}
 
 		if (style2Write._colorStyle != COLORSTYLE_ALL)
 		{
-			styleElement->SetAttribute(TEXT("colorStyle"), style2Write._colorStyle);
+			NppXml::setAttribute(styleElement, "colorStyle", style2Write._colorStyle);
+		}
+		else
+		{
+			NppXml::removeAttribute(styleElement, "colorStyle");
 		}
 
 		if (!style2Write._fontName.empty())
 		{
-			styleElement->SetAttribute(TEXT("fontName"), style2Write._fontName);
+			const std::string fontName = wstring2string(style2Write._fontName);
+			NppXml::setAttribute(styleElement, "fontName", fontName);
 		}
 
 		if (style2Write._fontStyle == STYLE_NOT_USED)
 		{
-			styleElement->SetAttribute(TEXT("fontStyle"), TEXT("0"));
+			NppXml::setAttribute(styleElement, "fontStyle", "0");
 		}
 		else
 		{
-			styleElement->SetAttribute(TEXT("fontStyle"), style2Write._fontStyle);
+			NppXml::setAttribute(styleElement, "fontStyle", style2Write._fontStyle);
 		}
 
 		if (style2Write._fontSize != STYLE_NOT_USED)
 		{
-			if (!style2Write._fontSize)
-				styleElement->SetAttribute(TEXT("fontSize"), TEXT(""));
+			if (style2Write._fontSize == 0)
+				NppXml::setAttribute(styleElement, "fontSize", "");
 			else
-				styleElement->SetAttribute(TEXT("fontSize"), style2Write._fontSize);
+				NppXml::setAttribute(styleElement, "fontSize", style2Write._fontSize);
 		}
 
-		styleElement->SetAttribute(TEXT("nesting"), style2Write._nesting);
+		NppXml::setAttribute(styleElement, "nesting", style2Write._nesting);
 	}
 }
 
 void NppParameters::addUserModifiedIndex(size_t index)
 {
-	size_t len = _customizedShortcuts.size();
-	bool found = false;
-	for (size_t i = 0; i < len; ++i)
+	if (!std::any_of(_customizedShortcuts.begin(), _customizedShortcuts.end(),
+		[&index](size_t userCmdIdx) { return userCmdIdx == index; }))
 	{
-		if (_customizedShortcuts[i] == index)
-		{
-			found = true;
-			break;
-		}
-	}
-	if (!found)
-	{
-		_customizedShortcuts.push_back(index);
+		_customizedShortcuts.push_back(index); // Add index if not found
 	}
 }
 
 void NppParameters::addPluginModifiedIndex(size_t index)
 {
-	size_t len = _pluginCustomizedCmds.size();
-	bool found = false;
-	for (size_t i = 0; i < len; ++i)
+	if (!std::any_of(_pluginCustomizedCmds.begin(), _pluginCustomizedCmds.end(),
+		[&index](size_t pluginCmdIdx) { return pluginCmdIdx == index; }))
 	{
-		if (_pluginCustomizedCmds[i] == index)
-		{
-			found = true;
-			break;
-		}
-	}
-	if (!found)
-	{
-		_pluginCustomizedCmds.push_back(index);
+		_pluginCustomizedCmds.push_back(index); // Add index if not found
 	}
 }
 
 void NppParameters::addScintillaModifiedIndex(int index)
 {
-	size_t len = _scintillaModifiedKeyIndices.size();
-	bool found = false;
-	for (size_t i = 0; i < len; ++i)
+	if (!std::any_of(_scintillaModifiedKeyIndices.begin(), _scintillaModifiedKeyIndices.end(),
+		[&index](int scintCmdIdx) { return scintCmdIdx == index; }))
 	{
-		if (_scintillaModifiedKeyIndices[i] == index)
-		{
-			found = true;
-			break;
-		}
-	}
-	if (!found)
-	{
-		_scintillaModifiedKeyIndices.push_back(index);
+		_scintillaModifiedKeyIndices.push_back(index); // Add index if not found
 	}
 }
 
+#ifndef	_WIN64
 void NppParameters::safeWow64EnableWow64FsRedirection(BOOL Wow64FsEnableRedirection)
 {
-	HMODULE kernel = GetModuleHandle(TEXT("kernel32"));
+	HMODULE kernel = GetModuleHandle(L"kernel32");
 	if (kernel)
 	{
 		BOOL isWow64 = FALSE;
@@ -8557,6 +9173,7 @@ void NppParameters::safeWow64EnableWow64FsRedirection(BOOL Wow64FsEnableRedirect
 		}
 	}
 }
+#endif
 
 void NppParameters::setUdlXmlDirtyFromIndex(size_t i)
 {
@@ -8615,7 +9232,7 @@ void NppParameters::removeIndexFromXmlUdls(size_t i)
 	}
 }
 
-void NppParameters::setUdlXmlDirtyFromXmlDoc(const TiXmlDocument* xmlDoc)
+void NppParameters::setUdlXmlDirtyFromXmlDoc(const NppXml::Document& xmlDoc)
 {
 	for (auto& uxfs : _pXmlUserLangsDoc)
 	{
@@ -8627,22 +9244,22 @@ void NppParameters::setUdlXmlDirtyFromXmlDoc(const TiXmlDocument* xmlDoc)
 	}
 }
 
-Date::Date(const TCHAR *dateStr)
+Date::Date(const char* dateStr)
 {
 	// timeStr should be Notepad++ date format : YYYYMMDD
 	assert(dateStr);
-	int D = lstrlen(dateStr);
+	const size_t D = std::strlen(dateStr);
 
-	if ( 8==D )
+	if (8==D)
 	{
-		std::wstring ds(dateStr);
-		std::wstring yyyy(ds, 0, 4);
-		std::wstring mm(ds, 4, 2);
-		std::wstring dd(ds, 6, 2);
+		const std::string ds(dateStr);
+		const std::string yyyy(ds, 0, 4);
+		const std::string mm(ds, 4, 2);
+		const std::string dd(ds, 6, 2);
 
-		int y = _wtoi(yyyy.c_str());
-		int m = _wtoi(mm.c_str());
-		int d = _wtoi(dd.c_str());
+		const int y = std::stoi(yyyy);
+		const int m = std::stoi(mm);
+		const int d = std::stoi(dd);
 
 		if ((y > 0 && y <= 9999) && (m > 0 && m <= 12) && (d > 0 && d <= 31))
 		{
@@ -8658,9 +9275,9 @@ Date::Date(const TCHAR *dateStr)
 // The constructor which makes the date of number of days from now
 // nbDaysFromNow could be negative if user want to make a date in the past
 // if the value of nbDaysFromNow is 0 then the date will be now
-Date::Date(int nbDaysFromNow)
+Date::Date(int nbDaysFromNow) noexcept
 {
-	const time_t oneDay = (60 * 60 * 24);
+	static constexpr time_t oneDay = (60 * 60 * 24);
 
 	time_t rawtime;
 	const tm* timeinfo;
@@ -8697,13 +9314,261 @@ EolType convertIntToFormatType(int value, EolType defvalue)
 {
 	switch (value)
 	{
-		case static_cast<LPARAM>(EolType::windows) :
-			return EolType::windows;
-		case static_cast<LPARAM>(EolType::macos) :
-				return EolType::macos;
-		case static_cast<LPARAM>(EolType::unix) :
-			return EolType::unix;
+		using enum EolType;
+		case static_cast<int>(windows):
+		{
+			return windows;
+		}
+
+		case static_cast<int>(macos):
+		{
+			return macos;
+		}
+
+		case static_cast<int>(unix):
+		{
+			return unix;
+		}
+
 		default:
+		{
 			return defvalue;
+		}
 	}
+}
+
+void NppParameters::initTabCustomColors()
+{
+	StyleArray& stylers = getMiscStylerArray();
+
+	const Style* pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_1);
+	if (pStyle)
+	{
+		individualTabHues[0].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_2);
+	if (pStyle)
+	{
+		individualTabHues[1].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_3);
+	if (pStyle)
+	{
+		individualTabHues[2].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_4);
+	if (pStyle)
+	{
+		individualTabHues[3].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_5);
+	if (pStyle)
+	{
+		individualTabHues[4].loadFromRGB(pStyle->_bgColor);
+	}
+
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_DM_1);
+	if (pStyle)
+	{
+		individualTabHuesFor_Dark[0].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_DM_2);
+	if (pStyle)
+	{
+		individualTabHuesFor_Dark[1].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_DM_3);
+	if (pStyle)
+	{
+		individualTabHuesFor_Dark[2].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_DM_4);
+	if (pStyle)
+	{
+		individualTabHuesFor_Dark[3].loadFromRGB(pStyle->_bgColor);
+	}
+
+	pStyle = stylers.findByName(TABBAR_INDIVIDUALCOLOR_DM_5);
+	if (pStyle)
+	{
+		individualTabHuesFor_Dark[4].loadFromRGB(pStyle->_bgColor);
+	}
+}
+
+
+void NppParameters::setIndividualTabColor(COLORREF colour2Set, int colourIndex, bool isDarkMode)
+{
+	if ((colourIndex < 0) || (colourIndex >= TAB_COLORS_COUNT)) return;
+
+	if (isDarkMode)
+		individualTabHuesFor_Dark[colourIndex].loadFromRGB(colour2Set);
+	else
+		individualTabHues[colourIndex].loadFromRGB(colour2Set);
+
+	return;
+}
+
+COLORREF NppParameters::getIndividualTabColor(int colourIndex, bool isDarkMode, bool saturated)
+{
+	if ((colourIndex < 0) || (colourIndex >= TAB_COLORS_COUNT)) return {};
+
+	HLSColour result;
+	if (isDarkMode)
+	{
+		result = individualTabHuesFor_Dark[colourIndex];
+
+		if (saturated)
+		{
+			result._lightness = 146U;
+			result._saturation = std::min<WORD>(240U, result._saturation + 100U);
+		}
+	}
+	else
+	{
+		result = individualTabHues[colourIndex];
+
+		if (saturated)
+		{
+			result._lightness = 140U;
+			result._saturation = std::min<WORD>(240U, result._saturation + 30U);
+		}
+	}
+
+	return result.toRGB();
+}
+
+void NppParameters::initFindDlgStatusMsgCustomColors()
+{
+	StyleArray& stylers = getMiscStylerArray();
+
+	const Style* pStyle = stylers.findByName(FINDDLG_STAUSNOTFOUND_COLOR);
+	if (pStyle)
+	{
+		findDlgStatusMessageColor[0] = pStyle->_fgColor;
+	}
+
+	pStyle = stylers.findByName(FINDDLG_STAUSMESSAGE_COLOR);
+	if (pStyle)
+	{
+		findDlgStatusMessageColor[1] = pStyle->_fgColor;
+	}
+
+	pStyle = stylers.findByName(FINDDLG_STAUSREACHED_COLOR);
+	if (pStyle)
+	{
+		findDlgStatusMessageColor[2] = pStyle->_fgColor;
+	}
+
+}
+
+void NppParameters::setFindDlgStatusMsgIndexColor(COLORREF colour2Set, int colourIndex)
+{
+	if (colourIndex < 0 || colourIndex > 2) return;
+
+	findDlgStatusMessageColor[colourIndex] = colour2Set;
+
+	return;
+}
+
+COLORREF NppParameters::getFindDlgStatusMsgColor(int colourIndex)
+{
+	if (colourIndex < 0 || colourIndex >= static_cast<int>(findDlgStatusMessageColor.size())) return black;
+
+	return findDlgStatusMessageColor[colourIndex];
+}
+
+LanguageNameInfo NppParameters::getLangNameInfoFromNameID(const std::wstring& langNameID)
+{
+	for (const auto& lnf : ScintillaEditView::_langNameInfoArray)
+	{
+		if (lnf._langName == langNameID)
+			return lnf;
+	}
+	return LanguageNameInfo{};
+}
+
+void NppParameters::buildGupParams(std::wstring& params)
+{
+	params = L"-v";
+	params += VERSION_INTERNAL_VALUE;
+	static constexpr int archType64 = NppParameters::archType();
+	if constexpr (archType64 == IMAGE_FILE_MACHINE_AMD64)
+	{
+		params += L" -px64";
+	}
+	else if constexpr (archType64 == IMAGE_FILE_MACHINE_ARM64)
+	{
+		params += L" -parm64";
+	}
+
+	params += L" -infoUrl=";
+	params += INFO_URL;
+
+	params += L" -forceDomain=";
+	params += FORCED_DOWNLOAD_DOMAIN;
+
+	SecurityGuard sgd;
+
+	//
+	// Verify integrity & authenticiy of server-returned XML (XMLDsig) 
+	//
+
+	params += L" -chkCert4InfoXML";
+
+	params += L" -chkCertKeyId4XML=";
+	params += sgd.signer_key_id();
+
+	//
+	// Verify integrity & authenticiy of the downloaded installer
+	//
+
+	params += L" -chkCertSig=yes";
+
+	params += L" -chkCertRevoc";
+	params += L" -chkCertTrustChain";
+
+	params += L" -chkCertName=";
+	params += sgd.signer_display_name();
+
+	params += L" -chkCertSubject=\"";
+	params += stringReplace(sgd.signer_subject(), L"\"", L"{QUOTE}");
+	params += L"\"";
+
+	params += L" -chkCertKeyId=";
+	params += sgd.signer_key_id();
+
+	params += L" -errLogPath=";
+	params += L"\"%LOCALAPPDATA%\\Notepad++\\log\\securityError.log\"";
+}
+
+void UserLangContainer::startAtTheme()
+{
+	// don't reset to the theme colors if it's already been set
+	if (!_isUnset)
+		return;
+
+	NppParameters& nppParams = NppParameters::getInstance();
+	COLORREF fg = nppParams.getCurrentDefaultFgColor();
+	COLORREF bg = nppParams.getCurrentDefaultBgColor();
+
+	for (Style& st : _styles)
+	{
+		st._bgColor = bg;
+		st._fgColor = fg;
+
+		// make BG "transparent" by default, to discourage changing background accidentally;
+		//	but keep the _bgColor set, so that if they do un-transparent it, it starts at a reasonable default
+		st._colorStyle = COLORSTYLE_FOREGROUND;
+	}
+
+	// now that it's started at theme values, not "unset" anymore
+	_isUnset = false;
 }

@@ -36,10 +36,10 @@ class VerticalFileSwitcherListView : public Window
 {
 public:
 	VerticalFileSwitcherListView() = default;
-	virtual ~VerticalFileSwitcherListView() = default;
+	~VerticalFileSwitcherListView() override = default;
 
 	virtual void init(HINSTANCE hInst, HWND parent, HIMAGELIST hImaLst);
-	virtual void destroy();
+	void destroy() override;
 	void initList();
 	BufferID getBufferInfoFromIndex(int index, int & view) const;
 	void setBgColour(int i) {
@@ -49,35 +49,35 @@ public:
 	int closeItem(BufferID bufferID, int iView);
 	void activateItem(BufferID bufferID, int iView);
 	void setItemIconStatus(BufferID bufferID);
-	generic_string getFullFilePath(size_t i) const;
+	std::wstring getFullFilePath(size_t i) const;
 	void setItemColor(BufferID bufferID);
 	
-	void insertColumn(const TCHAR *name, int width, int index);
+	void insertColumn(const wchar_t *name, int width, int index);
 	void resizeColumns(int totalWidth);
 	void deleteColumn(size_t i) {
 		ListView_DeleteColumn(_hSelf, i);
-	};
+	}
 	int nbSelectedFiles() const {
 		return static_cast<int32_t>(SendMessage(_hSelf, LVM_GETSELECTEDCOUNT, 0, 0));
-	};
+	}
 
 	std::vector<BufferViewInfo> getSelectedFiles(bool reverse = false) const;
 	void reload();
 	void redrawItems();
 	void ensureVisibleCurrentItem() const {
 		ListView_EnsureVisible(_hSelf, _currentIndex, false);
-	};
+	}
 
 	void setBackgroundColor(COLORREF bgColour) {
 		ListView_SetBkColor(_hSelf, bgColour);
 		ListView_SetTextBkColor(_hSelf, bgColour);
 		redraw(true);
-    };
+	}
 
 	void setForegroundColor(COLORREF fgColour) {
 		ListView_SetTextColor(_hSelf, fgColour);
 		redraw(true);
-    };
+	}
 
 protected:
 	HIMAGELIST _hImaLst = nullptr;
@@ -93,5 +93,5 @@ protected:
 	void removeAll();
 	void selectCurrentItem() const {
 		ListView_SetItemState(_hSelf, _currentIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-	};
+	}
 };

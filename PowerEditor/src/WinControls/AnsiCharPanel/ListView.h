@@ -17,23 +17,27 @@
 
 #pragma once
 
-#include "Window.h"
-#include "Common.h"
+#include <windows.h>
 
 #include <commctrl.h>
 
+#include <string>
+#include <vector>
+
+#include "Window.h"
+
 struct columnInfo {
 	size_t _width;
-	generic_string _label;
+	std::wstring _label;
 
-	columnInfo(const generic_string & label, size_t width) : _width(width), _label(label) {};
+	columnInfo(const std::wstring& label, size_t width) : _width(width), _label(label) {}
 };
 
 class ListView : public Window
 {
 public:
 	ListView() = default;
-	virtual ~ListView() = default;
+	~ListView() override = default;
 
 	enum SortDirection {
 		sortEncrease = 0,
@@ -42,37 +46,37 @@ public:
 	// addColumn() should be called before init()
 	void addColumn(const columnInfo & column2Add) {
 		_columnInfos.push_back(column2Add);
-	};
+	}
 
-	void setColumnText(size_t i, generic_string txt2Set) {
+	void setColumnText(size_t i, std::wstring txt2Set) {
 		LVCOLUMN lvColumn{};
 		lvColumn.mask = LVCF_TEXT;
-		lvColumn.pszText = const_cast<TCHAR *>(txt2Set.c_str());
+		lvColumn.pszText = txt2Set.data();
 		ListView_SetColumn(_hSelf, i, &lvColumn);
 	}
 
 	// setStyleOption() should be called before init()
-	void setStyleOption(int32_t extraStyle) {
+	void setStyleOption(DWORD extraStyle) {
 		_extraStyle = extraStyle;
-	};
+	}
 
-	size_t findAlphabeticalOrderPos(const generic_string& string2search, SortDirection sortDir);
+	size_t findAlphabeticalOrderPos(const std::wstring& string2Cmp, SortDirection sortDir);
 
-	void addLine(const std::vector<generic_string> & values2Add, LPARAM lParam = 0, int pos2insert = -1);
+	void addLine(const std::vector<std::wstring> & values2Add, LPARAM lParam = 0, int pos2insert = -1);
 	
 	size_t nbItem() const {
 		return ListView_GetItemCount(_hSelf);
-	};
+	}
 
 	long getSelectedIndex() const {
 		return ListView_GetSelectionMark(_hSelf);
-	};
+	}
 
 	void setSelection(int itemIndex) const {
 		ListView_SetItemState(_hSelf, itemIndex, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 		ListView_EnsureVisible(_hSelf, itemIndex, false);
 		ListView_SetSelectionMark(_hSelf, itemIndex);
-	};
+	}
 
 	LPARAM getLParamFromIndex(int itemIndex) const;
 
@@ -85,11 +89,10 @@ public:
 
 	std::vector<size_t> getCheckedIndexes() const;
 
-	virtual void init(HINSTANCE hInst, HWND hwnd);
-	virtual void destroy();
-
+	void init(HINSTANCE hInst, HWND parent) override;
+	void destroy() override;
 
 protected:
-	int32_t _extraStyle = 0;
+	DWORD _extraStyle = 0;
 	std::vector<columnInfo> _columnInfos;
 };
